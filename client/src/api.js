@@ -28,4 +28,5 @@ export const api = {
   trackerActivity: (matId, hours = 24) => get(`/tracker/activity/${matId}?hours=${hours}`),
   trackerMarketshare: (matId, hours = 24) => get(`/tracker/marketshare/${matId}?hours=${hours}`),
   trackerCompanyActivity: (matId, hours = 24) => get(`/tracker/company-activity/${matId}?hours=${hours}`),
+  trackerRecent: (matId, limit = 10) => get(`/tracker/recent/${matId}?limit=${limit}`),
 };

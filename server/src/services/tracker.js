@@ -38,6 +38,7 @@ const UNITS_PER_ITEM   = 5;
 let intervalHandle = null;
 let lastError      = null;
 let pollCount      = 0;
+let lastPollAt     = null;
 
 // ── API fetch ──────────────────────────────────────────────────────────────────
 
@@ -258,6 +259,7 @@ async function pollItem(item) {
 // ── Poll cycle ─────────────────────────────────────────────────────────────────
 
 async function pollAll() {
+  lastPollAt = new Date().toISOString();
   pollCount++;
   for (const item of TRACKED_ITEMS) {
     try {
@@ -294,6 +296,7 @@ export function getTrackerStatus() {
     items:      TRACKED_ITEMS,
     pollCount,
     intervalMs: POLL_INTERVAL_MS,
+    lastPollAt,
     lastError,
   };
 }

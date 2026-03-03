@@ -7,40 +7,41 @@ import Tracker from './pages/Tracker';
 import ErrorBoundary from './components/ErrorBoundary';
 import { api } from './api';
 
-function RateLimitindicator() {
-  const [status, setStatus] = useState(null);
-  const timerRef = useRef(null);
-
-  async function poll() {
-    try {
-      const s = await api.ratelimit();
-      setStatus(s);
-    } catch { /* server may be starting */ }
-  }
+function TrackerCountdown() {
+  const [status,  setStatus]  = useState(null);
+  const [now,     setNow]     = useState(Date.now());
 
   useEffect(() => {
-    poll();
-    timerRef.current = setInterval(poll, 10_000); // poll every 10s
-    return () => clearInterval(timerRef.current);
+    const fetchStatus = async () => {
+      try { setStatus(await api.trackerStatus()); } catch { /* server starting */ }
+    };
+    fetchStatus();
+    const si = setInterval(fetchStatus, 3_000);
+    return () => clearInterval(si);
   }, []);
 
-  if (!status) return null;
+  // Tick every second for smooth countdown
+  useEffect(() => {
+    const ti = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(ti);
+  }, []);
 
-  const pct = (status.available / status.max) * 100;
-  const color = pct > 50 ? '#10b981' : pct > 20 ? '#fbbf24' : '#f87171';
+  if (!status?.lastPollAt) return null;
+
+  const intervalSec = status.intervalMs / 1000;
+  const elapsed     = (now - new Date(status.lastPollAt).getTime()) / 1000;
+  const remaining   = Math.max(0, Math.ceil(intervalSec - elapsed));
+  const pct         = (remaining / intervalSec) * 100;
+  const color       = remaining > 30 ? '#10b981' : remaining > 10 ? '#fbbf24' : '#f87171';
 
   return (
-    <div title={`Rate limit: ${status.used}/${status.max} units used in current 5-min window${status.resetsIn ? ` · resets in ${status.resetsIn}s` : ''}`}
+    <div title={`Tracker polls every ${intervalSec}s · ${status.pollCount} polls completed`}
          style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#6b6b8a' }}>
+      <span style={{ color: '#3a3a55' }}>next poll</span>
       <div style={{ width: 48, height: 4, background: '#1e1e3a', borderRadius: 2, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 2, transition: 'width 0.4s' }} />
+        <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 2, transition: 'width 1s linear' }} />
       </div>
-      <span style={{ color, fontVariantNumeric: 'tabular-nums' }}>
-        {status.available}/{status.max}
-      </span>
-      {status.resetsIn > 0 && (
-        <span style={{ color: '#3a3a55' }}>resets {status.resetsIn}s</span>
-      )}
+      <span style={{ color, fontVariantNumeric: 'tabular-nums', minWidth: 24 }}>{remaining}s</span>
     </div>
   );
 }
@@ -54,13 +55,10 @@ function Nav() {
         <NavLink to="/market">Market</NavLink>
         <NavLink to="/profits">Profit Calc</NavLink>
       </div>
-      <RateLimitIndicator />
+      <TrackerCountdown />
     </nav>
   );
 }
-
-// Fix casing
-function RateLimitIndicator() { return <RateLimitindicator />; }
 
 export default function App() {
   return (

@@ -99,22 +99,81 @@ function SectionLabel({ children }) {
   );
 }
 
+// ── Recent activity feed ───────────────────────────────────────────────────────
+
+const EVENT_LABEL = {
+  new_listing:  { text: 'listed',      color: '#34d399' },
+  restocked:    { text: 'restocked',   color: '#34d399' },
+  partial_fill: { text: 'sold',        color: '#f87171' },
+  full_fill:    { text: 'sold',        color: '#f87171' },
+  cancelled:    { text: 'cancelled',   color: '#6b6b8a' },
+};
+
+function timeAgo(iso) {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (mins < 1)  return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)  return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function RecentActivity({ events, matName }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!events || events.length === 0) {
+    return (
+      <div>
+        <SectionLabel>Recent activity</SectionLabel>
+        <div style={{ color: '#3a3a55', fontSize: 12 }}>No events yet — collecting data.</div>
+      </div>
+    );
+  }
+
+  const visible = expanded ? events : events.slice(0, 5);
+
+  return (
+    <div>
+      <SectionLabel>Recent activity</SectionLabel>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {visible.map((e, i) => {
+          const { text, color } = EVENT_LABEL[e.event_type] ?? { text: e.event_type, color: '#6b6b8a' };
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12 }}>
+              <span style={{ color: '#c0c0d8', fontWeight: 500, minWidth: 0 }}>{e.company_name}</span>
+              <span style={{ color }}>{text}</span>
+              <span style={{ color: '#e0e0f0', fontVariantNumeric: 'tabular-nums' }}>{qty(Number(e.qty))}</span>
+              <span style={{ color: '#6b6b8a' }}>{matName}</span>
+              <span style={{ color: '#3a3a55', fontSize: 11, marginLeft: 'auto', whiteSpace: 'nowrap' }}>{timeAgo(e.recorded_at)}</span>
+            </div>
+          );
+        })}
+      </div>
+      {events.length > 5 && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          style={{ marginTop: 8, background: 'none', border: 'none', color: '#6b6b8a', fontSize: 11, cursor: 'pointer', padding: 0 }}
+        >
+          {expanded ? '▲ show less' : `▼ show ${events.length - 5} more`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── Company activity table ─────────────────────────────────────────────────────
 
 const ACTIVITY_COLS = [
-  { key: 'current_listed', label: 'Supply now'   },
-  { key: 'supply_pct',     label: 'Supply %'     },
-  { key: 'qty_placed',     label: 'Placed'       },
-  { key: 'qty_sold',       label: 'Sold'         },
-  { key: 'sales_pct',      label: 'Sales %'      },
-  { key: 'revenue',        label: 'Revenue'      },
-  { key: 'avg_sale_price', label: 'Avg price'    },
-  { key: 'qty_cancelled',  label: 'Cancelled'    },
-  { key: 'net',            label: 'Net'          },
+  { key: 'sales_pct',      label: 'Sales %'    },
+  { key: 'qty_sold',       label: 'Sold'       },
+  { key: 'revenue',        label: 'Revenue'    },
+  { key: 'avg_sale_price', label: 'Avg price'  },
+  { key: 'qty_placed',     label: 'Placed'     },
+  { key: 'current_listed', label: 'Supply now' },
 ];
 
 function CompanyActivity({ data, hours, color }) {
-  const [sort, setSort] = useState({ key: 'current_listed', dir: -1 }); // desc by default
+  const [sort, setSort] = useState({ key: 'sales_pct', dir: 1 }); // desc by default
 
   if (!data || !data.rows.filter((r) => r.company_name !== 'Federal Reserve').length) {
     return <div style={{ color: '#3a3a55', fontSize: 12 }}>No company activity yet — collecting data.</div>;
@@ -167,25 +226,13 @@ function CompanyActivity({ data, hours, color }) {
             <tr key={row.company_id} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
               <td style={{ color: '#c0c0d8', fontWeight: 500 }}>{row.company_name}</td>
               <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                {qty(row.current_listed)}
-              </td>
-              <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
-                  <ShareBar pct={row.supply_pct} color={color} />
-                  <span style={{ color, minWidth: 38 }}>{row.supply_pct > 0 ? `${row.supply_pct}%` : '—'}</span>
-                </div>
-              </td>
-              <td style={{ textAlign: 'right', color: '#34d399', fontVariantNumeric: 'tabular-nums' }}>
-                {row.qty_placed > 0 ? `+${qty(row.qty_placed)}` : '—'}
-              </td>
-              <td style={{ textAlign: 'right', color: row.qty_sold > 0 ? '#f87171' : '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>
-                {row.qty_sold > 0 ? qty(row.qty_sold) : '—'}
-              </td>
-              <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
                   <ShareBar pct={row.sales_pct} color="#f87171" />
                   <span style={{ color: row.sales_pct > 0 ? '#f87171' : '#3a3a55', minWidth: 38 }}>{row.sales_pct > 0 ? `${row.sales_pct}%` : '—'}</span>
                 </div>
+              </td>
+              <td style={{ textAlign: 'right', color: row.qty_sold > 0 ? '#f87171' : '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>
+                {row.qty_sold > 0 ? qty(row.qty_sold) : '—'}
               </td>
               <td style={{ textAlign: 'right', color: row.revenue > 0 ? '#fbbf24' : '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>
                 {row.revenue > 0 ? usdK(row.revenue) : '—'}
@@ -193,14 +240,11 @@ function CompanyActivity({ data, hours, color }) {
               <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums' }}>
                 {row.avg_sale_price > 0 ? usd(row.avg_sale_price) : '—'}
               </td>
-              <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums' }}>
-                {row.qty_cancelled > 0 ? qty(row.qty_cancelled) : '—'}
+              <td style={{ textAlign: 'right', color: '#34d399', fontVariantNumeric: 'tabular-nums' }}>
+                {row.qty_placed > 0 ? `+${qty(row.qty_placed)}` : '—'}
               </td>
-              <td style={{
-                textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: 11,
-                color: row.net > 0 ? '#34d399' : row.net < 0 ? '#f87171' : '#3a3a55',
-              }}>
-                {row.net !== 0 ? `${row.net > 0 ? '+' : ''}${qty(row.net)}` : '—'}
+              <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                {qty(row.current_listed)}
               </td>
             </tr>
           ))}
@@ -215,26 +259,47 @@ function CompanyActivity({ data, hours, color }) {
 
 // ── Item panel ─────────────────────────────────────────────────────────────────
 
+function groupActivity(data, groupBy) {
+  if (groupBy === '1m') return data;
+  const buckets = new Map();
+  for (const row of data) {
+    const d = new Date(row.recorded_at);
+    if (groupBy === '15m')  d.setMinutes(Math.floor(d.getMinutes() / 15) * 15, 0, 0);
+    else if (groupBy === 'hour') d.setMinutes(0, 0, 0);
+    else d.setHours(0, 0, 0, 0);
+    const key = d.toISOString();
+    if (!buckets.has(key)) buckets.set(key, { recorded_at: key, qty_sold_since_prev: 0, qty_listed_since_prev: 0 });
+    const b = buckets.get(key);
+    b.qty_sold_since_prev   += Number(row.qty_sold_since_prev);
+    b.qty_listed_since_prev += Number(row.qty_listed_since_prev);
+  }
+  return [...buckets.values()];
+}
+
 function ItemPanel({ item, hours, refreshTick }) {
   const [snapshots,       setSnapshots]       = useState([]);
   const [activity,        setActivity]        = useState([]);
   const [companyActivity, setCompanyActivity] = useState(null);
+  const [recentEvents,    setRecentEvents]    = useState([]);
   const [loading,         setLoading]         = useState(true);
   const [refreshing,      setRefreshing]      = useState(false);
   const [error,           setError]           = useState(null);
+  const [activityGroup,   setActivityGroup]   = useState('1m');
   const hasData = snapshots.length > 0;
 
   const load = useCallback(async () => {
     if (hasData) setRefreshing(true); else setLoading(true);
     try {
-      const [snaps, act, compAct] = await Promise.all([
+      const [snaps, act, compAct, recent] = await Promise.all([
         api.trackerSnapshots(item.matId, 300),
         api.trackerActivity(item.matId, hours),
         api.trackerCompanyActivity(item.matId, hours),
+        api.trackerRecent(item.matId, 10),
       ]);
       setSnapshots(snaps);
       setActivity(act);
       setCompanyActivity(compAct);
+      setRecentEvents(recent);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -265,74 +330,107 @@ function ItemPanel({ item, hours, refreshTick }) {
   const totalListed = activity.reduce((s, r) => s + Number(r.qty_listed_since_prev), 0);
   const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length) : 0;
 
+  const statsRows = [
+    { label: 'Price',         value: latest ? usd(latest.current_price) : '—', color: undefined },
+    { label: `Δ ${hours}h`,   value: priceChange !== null ? `${priceChange > 0 ? '+' : ''}${priceChange}%` : '—', color: priceChange > 0 ? '#f87171' : priceChange < 0 ? '#34d399' : undefined },
+    { label: 'Supply',        value: latest ? qty(latest.total_qty_available) : '—', color: undefined },
+    { label: `Δ ${hours}h`,   value: supplyChange !== null ? `${supplyChange >= 0 ? '+' : ''}${qty(supplyChange)}` : '—', color: supplyChange < 0 ? '#f87171' : '#34d399' },
+    { label: `Sold`,          value: qty(totalSold),   color: '#f87171' },
+    { label: `Listed`,        value: qty(totalListed), color: '#34d399' },
+    { label: 'Sold/min avg',  value: qty(avgSold),     color: item.color },
+  ];
+
   return (
     <div>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 14 }}>
-        <h3 style={{ margin: 0, color: item.color, fontSize: 20 }}>{item.matName}</h3>
-        {latest && <span style={{ color: '#6b6b8a', fontSize: 13 }}>last snapshot {fmtTime(latest.recorded_at)}</span>}
-        {refreshing && <span style={{ color: '#3a3a55', fontSize: 12 }}>refreshing…</span>}
-      </div>
+      {/* Refresh indicator */}
+      {refreshing && <div style={{ color: '#3a3a55', fontSize: 11, marginBottom: 6 }}>refreshing…</div>}
 
-      {/* Summary chips */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-        <StatChip label="Current price"  value={latest ? usd(latest.current_price) : '—'} />
-        <StatChip
-          label={`Price Δ ${hours}h`}
-          value={priceChange !== null ? `${priceChange > 0 ? '+' : ''}${priceChange}%` : '—'}
-          color={priceChange > 0 ? '#f87171' : priceChange < 0 ? '#34d399' : undefined}
-        />
-        <StatChip label="Supply now"    value={latest ? qty(latest.total_qty_available) : '—'} />
-        <StatChip
-          label={`Supply Δ ${hours}h`}
-          value={supplyChange !== null ? `${supplyChange >= 0 ? '+' : ''}${qty(supplyChange)}` : '—'}
-          color={supplyChange < 0 ? '#f87171' : '#34d399'}
-        />
-        <StatChip label={`Sold ${hours}h`}   value={qty(totalSold)}   color="#f87171" />
-        <StatChip label={`Listed ${hours}h`} value={qty(totalListed)} color="#34d399" />
-        <StatChip label="Sold/min avg"   value={qty(avgSold)}    color={item.color} />
-      </div>
+      {/* 2-column grid: stats+activity | stacked charts */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, marginBottom: 10 }}>
 
-      {/* Charts */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
-        <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '14px 10px 6px' }}>
-          <SectionLabel>Price over time</SectionLabel>
-          {chartSnaps.length > 1 ? (
-            <ResponsiveContainer width="100%" height={130}>
-              <LineChart data={chartSnaps}>
-                <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
-                <XAxis dataKey="recorded_at" tickFormatter={fmtTime} tick={{ fontSize: 10, fill: '#6b6b8a' }} />
-                <YAxis tickFormatter={(v) => usd(v)} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={58} />
-                <Tooltip content={<PriceTooltip />} />
-                <Line type="monotone" dataKey="current_price" stroke={item.color} dot={false} strokeWidth={2} />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <div style={{ color: '#3a3a55', fontSize: 12, padding: 20 }}>Collecting data…</div>
-          )}
+        {/* Column 1: stats + recent activity */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 12px' }}>
+            <SectionLabel>Stats</SectionLabel>
+            <table style={{ width: '100%', fontSize: 12 }}>
+              <tbody>
+                {statsRows.map(({ label, value, color }, i) => (
+                  <tr key={i}>
+                    <td style={{ color: '#6b6b8a', paddingBottom: 4, whiteSpace: 'nowrap' }}>{label}</td>
+                    <td style={{ color: color ?? '#e0e0f0', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 12px', flex: 1 }}>
+            <RecentActivity events={recentEvents} matName={item.matName} />
+          </div>
         </div>
 
-        <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '14px 10px 6px' }}>
-          <SectionLabel>Units sold vs listed per minute</SectionLabel>
-          {activity.some((a) => Number(a.qty_sold_since_prev) > 0 || Number(a.qty_listed_since_prev) > 0) ? (
-            <ResponsiveContainer width="100%" height={130}>
-              <BarChart data={activity}>
-                <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
-                <XAxis dataKey="recorded_at" tickFormatter={fmtTime} tick={{ fontSize: 10, fill: '#6b6b8a' }} />
-                <YAxis tickFormatter={qty} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={44} />
-                <Tooltip content={<ActivityTooltip />} />
-                <Bar dataKey="qty_listed_since_prev" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
-                <Bar dataKey="qty_sold_since_prev"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div style={{ color: '#3a3a55', fontSize: 12, padding: 20 }}>Need ≥2 snapshots with activity.</div>
-          )}
+        {/* Column 2: charts stacked, each filling half the column height */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 10px 4px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <SectionLabel>Price · last snapshot {fmtTime(latest?.recorded_at)}</SectionLabel>
+            {chartSnaps.length > 1 ? (
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartSnaps}>
+                    <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
+                    <XAxis dataKey="recorded_at" tickFormatter={fmtTime} tick={{ fontSize: 10, fill: '#6b6b8a' }} />
+                    <YAxis tickFormatter={(v) => usd(v)} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={58} />
+                    <Tooltip content={<PriceTooltip />} />
+                    <Line type="monotone" dataKey="current_price" stroke={item.color} dot={false} strokeWidth={2} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div style={{ color: '#3a3a55', fontSize: 12, padding: 20 }}>Collecting data…</div>
+            )}
+          </div>
+          <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 10px 4px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+                Sold vs listed · per {activityGroup}
+              </div>
+              <div style={{ display: 'flex', gap: 2 }}>
+                {['1m', '15m', 'hour', 'day'].map((g) => (
+                  <button key={g} onClick={() => setActivityGroup(g)} style={{
+                    padding: '1px 6px', fontSize: 10, borderRadius: 3, cursor: 'pointer', border: 'none',
+                    background: activityGroup === g ? '#3b3b6a' : 'transparent',
+                    color: activityGroup === g ? '#e0e0f0' : '#6b6b8a',
+                  }}>{g}</button>
+                ))}
+              </div>
+            </div>
+            {(() => {
+              const grouped = groupActivity(activity, activityGroup);
+              const tickFmt = activityGroup === 'day'
+                ? (iso) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
+                : fmtTime;
+              return grouped.some((a) => Number(a.qty_sold_since_prev) > 0 || Number(a.qty_listed_since_prev) > 0) ? (
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={grouped}>
+                      <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
+                      <XAxis dataKey="recorded_at" tickFormatter={tickFmt} tick={{ fontSize: 10, fill: '#6b6b8a' }} />
+                      <YAxis tickFormatter={qty} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={44} />
+                      <Tooltip content={<ActivityTooltip />} />
+                      <Bar dataKey="qty_listed_since_prev" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
+                      <Bar dataKey="qty_sold_since_prev"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div style={{ color: '#3a3a55', fontSize: 12, padding: 20 }}>Need ≥2 snapshots with activity.</div>
+              );
+            })()}
+          </div>
         </div>
       </div>
 
       {/* Company activity */}
-      <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: 16 }}>
+      <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '12px 14px' }}>
         <CompanyActivity data={companyActivity} hours={hours} color={item.color} />
       </div>
     </div>
@@ -346,15 +444,23 @@ export default function Tracker() {
   const [status,       setStatus]      = useState(null);
   const [activeTab,    setActiveTab]   = useState(ITEMS[0].matId);
   const [refreshTick,  setRefreshTick] = useState(0);
-  const timerRef = useRef(null);
+  const timerRef       = useRef(null);
+  const prevLastPollAt = useRef(null);
 
   const loadStatus = useCallback(async () => {
-    try { setStatus(await api.trackerStatus()); } catch { /* ignore */ }
+    try {
+      const s = await api.trackerStatus();
+      setStatus(s);
+      if (s.lastPollAt && prevLastPollAt.current !== null && s.lastPollAt !== prevLastPollAt.current) {
+        setRefreshTick((t) => t + 1);
+      }
+      prevLastPollAt.current = s.lastPollAt ?? prevLastPollAt.current;
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
     loadStatus();
-    timerRef.current = setInterval(loadStatus, 30_000);
+    timerRef.current = setInterval(loadStatus, 5_000);
     return () => clearInterval(timerRef.current);
   }, [loadStatus]);
 
@@ -362,56 +468,15 @@ export default function Tracker() {
 
   return (
     <div>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-        <div>
-          <h2 style={{ margin: 0 }}>Market Tracker</h2>
-          {status && (
-            <div style={{ fontSize: 12, color: '#6b6b8a', marginTop: 3 }}>
-              {status.running ? '● Live' : '○ Stopped'} &nbsp;·&nbsp;
-              {status.pollCount} polls &nbsp;·&nbsp;
-              every {status.intervalMs / 1000}s
-              {status.lastError && (
-                <span style={{ color: '#f87171', marginLeft: 8 }}>
-                  Error: {status.lastError.item} — {status.lastError.message}
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {HOURS_OPTIONS.map(({ hours: h, label }) => (
-            <button
-              key={h}
-              onClick={() => setHours(h)}
-              style={{
-                padding: '4px 10px', fontSize: 12, borderRadius: 6, cursor: 'pointer', border: 'none',
-                background: hours === h ? '#3b3b6a' : '#1e1e3a',
-                color: hours === h ? '#e0e0f0' : '#6b6b8a',
-              }}
-            >
-              {label}
-            </button>
-          ))}
-          <button
-            className="btn-secondary"
-            onClick={() => setRefreshTick((t) => t + 1)}
-            style={{ marginLeft: 6 }}
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: 2, marginBottom: 20, borderBottom: '1px solid #1e1e3a' }}>
+      {/* Compact toolbar: tabs + status + time filters + refresh */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginBottom: 10, borderBottom: '1px solid #1e1e3a' }}>
         {ITEMS.map((item) => (
           <button
             key={item.matId}
             onClick={() => setActiveTab(item.matId)}
             style={{
-              padding: '8px 20px', fontSize: 14, fontWeight: 600,
-              border: 'none', cursor: 'pointer', borderRadius: '6px 6px 0 0',
+              padding: '5px 14px', fontSize: 12, fontWeight: 600,
+              border: 'none', cursor: 'pointer', borderRadius: '5px 5px 0 0',
               background: activeTab === item.matId ? '#13132a' : 'transparent',
               color: activeTab === item.matId ? item.color : '#6b6b8a',
               borderBottom: activeTab === item.matId ? `2px solid ${item.color}` : '2px solid transparent',
@@ -420,14 +485,44 @@ export default function Tracker() {
             {item.matName}
           </button>
         ))}
+
+        {status && (
+          <span style={{ fontSize: 11, color: '#3a3a55', marginLeft: 8 }}>
+            {status.running ? '●' : '○'} {status.pollCount} polls
+            {status.lastError && <span style={{ color: '#f87171', marginLeft: 6 }}>{status.lastError.item} error</span>}
+          </span>
+        )}
+
+        <div style={{ flex: 1 }} />
+
+        {HOURS_OPTIONS.map(({ hours: h, label }) => (
+          <button
+            key={h}
+            onClick={() => setHours(h)}
+            style={{
+              padding: '3px 8px', fontSize: 11, borderRadius: 4, cursor: 'pointer', border: 'none',
+              background: hours === h ? '#3b3b6a' : 'transparent',
+              color: hours === h ? '#e0e0f0' : '#6b6b8a',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+        <button
+          className="btn-secondary"
+          onClick={() => setRefreshTick((t) => t + 1)}
+          style={{ marginLeft: 8, padding: '2px 10px', fontSize: 11 }}
+        >
+          Refresh
+        </button>
       </div>
 
       {activeItem && (
         <ItemPanel key={`${activeItem.matId}-${hours}`} item={activeItem} hours={hours} refreshTick={refreshTick} />
       )}
 
-      <div style={{ color: '#3a3a55', fontSize: 11, marginTop: 16 }}>
-        Snapshots every 60s · Sales only counted when no cheaper orders exist (buyers hit lowest price first) · Green = listed, Red = sold
+      <div style={{ color: '#3a3a55', fontSize: 10, marginTop: 10 }}>
+        Snapshots every 60s · Sales only counted when no cheaper orders exist · Green = listed, Red = sold
       </div>
     </div>
   );

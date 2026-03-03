@@ -228,4 +228,24 @@ router.get('/company-activity/:matId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/tracker/recent/:matId?limit=10
+// Most recent individual events for the activity feed
+router.get('/recent/:matId', async (req, res, next) => {
+  try {
+    const { matId } = req.params;
+    const limit = Math.min(Number(req.query.limit) || 10, 50);
+
+    const r = await pool.query(
+      `SELECT company_name, event_type, ABS(qty_change) AS qty, unit_price, recorded_at
+       FROM tracker_events
+       WHERE mat_id = $1
+         AND company_name != 'Federal Reserve'
+       ORDER BY recorded_at DESC
+       LIMIT $2`,
+      [matId, limit]
+    );
+    res.json(r.rows);
+  } catch (err) { next(err); }
+});
+
 export default router;
