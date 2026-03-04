@@ -10,8 +10,9 @@
  *   cancelled    — qty decreased or disappeared BUT cheaper orders still present
  *
  * Rate budget: 5 items × 5 units = 25 units/poll.
- * At 60s intervals that's 75 units per 5-min window, leaving 110 units for
- * other routes (allDetails=60, prices=5, etc.) — total well within 200.
+ * At 60s intervals that's 5 polls/5-min = 125 units/window for tracker alone.
+ * GT API limit: 500/10min = 250/5min. Internal budget target: 230/5min.
+ * Remaining headroom for user routes: ~105 units (allDetails=60, prices=5, etc.).
  *
  * All API calls go through the shared RateLimiter from gtApi.js so the
  * /api/ratelimit indicator stays accurate.

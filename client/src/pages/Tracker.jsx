@@ -122,7 +122,7 @@ function timeAgo(iso) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function RecentActivity({ events, matName }) {
+function RecentActivity({ events, matName, myCompany }) {
   const [expanded, setExpanded] = useState(false);
 
   if (!events || events.length === 0) {
@@ -144,7 +144,7 @@ function RecentActivity({ events, matName }) {
           const { text, color } = EVENT_LABEL[e.event_type] ?? { text: e.event_type, color: '#6b6b8a' };
           return (
             <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12 }}>
-              <span style={{ color: '#c0c0d8', fontWeight: 500, minWidth: 0 }}>{e.company_name}</span>
+              <span style={{ color: myCompany && e.company_name === myCompany ? '#fbbf24' : '#c0c0d8', fontWeight: 500, minWidth: 0 }}>{e.company_name}</span>
               <span style={{ color }}>{text}</span>
               <span style={{ color: '#e0e0f0', fontVariantNumeric: 'tabular-nums' }}>{qty(Number(e.qty))}</span>
               <span style={{ color: '#6b6b8a' }}>{matName}</span>
@@ -177,7 +177,7 @@ const ACTIVITY_COLS = [
   { key: 'share_delta',    label: 'Growth'     },
 ];
 
-function CompanyActivity({ data, hours, color, onAwards }) {
+function CompanyActivity({ data, hours, color, onAwards, myCompany }) {
   const [sort, setSort] = useState({ key: 'sales_pct', dir: 1 }); // desc by default
 
   if (!data || !data.rows.filter((r) => r.company_name !== 'Federal Reserve').length) {
@@ -245,8 +245,8 @@ function CompanyActivity({ data, hours, color, onAwards }) {
         </thead>
         <tbody>
           {sorted.map((row, i) => (
-            <tr key={row.company_id} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
-              <td style={{ color: '#c0c0d8', fontWeight: 500 }}>{row.company_name}</td>
+            <tr key={row.company_id} style={{ background: myCompany && row.company_name === myCompany ? 'rgba(251,191,36,0.08)' : i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
+              <td style={{ color: myCompany && row.company_name === myCompany ? '#fbbf24' : '#c0c0d8', fontWeight: 500 }}>{row.company_name}</td>
               <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
                   <ShareBar pct={row.sales_pct} color="#f87171" />
@@ -313,6 +313,41 @@ function Modal({ title, onClose, children }) {
   );
 }
 
+// ── Settings modal ─────────────────────────────────────────────────────────────
+
+function SettingsModal({ myCompany, onSave, onClose }) {
+  const [draft, setDraft] = useState(myCompany);
+  return (
+    <Modal title="Settings" onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 300 }}>
+        <div>
+          <div style={{ color: '#6b6b8a', fontSize: 11, marginBottom: 6 }}>My company name</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Enter your company name…"
+              onKeyDown={(e) => { if (e.key === 'Enter') { onSave(draft); onClose(); } }}
+              style={{
+                flex: 1, background: '#13132a', border: '1px solid #1e1e3a', borderRadius: 4,
+                color: '#e0e0f0', padding: '4px 8px', fontSize: 12, outline: 'none',
+              }}
+            />
+            <button
+              onClick={() => { onSave(draft); onClose(); }}
+              style={{ padding: '4px 12px', fontSize: 12, borderRadius: 4, cursor: 'pointer', background: '#3b3b6a', border: 'none', color: '#e0e0f0' }}
+            >Save</button>
+          </div>
+          <div style={{ color: '#3a3a55', fontSize: 10, marginTop: 6 }}>
+            Your company will be highlighted in gold throughout the tracker.
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ── Item panel ─────────────────────────────────────────────────────────────────
 
 function groupSnapshots(data, groupBy) {
@@ -352,7 +387,7 @@ function groupActivity(data, groupBy) {
   return [...buckets.values()];
 }
 
-function ItemPanel({ item, hours, refreshTick }) {
+function ItemPanel({ item, hours, refreshTick, myCompany }) {
   const [snapshots,       setSnapshots]       = useState([]);
   const [activity,        setActivity]        = useState([]);
   const [companyActivity, setCompanyActivity] = useState(null);
@@ -434,7 +469,7 @@ function ItemPanel({ item, hours, refreshTick }) {
     {
       label: 'Price', value: latest ? usd(latest.current_price) : '—',
       delta: priceChange !== null ? `${priceChange > 0 ? '+' : ''}${priceChange}%` : null,
-      deltaColor: priceChange > 0 ? '#f87171' : priceChange < 0 ? '#34d399' : undefined,
+      deltaColor: priceChange > 0 ? '#34d399' : priceChange < 0 ? '#f87171' : undefined,
     },
     {
       label: 'Supply', value: latest ? qty(latest.total_qty_available) : '—',
@@ -444,8 +479,8 @@ function ItemPanel({ item, hours, refreshTick }) {
     {
       label: `Participants ≥${paxThreshold}%`, onClick: cyclePaxThreshold,
       value: currPax !== null ? String(currPax) : '—',
-      delta: paxDelta !== null ? `${paxDelta >= 0 ? '+' : ''}${paxDelta}` : null,
-      deltaColor: paxDelta > 0 ? '#34d399' : paxDelta < 0 ? '#f87171' : undefined,
+      delta: paxDelta !== null ? `${paxDelta >= 0 ? '+' : ''}${paxDelta}` : '—',
+      deltaColor: paxDelta === null ? '#2a2a45' : paxDelta > 0 ? '#34d399' : paxDelta < 0 ? '#f87171' : '#6b6b8a',
     },
     { label: 'Sold',        value: qty(totalSold),    color: '#f87171' },
     { label: 'Listed',      value: qty(totalListed),  color: '#34d399' },
@@ -545,19 +580,22 @@ function ItemPanel({ item, hours, refreshTick }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {orders.map((o, i) => (
-                    <tr key={o.order_id ?? i}>
-                      <td style={{ color: '#c0c0d8', paddingBottom: 3, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.company_name}>{o.company_name}</td>
-                      <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums', paddingBottom: 3 }}>{qty(o.qty)}</td>
-                      <td style={{ textAlign: 'right', color: '#e0e0f0', fontVariantNumeric: 'tabular-nums', fontWeight: 600, paddingBottom: 3 }}>{usd(o.unit_price)}</td>
-                    </tr>
-                  ))}
+                  {orders.map((o, i) => {
+                    const isMe = myCompany && o.company_name === myCompany;
+                    return (
+                      <tr key={o.order_id ?? i} style={{ background: isMe ? 'rgba(251,191,36,0.08)' : undefined }}>
+                        <td style={{ color: isMe ? '#fbbf24' : '#c0c0d8', paddingBottom: 3, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.company_name}>{o.company_name}</td>
+                        <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums', paddingBottom: 3 }}>{qty(o.qty)}</td>
+                        <td style={{ textAlign: 'right', color: isMe ? '#fbbf24' : '#e0e0f0', fontVariantNumeric: 'tabular-nums', fontWeight: 600, paddingBottom: 3 }}>{usd(o.unit_price)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
           <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 12px', flex: 1 }}>
-            <RecentActivity events={recentEvents} matName={item.matName} />
+            <RecentActivity events={recentEvents} matName={item.matName} myCompany={myCompany} />
           </div>
         </div>
 
@@ -708,9 +746,10 @@ function ItemPanel({ item, hours, refreshTick }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               {barDetail.events.map((e, i) => {
                 const { text, color } = EVENT_LABEL[e.event_type] ?? { text: e.event_type, color: '#6b6b8a' };
+                const isMe = myCompany && e.company_name === myCompany;
                 return (
                   <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12 }}>
-                    <span style={{ color: '#c0c0d8', fontWeight: 500 }}>{e.company_name}</span>
+                    <span style={{ color: isMe ? '#fbbf24' : '#c0c0d8', fontWeight: 500 }}>{e.company_name}</span>
                     <span style={{ color }}>{text}</span>
                     <span style={{ color: '#e0e0f0', fontVariantNumeric: 'tabular-nums' }}>{qty(Number(e.qty))}</span>
                     <span style={{ color: '#6b6b8a' }}>{item.matName}</span>
@@ -752,15 +791,17 @@ function ItemPanel({ item, hours, refreshTick }) {
                 </tr>
               </thead>
               <tbody>
-                {awardsData.rows.map((row, i) => (
-                  <tr key={row.company_id} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
+                {awardsData.rows.map((row, i) => {
+                  const isMe = myCompany && row.company_name === myCompany;
+                  return (
+                  <tr key={row.company_id} style={{ background: isMe ? 'rgba(251,191,36,0.08)' : i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
                     <td style={{ color: '#6b6b8a', paddingRight: 10, paddingTop: 4 }}>{i + 1}</td>
-                    <td style={{ color: '#c0c0d8', fontWeight: 500, paddingTop: 4 }}>{row.company_name}</td>
+                    <td style={{ color: isMe ? '#fbbf24' : '#c0c0d8', fontWeight: 500, paddingTop: 4 }}>{row.company_name}</td>
                     <td style={{ textAlign: 'right', color: '#fbbf24', fontVariantNumeric: 'tabular-nums', paddingTop: 4 }}>{usdK(row.revenue)}</td>
                     <td style={{ textAlign: 'right', color: '#f87171', fontVariantNumeric: 'tabular-nums', paddingTop: 4 }}>{qty(row.qty_sold)}</td>
                     <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums', paddingTop: 4 }}>{usd(row.avg_price)}</td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </table>
           )}
@@ -769,7 +810,7 @@ function ItemPanel({ item, hours, refreshTick }) {
 
       {/* Company activity */}
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '12px 14px' }}>
-        <CompanyActivity data={companyActivity} hours={hours} color={item.color} onAwards={openAwards} />
+        <CompanyActivity data={companyActivity} hours={hours} color={item.color} onAwards={openAwards} myCompany={myCompany} />
       </div>
     </div>
   );
@@ -782,8 +823,17 @@ export default function Tracker() {
   const [status,       setStatus]      = useState(null);
   const [activeTab,    setActiveTab]   = useState(ITEMS[0].matId);
   const [refreshTick,  setRefreshTick] = useState(0);
+  const [myCompany,    setMyCompany]   = useState(() => localStorage.getItem('gt_my_company') ?? '');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const timerRef       = useRef(null);
   const prevLastPollAt = useRef(null);
+
+  function saveMyCompany(name) {
+    const trimmed = name.trim();
+    setMyCompany(trimmed);
+    if (trimmed) localStorage.setItem('gt_my_company', trimmed);
+    else localStorage.removeItem('gt_my_company');
+  }
 
   const loadStatus = useCallback(async () => {
     try {
@@ -853,10 +903,24 @@ export default function Tracker() {
         >
           Refresh
         </button>
+        <button
+          onClick={() => setSettingsOpen(true)}
+          title="Settings"
+          style={{
+            marginLeft: 4, padding: '2px 7px', fontSize: 13, borderRadius: 4, cursor: 'pointer',
+            background: myCompany ? 'rgba(251,191,36,0.12)' : 'transparent',
+            border: myCompany ? '1px solid rgba(251,191,36,0.3)' : '1px solid transparent',
+            color: myCompany ? '#fbbf24' : '#6b6b8a',
+          }}
+        >⚙</button>
       </div>
 
+      {settingsOpen && (
+        <SettingsModal myCompany={myCompany} onSave={saveMyCompany} onClose={() => setSettingsOpen(false)} />
+      )}
+
       {activeItem && (
-        <ItemPanel key={`${activeItem.matId}-${hours}`} item={activeItem} hours={hours} refreshTick={refreshTick} />
+        <ItemPanel key={`${activeItem.matId}-${hours}`} item={activeItem} hours={hours} refreshTick={refreshTick} myCompany={myCompany} />
       )}
 
       <div style={{ color: '#3a3a55', fontSize: 10, marginTop: 10 }}>

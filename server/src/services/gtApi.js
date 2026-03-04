@@ -5,9 +5,9 @@ const BASE    = process.env.GT_API_BASE;
 const API_KEY = process.env.GT_API_KEY;
 
 // ── Rate limiter ──────────────────────────────────────────────────────────────
-// GT API budget: 200 units / 5 min with API key. We target 185 to keep a buffer.
+// GT API budget: 500 units / 10 min with API key = 250 / 5 min. We target 230 to keep a buffer.
 class RateLimiter {
-  constructor(maxUnits = 185, windowMs = 5 * 60 * 1000) {
+  constructor(maxUnits = 230, windowMs = 5 * 60 * 1000) {
     this.maxUnits  = maxUnits;
     this.windowMs  = windowMs;
     this.usage     = []; // [{ ts, units, path }]
