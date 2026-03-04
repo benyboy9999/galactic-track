@@ -31,7 +31,10 @@ const schema = `
     recorded_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     current_price       INTEGER NOT NULL,
     avg_price           INTEGER NOT NULL,
-    total_qty_available BIGINT NOT NULL
+    total_qty_available BIGINT NOT NULL,
+    api_qty_sold        BIGINT,           -- priceHistory[0].qtySold from GT API (intra-day accumulator)
+    api_qty_sold_date   TEXT,             -- priceHistory[0].date (to detect day rollovers)
+    flash_qty           BIGINT NOT NULL DEFAULT 0  -- gap between api delta and attributed sales
   );
 
   CREATE INDEX IF NOT EXISTS idx_tsnap_mat_id ON tracker_snapshots(mat_id);

@@ -96,6 +96,7 @@ router.get('/activity/:matId', async (req, res, next) => {
          s.recorded_at,
          s.current_price,
          s.total_qty_available,
+         s.flash_qty,
          COALESCE(SUM(CASE WHEN e.event_type IN ('partial_fill','full_fill')
                            THEN ABS(e.qty_change) END), 0)::bigint AS qty_sold_since_prev,
          COALESCE(SUM(CASE WHEN e.event_type IN ('new_listing','restocked')
@@ -366,6 +367,136 @@ router.get('/awards/:matId', async (req, res, next) => {
     );
 
     res.json({ hours, rows: r.rows });
+  } catch (err) { next(err); }
+});
+
+// GET /api/tracker/pressure/:matId
+// Market pressure signal: wall absorption time vs consumption trend
+router.get('/pressure/:matId', async (req, res, next) => {
+  try {
+    const { matId } = req.params;
+
+    const snapRes = await pool.query(
+      `SELECT id, current_price FROM tracker_snapshots WHERE mat_id=$1 ORDER BY recorded_at DESC LIMIT 1`,
+      [matId]
+    );
+    if (!snapRes.rows.length) return res.json(null);
+    const { id: snapId, current_price } = snapRes.rows[0];
+
+    // All price tiers of current order book — wall detection happens in JS after rates are known
+    const [wallRes, r6, r1] = await Promise.all([
+      pool.query(
+        `SELECT unit_price, SUM(qty)::bigint AS tier_qty
+         FROM tracker_orders
+         WHERE snapshot_id = $1
+         GROUP BY unit_price
+         ORDER BY unit_price ASC`,
+        [snapId]
+      ),
+      // 6h baseline: avg hourly rate + supply pressure
+      pool.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN event_type IN ('partial_fill','full_fill') THEN ABS(qty_change) ELSE 0 END), 0)::bigint AS sold,
+           COALESCE(SUM(CASE WHEN event_type IN ('new_listing','restocked') THEN qty_change ELSE 0 END), 0)::bigint AS listed
+         FROM tracker_events
+         WHERE mat_id=$1 AND recorded_at > NOW() - INTERVAL '6 hours'`,
+        [matId]
+      ),
+      // 1h current: sold + listed this hour
+      pool.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN event_type IN ('partial_fill','full_fill') THEN ABS(qty_change) ELSE 0 END), 0)::bigint AS sold,
+           COALESCE(SUM(CASE WHEN event_type IN ('new_listing','restocked') THEN qty_change ELSE 0 END), 0)::bigint AS listed
+         FROM tracker_events
+         WHERE mat_id=$1 AND recorded_at > NOW() - INTERVAL '1 hour'`,
+        [matId]
+      ),
+    ]);
+
+    const sold_6h   = Number(r6.rows[0].sold);
+    const listed_6h = Number(r6.rows[0].listed);
+    const sold_1h   = Number(r1.rows[0].sold);
+    const listed_1h = Number(r1.rows[0].listed);
+
+    const sales_rate_6h = sold_6h / 6; // avg units sold per hour over last 6h
+
+    // Wall detection: any tier that alone takes >1hr of avg sales to clear.
+    // All order book entries are >= current_price so these are resistance levels above.
+    const tiers = wallRes.rows.map((r) => ({
+      unit_price:   r.unit_price,
+      tier_qty:     Number(r.tier_qty),
+      hours:        sales_rate_6h > 0 ? +(Number(r.tier_qty) / sales_rate_6h).toFixed(1) : null,
+      distance_pct: current_price > 0
+        ? +((r.unit_price - current_price) / current_price * 100).toFixed(1)
+        : null,
+    }));
+
+    const walls      = tiers.filter((t) => t.hours === null || t.hours > 1);
+    const first_wall = walls[0] ?? null;
+    const at_wall    = first_wall !== null && first_wall.unit_price === current_price;
+
+    // Cluster analysis — walls within CLUSTER_GAP_PCT of each other form a contiguous block.
+    // Only walls within RELEVANCE_PCT of current price are considered (distant walls are noise).
+    // The SIGNAL is driven by the immediate cluster only, not walls far above.
+    const CLUSTER_GAP_PCT = 5;   // walls ≤5% apart are in the same cluster
+    const RELEVANCE_PCT   = 15;  // ignore walls beyond 15% above current price
+
+    const nearWalls = walls.filter((w) => w.distance_pct !== null && w.distance_pct <= RELEVANCE_PCT);
+    const clusters  = [];
+    for (const wall of nearWalls) {
+      const last = clusters[clusters.length - 1];
+      if (!last) { clusters.push([wall]); continue; }
+      const prev    = last[last.length - 1];
+      const gapPct  = (wall.unit_price - prev.unit_price) / prev.unit_price * 100;
+      gapPct <= CLUSTER_GAP_PCT ? last.push(wall) : clusters.push([wall]);
+    }
+
+    const firstCluster      = clusters[0] ?? [];
+    const clusterHours      = +firstCluster.reduce((s, w) => s + (w.hours ?? 0), 0).toFixed(1);
+    // Gap from end of first cluster to start of second — price "escape room" after breaking through
+    const gap_after_pct     = clusters.length > 1
+      ? +((clusters[1][0].unit_price - firstCluster[firstCluster.length - 1].unit_price)
+          / firstCluster[firstCluster.length - 1].unit_price * 100).toFixed(1)
+      : null;
+
+    // D/S ratio: sold / listed — >1 demand outpacing supply, <1 supply flooding
+    const ds_ratio_1h  = listed_1h > 0 ? +(sold_1h / listed_1h).toFixed(2) : null;
+    const ds_ratio_6h  = listed_6h > 0 ? +(sold_6h / listed_6h).toFixed(2) : null;
+    const ds_trend_pct = ds_ratio_6h > 0
+      ? +((ds_ratio_1h - ds_ratio_6h) / ds_ratio_6h * 100).toFixed(1)
+      : null;
+
+    // Signal: driven by immediate cluster density, not total/distant walls
+    // Bearish: dense cluster of walls just above (lots of sequential resistance)
+    // Bullish: thin first wall + open space after (price can break through and run)
+    // D/S reinforces or overrides
+    const bearish_cluster = clusterHours > 15;
+    const bearish_ds      = ds_ratio_1h !== null && ds_ratio_1h < 0.5;
+    const bullish_thin    = nearWalls.length === 0
+                            || (firstCluster[0]?.hours < 5 && (gap_after_pct === null || gap_after_pct > 10));
+    const bullish_ds      = ds_ratio_1h !== null && ds_ratio_1h > 0.8
+                            && (ds_trend_pct === null || ds_trend_pct > -10);
+    let signal = 'neutral';
+    if      (bullish_thin && bullish_ds && !bearish_cluster)  signal = 'bullish';
+    else if (bearish_cluster || bearish_ds)                   signal = 'bearish';
+
+    res.json({
+      current_price,
+      walls:      walls.map((w) => ({ unit_price: w.unit_price, hours: w.hours, distance_pct: w.distance_pct })),
+      wall_count: walls.length,
+      first_wall: first_wall ? { unit_price: first_wall.unit_price, hours: first_wall.hours, distance_pct: first_wall.distance_pct } : null,
+      at_wall,
+      immediate_cluster: {
+        wall_count:    firstCluster.length,
+        hours:         clusterHours,
+        gap_after_pct,
+      },
+      sales_rate_6h:  +sales_rate_6h.toFixed(1),
+      ds_ratio_1h,
+      ds_ratio_6h,
+      ds_trend_pct,
+      signal,
+    });
   } catch (err) { next(err); }
 });
 

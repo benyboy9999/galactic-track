@@ -8,12 +8,14 @@ import Spinner from '../components/Spinner';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
+const ITEM_COLOR = '#a78bfa';
+
 const ITEMS = [
-  { matId: 2,  matName: 'Iron',       color: '#60a5fa' },
-  { matId: 3,  matName: 'Concrete',   color: '#a78bfa' },
-  { matId: 8,  matName: 'Silica',     color: '#f59e0b' },
-  { matId: 34, matName: 'Limestone',  color: '#94a3b8' },
-  { matId: 92, matName: 'Prefab Kit', color: '#34d399' },
+  { matId: 2,  matName: 'Iron',       color: ITEM_COLOR },
+  { matId: 3,  matName: 'Concrete',   color: ITEM_COLOR },
+  { matId: 8,  matName: 'Silica',     color: ITEM_COLOR },
+  { matId: 34, matName: 'Limestone',  color: ITEM_COLOR },
+  { matId: 92, matName: 'Prefab Kit', color: ITEM_COLOR },
 ];
 
 const PAX_THRESHOLDS = [0.1, 0.5, 1, 2, 5];
@@ -72,6 +74,7 @@ function ActivityTooltip({ active, payload }) {
       <div style={{ color: '#6b6b8a', marginBottom: 4 }}>{fmtTime(d.recorded_at)}</div>
       {Number(d.qty_sold_since_prev) > 0 && <div>Sold: <strong style={{ color: '#f87171' }}>{qty(d.qty_sold_since_prev)}</strong></div>}
       {Number(d.qty_listed_since_prev) > 0 && <div>Listed: <strong style={{ color: '#34d399' }}>{qty(d.qty_listed_since_prev)}</strong></div>}
+      {Number(d.flash_qty) > 0 && <div>Flash: <strong style={{ color: '#6b6b8a' }}>{qty(d.flash_qty)}</strong></div>}
     </div>
   );
 }
@@ -348,6 +351,83 @@ function SettingsModal({ myCompany, onSave, onClose }) {
   );
 }
 
+// ── Pressure indicator ─────────────────────────────────────────────────────────
+
+const PRESSURE_SIGNAL = {
+  bearish: { label: 'BEARISH', color: '#f87171', arrow: '↓' },
+  bullish: { label: 'BULLISH', color: '#34d399', arrow: '↑' },
+  neutral: { label: 'NEUTRAL', color: '#6b6b8a', arrow: '→' },
+};
+
+function supplyStatus(ratio) {
+  if (ratio === null) return null;
+  if (ratio < 0.3)  return { text: 'FLOODED',      color: '#f87171' };
+  if (ratio < 0.6)  return { text: 'OVERSUPPLIED', color: '#fb923c' };
+  if (ratio < 1.0)  return { text: 'SOFT',         color: '#fbbf24' };
+  if (ratio < 1.5)  return { text: 'BALANCED',     color: '#6b6b8a' };
+  return                   { text: 'TIGHT',         color: '#34d399' };
+}
+
+function changeSpeed(pct) {
+  if (pct === null)  return null;
+  if (pct < -30)  return { text: '↘↘', color: '#f87171', title: 'flooding fast'  };
+  if (pct < -10)  return { text: '↘',  color: '#fb923c', title: 'softening'      };
+  if (pct <=  10) return { text: '→',  color: '#6b6b8a', title: 'stable'         };
+  if (pct <   30) return { text: '↗',  color: '#34d399', title: 'tightening'     };
+  return                  { text: '↗↗', color: '#34d399', title: 'draining fast' };
+}
+
+function PressureIndicator({ data }) {
+  if (!data) return null;
+  const { signal, first_wall, wall_count, at_wall, immediate_cluster, ds_ratio_1h, ds_trend_pct } = data;
+  const s       = PRESSURE_SIGNAL[signal] ?? PRESSURE_SIGNAL.neutral;
+  const status  = supplyStatus(ds_ratio_1h);
+  const change  = changeSpeed(ds_trend_pct);
+  const cluster = immediate_cluster ?? { wall_count: 0, hours: 0, gap_after_pct: null };
+
+  // Wall node: show the immediate cluster picture, not total distant walls
+  let wallNode = null;
+  const wallTip = data.walls.map((w) => `${usd(w.unit_price)}: ${w.hours}h (+${w.distance_pct}%)`).join(' · ');
+  if (wall_count === 0 || cluster.wall_count === 0) {
+    wallNode = <span style={{ color: '#34d399' }} title={wallTip || 'No walls in range'}>No walls</span>;
+  } else if (cluster.wall_count === 1) {
+    // Single wall — show its hours and price, plus escape room if any
+    const escapeLabel = cluster.gap_after_pct !== null
+      ? ` · +${cluster.gap_after_pct}% clear` : '';
+    wallNode = (
+      <span style={{ color: at_wall ? '#fbbf24' : '#6b6b8a' }} title={wallTip}>
+        {at_wall ? '⚓ ' : ''}{first_wall.hours}h @ {usd(first_wall.unit_price)}{escapeLabel}
+      </span>
+    );
+  } else {
+    // Cluster of walls — show count + total hours + escape room gap
+    const escapeLabel = cluster.gap_after_pct !== null
+      ? ` · +${cluster.gap_after_pct}% clear` : '';
+    wallNode = (
+      <span style={{ color: at_wall ? '#fbbf24' : '#f87171' }} title={wallTip}>
+        {at_wall ? '⚓ ' : ''}{cluster.wall_count} walls {cluster.hours}h{escapeLabel}
+      </span>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, paddingTop: 8, borderTop: '1px solid #1e1e3a', marginTop: 6, flexWrap: 'wrap' }}>
+      <span style={{ color: s.color, fontWeight: 700, letterSpacing: 0.5 }}>{s.arrow} {s.label}</span>
+      <span style={{ color: '#3a3a55' }}>·</span>
+      {wallNode}
+      {status && (
+        <>
+          <span style={{ color: '#3a3a55' }}>·</span>
+          <span style={{ color: status.color, fontWeight: 600 }}>{status.text}</span>
+        </>
+      )}
+      {change && (
+        <span style={{ color: change.color, fontWeight: 700, fontSize: 13 }} title={change.title}>{change.text}</span>
+      )}
+    </div>
+  );
+}
+
 // ── Item panel ─────────────────────────────────────────────────────────────────
 
 function groupSnapshots(data, groupBy) {
@@ -393,11 +473,13 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
   const [companyActivity, setCompanyActivity] = useState(null);
   const [recentEvents,    setRecentEvents]    = useState([]);
   const [orders,          setOrders]          = useState([]);
+  const [pressure,        setPressure]        = useState(null);
+  const [orderbookView,   setOrderbookView]   = useState('density');
   const [loading,         setLoading]         = useState(true);
   const [refreshing,      setRefreshing]      = useState(false);
   const [error,           setError]           = useState(null);
   const [priceGroup,      setPriceGroup]      = useState('15m');
-  const [activityGroup,   setActivityGroup]   = useState('15m');
+  const [activityGroup,   setActivityGroup]   = useState('hour');
   const [paxThreshold,    setPaxThreshold]    = useState(0.1);
   const [barDetail,       setBarDetail]       = useState(null); // { from, to, events, loading }
   const [patterns,        setPatterns]        = useState(null); // { byHour, byDow } | null=not loaded
@@ -423,7 +505,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
       setActivity(act);
       setCompanyActivity(compAct);
       setRecentEvents(recent);
-      setOrders((orderData?.orders ?? []).slice(0, 5));
+      setOrders(orderData?.orders ?? []);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -465,6 +547,29 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
     setPaxThreshold(next);
   };
 
+  // Rate of change of supply velocity over the last hour.
+  // Split the last hour into two 30-min halves, compute supply velocity (units/hr) for each,
+  // then RoC = second half velocity minus first half velocity.
+  // Negative = drain accelerating (bullish for price), positive = supply building faster (bearish).
+  const now        = Date.now();
+  const t60        = now - 60 * 60 * 1000;
+  const t30        = now - 30 * 60 * 1000;
+  const firstHalf  = snapshots.filter((s) => { const t = new Date(s.recorded_at).getTime(); return t >= t60 && t <= t30; });
+  const secondHalf = snapshots.filter((s) => new Date(s.recorded_at).getTime() > t30);
+  function supplyVelocity(snaps) {
+    if (snaps.length < 2) return null;
+    const change  = Number(snaps[snaps.length - 1].total_qty_available) - Number(snaps[0].total_qty_available);
+    const minutes = (new Date(snaps[snaps.length - 1].recorded_at) - new Date(snaps[0].recorded_at)) / 60_000;
+    return minutes > 0 ? change / minutes * 60 : null;
+  }
+  const v1 = supplyVelocity(firstHalf);
+  const v2 = supplyVelocity(secondHalf);
+  // Normalize to [-1, 1] by velocity magnitude so signal is scale-independent across items
+  const rocNorm = v1 !== null && v2 !== null
+    ? Math.max(-1, Math.min(1, (v2 - v1) / Math.max(Math.abs(v1), Math.abs(v2), 1)))
+    : null;
+  const rocSignal = rocNorm === null ? null : rocNorm < -0.15 ? 'up' : rocNorm > 0.15 ? 'down' : 'neutral';
+
   const statsRows = [
     {
       label: 'Price', value: latest ? usd(latest.current_price) : '—',
@@ -485,6 +590,11 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
     { label: 'Sold',        value: qty(totalSold),    color: '#f87171' },
     { label: 'Listed',      value: qty(totalListed),  color: '#34d399' },
     { label: 'Sold/hr avg', value: qty(avgSold * 60), color: item.color },
+    {
+      label: 'Rate of change',
+      value: rocSignal === 'up' ? '↑ CONTRACTING' : rocSignal === 'down' ? '↓ EXPANDING' : '—',
+      color: rocSignal === 'up' ? '#34d399' : rocSignal === 'down' ? '#f87171' : '#6b6b8a',
+    },
   ];
 
   async function openPatterns() {
@@ -568,32 +678,82 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
               </tbody>
             </table>
           </div>
-          {orders.length > 0 && (
-            <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 12px' }}>
-              <SectionLabel>Orderbook</SectionLabel>
-              <table style={{ width: '100%', fontSize: 12 }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: 'left',  color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Company</th>
-                    <th style={{ textAlign: 'right', color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Amount</th>
-                    <th style={{ textAlign: 'right', color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Price</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {orders.map((o, i) => {
-                    const isMe = myCompany && o.company_name === myCompany;
-                    return (
-                      <tr key={o.order_id ?? i} style={{ background: isMe ? 'rgba(251,191,36,0.08)' : undefined }}>
-                        <td style={{ color: isMe ? '#fbbf24' : '#c0c0d8', paddingBottom: 3, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.company_name}>{o.company_name}</td>
-                        <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums', paddingBottom: 3 }}>{qty(o.qty)}</td>
-                        <td style={{ textAlign: 'right', color: isMe ? '#fbbf24' : '#e0e0f0', fontVariantNumeric: 'tabular-nums', fontWeight: 600, paddingBottom: 3 }}>{usd(o.unit_price)}</td>
+          {orders.length > 0 && (() => {
+            // Density view computation
+            const priceGroups = new Map();
+            for (const o of orders) {
+              priceGroups.set(o.unit_price, (priceGroups.get(o.unit_price) ?? 0) + Number(o.qty));
+            }
+            const top5 = [...priceGroups.entries()].sort(([a], [b]) => a - b).slice(0, 5);
+            const top5Total = top5.reduce((s, [, q]) => s + q, 0);
+            const densityRows = top5.map(([price, cumQty]) => ({
+              price, cumQty, pct: top5Total > 0 ? (cumQty / top5Total) * 100 : 0,
+            }));
+
+            return (
+              <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Live Orderbook</div>
+                  <div style={{ display: 'flex', gap: 2 }}>
+                    {['Company', 'Density'].map((v) => (
+                      <button key={v} onClick={() => setOrderbookView(v.toLowerCase())} style={{
+                        padding: '1px 7px', fontSize: 10, borderRadius: 3, cursor: 'pointer', border: 'none',
+                        background: orderbookView === v.toLowerCase() ? '#3b3b6a' : 'transparent',
+                        color:      orderbookView === v.toLowerCase() ? '#e0e0f0' : '#6b6b8a',
+                      }}>{v}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {orderbookView === 'company' ? (
+                  <table style={{ width: '100%', fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left',  color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Company</th>
+                        <th style={{ textAlign: 'right', color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Amount</th>
+                        <th style={{ textAlign: 'right', color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Price</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                    </thead>
+                    <tbody>
+                      {orders.slice(0, 5).map((o, i) => {
+                        const isMe = myCompany && o.company_name === myCompany;
+                        return (
+                          <tr key={o.order_id ?? i} style={{ background: isMe ? 'rgba(251,191,36,0.08)' : undefined }}>
+                            <td style={{ color: isMe ? '#fbbf24' : '#c0c0d8', paddingBottom: 3, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.company_name}>{o.company_name}</td>
+                            <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums', paddingBottom: 3 }}>{qty(o.qty)}</td>
+                            <td style={{ textAlign: 'right', color: isMe ? '#fbbf24' : '#e0e0f0', fontVariantNumeric: 'tabular-nums', fontWeight: 600, paddingBottom: 3 }}>{usd(o.unit_price)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table style={{ width: '100%', fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left',  color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Volume</th>
+                        <th style={{ textAlign: 'right', color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Amount</th>
+                        <th style={{ textAlign: 'right', color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Price</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {densityRows.map(({ price, cumQty, pct }) => (
+                        <tr key={price}>
+                          <td style={{ paddingBottom: 4, paddingRight: 8 }}>
+                            <div style={{ flex: 1, height: 10, background: '#1e1e3a', borderRadius: 1, overflow: 'hidden', minWidth: 60 }}>
+                              <div style={{ width: `${pct}%`, height: '100%', background: item.color, borderRadius: 1, opacity: 0.8 }} />
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums', paddingBottom: 4 }}>{qty(cumQty)}</td>
+                          <td style={{ textAlign: 'right', color: '#e0e0f0', fontVariantNumeric: 'tabular-nums', fontWeight: 600, paddingBottom: 4 }}>{usd(price)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            );
+          })()}
           <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 12px', flex: 1 }}>
             <RecentActivity events={recentEvents} matName={item.matName} myCompany={myCompany} />
           </div>
@@ -621,13 +781,15 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
                     <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
                     <XAxis dataKey="recorded_at" tickFormatter={fmtTime} tick={{ fontSize: 10, fill: '#6b6b8a' }}
                       interval={priceGroup === '1m' ? 59 : priceGroup === '15m' ? 3 : 0} />
-                    <YAxis tickFormatter={(v) => usd(v)} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={58}
+                    <YAxis yAxisId="price" tickFormatter={(v) => usd(v)} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={58}
                       domain={[
                         (min) => Math.round(min * 0.95),
                         (max) => Math.round(max * 1.05),
                       ]} />
+                    <YAxis yAxisId="supply" orientation="right" tickFormatter={qty} tick={{ fontSize: 10, fill: '#3a3a55' }} width={44} />
                     <Tooltip content={<PriceTooltip />} cursor={{ stroke: 'rgba(59, 59, 106, 0.8)', strokeWidth: 1, fill: 'rgba(59, 59, 106, 0.15)' }} />
-                    <Line type="monotone" dataKey="current_price" stroke={item.color} dot={false} strokeWidth={2} />
+                    <Line yAxisId="price"  type="monotone" dataKey="current_price"       stroke={item.color} dot={false} strokeWidth={2} />
+                    <Line yAxisId="supply" type="monotone" dataKey="total_qty_available" stroke="#3a3a55"    dot={false} strokeWidth={1} strokeDasharray="4 2" />
                   </LineChart>
                 </ResponsiveContainer>
               </div>

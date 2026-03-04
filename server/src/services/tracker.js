@@ -73,6 +73,7 @@ async function fetchMatDetails(matId) {
 async function getLastSnapshot(matId) {
   const r = await pool.query(
     `SELECT s.id, s.total_qty_available, s.recorded_at,
+            s.api_qty_sold, s.api_qty_sold_date,
             json_agg(json_build_object(
               'orderId',     o.order_id,
               'companyId',   o.company_id,
@@ -91,14 +92,14 @@ async function getLastSnapshot(matId) {
   return r.rows[0] ?? null;
 }
 
-async function saveSnapshot(client, matData) {
+async function saveSnapshot(client, matData, apiQtySold, apiQtySoldDate) {
   const { matId, matName, currentPrice, avgPrice, totalQtyAvailable, orders = [] } = matData;
 
   const snapRes = await client.query(
-    `INSERT INTO tracker_snapshots(mat_id, mat_name, current_price, avg_price, total_qty_available)
-     VALUES($1, $2, $3, $4, $5)
+    `INSERT INTO tracker_snapshots(mat_id, mat_name, current_price, avg_price, total_qty_available, api_qty_sold, api_qty_sold_date)
+     VALUES($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
-    [matId, matName, currentPrice, avgPrice, totalQtyAvailable]
+    [matId, matName, currentPrice, avgPrice, totalQtyAvailable, apiQtySold ?? null, apiQtySoldDate ?? null]
   );
   const snapId = snapRes.rows[0].id;
 
@@ -203,12 +204,19 @@ function diffOrderBooks(prevOrders, currOrders, matId, snapshotAId, snapshotBId)
 async function pollItem(item) {
   const data = await fetchMatDetails(item.matId);
 
+  // Extract intra-day qtySold accumulator from priceHistory
+  const todayHistory   = data.priceHistory?.[0] ?? null;
+  const apiQtySold     = todayHistory?.qtySold     ?? null;
+  const apiQtySoldDate = todayHistory?.date         ?? null;
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const prevSnap = await getLastSnapshot(item.matId);
-    const snapId   = await saveSnapshot(client, data);
+    const snapId   = await saveSnapshot(client, data, apiQtySold, apiQtySoldDate);
+
+    let attributedSold = 0;
 
     if (prevSnap && prevSnap.orders) {
       const prevOrders = prevSnap.orders.map((o) => ({
@@ -237,16 +245,40 @@ async function pollItem(item) {
         const cancelled = events.filter((e) => e.eventType === 'cancelled');
         const restocked = events.filter((e) => e.eventType === 'restocked');
 
-        const qtySold      = sales.reduce((s, e) => s + Math.abs(e.qtyChange), 0);
+        attributedSold               = sales.reduce((s, e) => s + Math.abs(e.qtyChange), 0);
         const qtyListed    = newList.reduce((s, e) => s + e.qtyChange, 0) +
                              restocked.reduce((s, e) => s + e.qtyChange, 0);
         const qtyCancelled = cancelled.reduce((s, e) => s + Math.abs(e.qtyChange), 0);
 
         const parts = [];
-        if (qtySold)      parts.push(`${qtySold.toLocaleString()} sold`);
-        if (qtyListed)    parts.push(`${qtyListed.toLocaleString()} listed`);
-        if (qtyCancelled) parts.push(`${qtyCancelled.toLocaleString()} cancelled`);
-        if (parts.length) console.log(`[tracker] ${item.matName}: ${parts.join(', ')}`);
+        if (attributedSold) parts.push(`${attributedSold.toLocaleString()} sold`);
+        if (qtyListed)      parts.push(`${qtyListed.toLocaleString()} listed`);
+        if (qtyCancelled)   parts.push(`${qtyCancelled.toLocaleString()} cancelled`);
+        if (parts.length)   console.log(`[tracker] ${item.matName}: ${parts.join(', ')}`);
+      }
+    }
+
+    // ── Flash sale reconciliation ─────────────────────────────────────────────
+    // Compare intra-day API qtySold delta against diff-attributed sales.
+    // Skip if: dates differ (day rollover), either value is null, or window > 90s
+    // (missed poll would inflate the gap).
+    if (
+      prevSnap &&
+      prevSnap.api_qty_sold      !== null &&
+      apiQtySold                 !== null &&
+      prevSnap.api_qty_sold_date === apiQtySoldDate
+    ) {
+      const windowMs  = Date.now() - new Date(prevSnap.recorded_at).getTime();
+      if (windowMs <= 90_000) {
+        const deltaSold = apiQtySold - Number(prevSnap.api_qty_sold);
+        const flash     = Math.max(0, deltaSold - attributedSold);
+        if (flash > 0) {
+          await client.query(
+            `UPDATE tracker_snapshots SET flash_qty = $1 WHERE id = $2`,
+            [flash, snapId]
+          );
+          console.log(`[tracker] ${item.matName}: ${flash.toLocaleString()} flash (unattributed) sales`);
+        }
       }
     }
 
