@@ -9,8 +9,10 @@ import Spinner from '../components/Spinner';
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const ITEMS = [
-  { matId: 3,  matName: 'Concrete',   color: '#a78bfa' },
   { matId: 2,  matName: 'Iron',       color: '#60a5fa' },
+  { matId: 3,  matName: 'Concrete',   color: '#a78bfa' },
+  { matId: 8,  matName: 'Silica',     color: '#f59e0b' },
+  { matId: 34, matName: 'Limestone',  color: '#94a3b8' },
   { matId: 92, matName: 'Prefab Kit', color: '#34d399' },
 ];
 
@@ -170,9 +172,10 @@ const ACTIVITY_COLS = [
   { key: 'avg_sale_price', label: 'Avg price'  },
   { key: 'qty_placed',     label: 'Placed'     },
   { key: 'current_listed', label: 'Supply now' },
+  { key: 'share_delta',    label: 'Growth'     },
 ];
 
-function CompanyActivity({ data, hours, color }) {
+function CompanyActivity({ data, hours, color, onAwards }) {
   const [sort, setSort] = useState({ key: 'sales_pct', dir: 1 }); // desc by default
 
   if (!data || !data.rows.filter((r) => r.company_name !== 'Federal Reserve').length) {
@@ -185,17 +188,24 @@ function CompanyActivity({ data, hours, color }) {
 
   const rows = data.rows.filter((r) => r.company_name !== 'Federal Reserve');
 
-  const totalListed = rows.reduce((s, r) => s + Number(r.current_listed), 0);
-  const totalSold   = rows.reduce((s, r) => s + Number(r.qty_sold), 0);
+  const totalListed  = rows.reduce((s, r) => s + Number(r.current_listed), 0);
+  const totalSold    = rows.reduce((s, r) => s + Number(r.qty_sold), 0);
+  const prevTotalSold = rows.reduce((s, r) => s + Number(r.prev_qty_sold || 0), 0);
+  const hasPrevData  = prevTotalSold > 0;
 
   const sorted = [...rows]
-    .map((r) => ({
-      ...r,
-      net:            r.qty_placed - r.qty_sold - r.qty_cancelled,
-      avg_sale_price: r.qty_sold > 0 ? Math.round(r.revenue / r.qty_sold) : 0,
-      supply_pct:     totalListed > 0 ? +((r.current_listed / totalListed) * 100).toFixed(1) : 0,
-      sales_pct:      totalSold   > 0 ? +((r.qty_sold       / totalSold)   * 100).toFixed(1) : 0,
-    }))
+    .map((r) => {
+      const sales_pct    = totalSold   > 0 ? +((r.qty_sold       / totalSold)   * 100).toFixed(1) : 0;
+      const prev_pct     = hasPrevData     ? +((Number(r.prev_qty_sold || 0) / prevTotalSold) * 100).toFixed(1) : null;
+      return {
+        ...r,
+        net:            r.qty_placed - r.qty_sold - r.qty_cancelled,
+        avg_sale_price: r.qty_sold > 0 ? Math.round(r.revenue / r.qty_sold) : 0,
+        supply_pct:     totalListed > 0 ? +((r.current_listed / totalListed) * 100).toFixed(1) : 0,
+        sales_pct,
+        share_delta:    prev_pct !== null ? +(sales_pct - prev_pct).toFixed(1) : null,
+      };
+    })
     .sort((a, b) => {
       const av = a[sort.key] ?? 0;
       const bv = b[sort.key] ?? 0;
@@ -209,7 +219,17 @@ function CompanyActivity({ data, hours, color }) {
 
   return (
     <div>
-      <SectionLabel>Company activity — last {hours}h · click columns to sort</SectionLabel>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+          Company activity — last {hours}h · click columns to sort
+        </div>
+        {onAwards && (
+          <button onClick={onAwards} style={{
+            padding: '1px 8px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+            border: '1px solid #1e1e3a', background: 'transparent', color: '#6b6b8a',
+          }}>Awards</button>
+        )}
+      </div>
       <table style={{ fontSize: 12, width: '100%' }}>
         <thead>
           <tr>
@@ -245,6 +265,10 @@ function CompanyActivity({ data, hours, color }) {
               </td>
               <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                 {qty(row.current_listed)}
+              </td>
+              <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                color: row.share_delta === null ? '#3a3a55' : row.share_delta > 0 ? '#34d399' : row.share_delta < 0 ? '#f87171' : '#6b6b8a' }}>
+                {row.share_delta === null ? '—' : row.share_delta > 0 ? `+${row.share_delta}%` : `${row.share_delta}%`}
               </td>
             </tr>
           ))}
@@ -339,6 +363,10 @@ function ItemPanel({ item, hours, refreshTick }) {
   const [barDetail,       setBarDetail]       = useState(null); // { from, to, events, loading }
   const [patterns,        setPatterns]        = useState(null); // { byHour, byDow } | null=not loaded
   const [patternsOpen,    setPatternsOpen]    = useState(false);
+  const [awardsOpen,      setAwardsOpen]      = useState(false);
+  const [awardsHours,     setAwardsHours]     = useState(24);
+  const [awardsData,      setAwardsData]      = useState(null);
+  const [awardsLoading,   setAwardsLoading]   = useState(false);
   const activeBarIndex = useRef(null);
   const hasData = snapshots.length > 0;
 
@@ -392,7 +420,7 @@ function ItemPanel({ item, hours, refreshTick }) {
     { label: `Δ ${hours}h`,   value: supplyChange !== null ? `${supplyChange >= 0 ? '+' : ''}${qty(supplyChange)}` : '—', color: supplyChange < 0 ? '#f87171' : '#34d399' },
     { label: `Sold`,          value: qty(totalSold),   color: '#f87171' },
     { label: `Listed`,        value: qty(totalListed), color: '#34d399' },
-    { label: 'Sold/min avg',  value: qty(avgSold),     color: item.color },
+    { label: 'Sold/hr avg',   value: qty(avgSold * 60), color: item.color },
   ];
 
   async function openPatterns() {
@@ -404,6 +432,23 @@ function ItemPanel({ item, hours, refreshTick }) {
     } catch {
       setPatterns({ byHour: [], byDow: [] });
     }
+  }
+
+  async function loadAwards(h) {
+    setAwardsLoading(true);
+    try {
+      const data = await api.trackerAwards(item.matId, h);
+      setAwardsData(data);
+    } catch {
+      setAwardsData({ rows: [] });
+    } finally {
+      setAwardsLoading(false);
+    }
+  }
+
+  function openAwards() {
+    setAwardsOpen(true);
+    if (!awardsData) loadAwards(awardsHours);
   }
 
   async function handleBarClick(row) {
@@ -477,7 +522,11 @@ function ItemPanel({ item, hours, refreshTick }) {
                     <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
                     <XAxis dataKey="recorded_at" tickFormatter={fmtTime} tick={{ fontSize: 10, fill: '#6b6b8a' }}
                       interval={priceGroup === '1m' ? 59 : priceGroup === '15m' ? 3 : 0} />
-                    <YAxis tickFormatter={(v) => usd(v)} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={58} />
+                    <YAxis tickFormatter={(v) => usd(v)} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={58}
+                      domain={[
+                        (min) => Math.round(min * 0.95),
+                        (max) => Math.round(max * 1.05),
+                      ]} />
                     <Tooltip content={<PriceTooltip />} cursor={{ stroke: 'rgba(59, 59, 106, 0.8)', strokeWidth: 1, fill: 'rgba(59, 59, 106, 0.15)' }} />
                     <Line type="monotone" dataKey="current_price" stroke={item.color} dot={false} strokeWidth={2} />
                   </LineChart>
@@ -614,9 +663,52 @@ function ItemPanel({ item, hours, refreshTick }) {
         </Modal>
       )}
 
+      {/* Awards modal */}
+      {awardsOpen && (
+        <Modal title={`Top earners · ${item.matName}`} onClose={() => setAwardsOpen(false)}>
+          <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+            {[{h:24,l:'1d'},{h:72,l:'3d'},{h:168,l:'7d'},{h:336,l:'14d'},{h:720,l:'30d'}].map(({h, l}) => (
+              <button key={h} onClick={() => { setAwardsHours(h); loadAwards(h); }} style={{
+                padding: '2px 8px', fontSize: 10, borderRadius: 3, cursor: 'pointer', border: 'none',
+                background: awardsHours === h ? '#3b3b6a' : 'transparent',
+                color: awardsHours === h ? '#e0e0f0' : '#6b6b8a',
+              }}>{l}</button>
+            ))}
+          </div>
+          {awardsLoading ? (
+            <Spinner />
+          ) : !awardsData?.rows?.length ? (
+            <div style={{ color: '#3a3a55', fontSize: 12 }}>No sales data for this period yet.</div>
+          ) : (
+            <table style={{ fontSize: 12, width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', color: '#6b6b8a', paddingBottom: 8, paddingRight: 8 }}>#</th>
+                  <th style={{ textAlign: 'left', color: '#6b6b8a', paddingBottom: 8 }}>Company</th>
+                  <th style={{ textAlign: 'right', color: '#6b6b8a', paddingBottom: 8 }}>Revenue</th>
+                  <th style={{ textAlign: 'right', color: '#6b6b8a', paddingBottom: 8 }}>Qty sold</th>
+                  <th style={{ textAlign: 'right', color: '#6b6b8a', paddingBottom: 8 }}>Avg price</th>
+                </tr>
+              </thead>
+              <tbody>
+                {awardsData.rows.map((row, i) => (
+                  <tr key={row.company_id} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
+                    <td style={{ color: '#6b6b8a', paddingRight: 10, paddingTop: 4 }}>{i + 1}</td>
+                    <td style={{ color: '#c0c0d8', fontWeight: 500, paddingTop: 4 }}>{row.company_name}</td>
+                    <td style={{ textAlign: 'right', color: '#fbbf24', fontVariantNumeric: 'tabular-nums', paddingTop: 4 }}>{usdK(row.revenue)}</td>
+                    <td style={{ textAlign: 'right', color: '#f87171', fontVariantNumeric: 'tabular-nums', paddingTop: 4 }}>{qty(row.qty_sold)}</td>
+                    <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums', paddingTop: 4 }}>{usd(row.avg_price)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Modal>
+      )}
+
       {/* Company activity */}
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '12px 14px' }}>
-        <CompanyActivity data={companyActivity} hours={hours} color={item.color} />
+        <CompanyActivity data={companyActivity} hours={hours} color={item.color} onAwards={openAwards} />
       </div>
     </div>
   );

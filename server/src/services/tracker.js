@@ -9,7 +9,7 @@
  *   full_fill    — order disappeared AND no cheaper orders exist → inferred sale
  *   cancelled    — qty decreased or disappeared BUT cheaper orders still present
  *
- * Rate budget: 3 items × 5 units = 15 units/poll.
+ * Rate budget: 5 items × 5 units = 25 units/poll.
  * At 60s intervals that's 75 units per 5-min window, leaving 110 units for
  * other routes (allDetails=60, prices=5, etc.) — total well within 200.
  *
@@ -29,6 +29,8 @@ const API_KEY = process.env.GT_API_KEY;
 const TRACKED_ITEMS = [
   { matId: 2,  matName: 'Iron'       },
   { matId: 3,  matName: 'Concrete'   },
+  { matId: 8,  matName: 'Silica'     },
+  { matId: 34, matName: 'Limestone'  },
   { matId: 92, matName: 'Prefab Kit' },
 ];
 

@@ -178,6 +178,21 @@ router.get('/company-activity/:matId', async (req, res, next) => {
       [matId, hours]
     );
 
+    // Previous period (same width, shifted back) for share delta
+    const prevEvtRes = await pool.query(
+      `SELECT
+         company_id,
+         SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                  THEN ABS(qty_change) ELSE 0 END)::bigint AS qty_sold
+       FROM tracker_events
+       WHERE mat_id = $1
+         AND recorded_at > NOW() - ($3 || ' hours')::interval
+         AND recorded_at <= NOW() - ($2 || ' hours')::interval
+       GROUP BY company_id`,
+      [matId, hours, hours * 2]
+    );
+    const prevQtySoldMap = new Map(prevEvtRes.rows.map((r) => [r.company_id, Number(r.qty_sold)]));
+
     // Current listings from latest snapshot
     const listRes = await pool.query(
       `SELECT o.company_id, o.company_name, SUM(o.qty)::bigint AS current_listed
@@ -205,6 +220,7 @@ router.get('/company-activity/:matId', async (req, res, next) => {
         revenue:        Number(row.revenue),
         qty_cancelled:  Number(row.qty_cancelled),
         current_listed: listMap.get(row.company_id) ?? 0,
+        prev_qty_sold:  prevQtySoldMap.get(row.company_id) ?? 0,
       });
     }
 
@@ -218,6 +234,7 @@ router.get('/company-activity/:matId', async (req, res, next) => {
           revenue:        0,
           qty_cancelled:  0,
           current_listed: Number(row.current_listed),
+          prev_qty_sold:  prevQtySoldMap.get(row.company_id) ?? 0,
         });
       }
     }
@@ -296,7 +313,7 @@ router.get('/events/:matId', async (req, res, next) => {
          AND company_name != 'Federal Reserve'
          AND recorded_at >= $2
          AND recorded_at < $3
-       ORDER BY recorded_at ASC, unit_price ASC`,
+       ORDER BY recorded_at DESC, unit_price ASC`,
       [matId, from, to]
     );
     res.json(r.rows);
@@ -320,6 +337,35 @@ router.get('/recent/:matId', async (req, res, next) => {
       [matId, limit]
     );
     res.json(r.rows);
+  } catch (err) { next(err); }
+});
+
+// GET /api/tracker/awards/:matId?hours=24
+// Top 5 companies by revenue for the given period
+router.get('/awards/:matId', async (req, res, next) => {
+  try {
+    const { matId } = req.params;
+    const hours = Math.min(Number(req.query.hours) || 24, 720);
+
+    const r = await pool.query(
+      `SELECT
+         company_id,
+         company_name,
+         SUM(ABS(qty_change))::bigint              AS qty_sold,
+         SUM(ABS(qty_change) * unit_price)::bigint AS revenue,
+         ROUND(AVG(unit_price))::int               AS avg_price
+       FROM tracker_events
+       WHERE mat_id = $1
+         AND event_type IN ('partial_fill', 'full_fill')
+         AND company_name != 'Federal Reserve'
+         AND recorded_at > NOW() - ($2 || ' hours')::interval
+       GROUP BY company_id, company_name
+       ORDER BY revenue DESC
+       LIMIT 5`,
+      [matId, hours]
+    );
+
+    res.json({ hours, rows: r.rows });
   } catch (err) { next(err); }
 });
 
