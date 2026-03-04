@@ -53,7 +53,7 @@ router.get('/orders/:matId', async (req, res, next) => {
       `SELECT order_id, company_id, company_name, unit_price, qty
        FROM tracker_orders
        WHERE snapshot_id = $1
-       ORDER BY unit_price ASC, qty DESC`,
+       ORDER BY unit_price ASC, order_id ASC`,
       [curr.id]
     );
 
