@@ -92,6 +92,8 @@ const schema = `
   CREATE INDEX IF NOT EXISTS idx_tevt_company_id  ON tracker_events(company_id);
   CREATE INDEX IF NOT EXISTS idx_tevt_recorded_at ON tracker_events(recorded_at);
   CREATE INDEX IF NOT EXISTS idx_tevt_event_type  ON tracker_events(event_type);
+
+  ALTER TABLE tracker_snapshots ADD COLUMN IF NOT EXISTS quick_sell_price INTEGER;
 `;
 
 async function init() {

@@ -30,7 +30,8 @@ export const api = {
   trackerCompanyActivity: (matId, hours = 24) => get(`/tracker/company-activity/${matId}?hours=${hours}`),
   trackerRecent: (matId, limit = 10) => get(`/tracker/recent/${matId}?limit=${limit}`),
   trackerEvents:   (matId, from, to) => get(`/tracker/events/${matId}?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
-  trackerPatterns: (matId) => get(`/tracker/patterns/${matId}`),
-  trackerAwards:    (matId, hours = 24) => get(`/tracker/awards/${matId}?hours=${hours}`),
-  trackerPressure:  (matId) => get(`/tracker/pressure/${matId}`),
+  trackerPatterns:      (matId) => get(`/tracker/patterns/${matId}`),
+  trackerAwards:        (matId, hours = 24) => get(`/tracker/awards/${matId}?hours=${hours}`),
+  trackerPressure:      (matId) => get(`/tracker/pressure/${matId}`),
+  trackerLatestBigOrder: (matId) => get(`/tracker/latest-big-order/${matId}`),
 };

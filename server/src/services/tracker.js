@@ -25,6 +25,19 @@ import { spendRateLimit, canAffordRateLimit } from './gtApi.js';
 const BASE    = process.env.GT_API_BASE;
 const API_KEY = process.env.GT_API_KEY;
 
+// ── Game price increment lookup ────────────────────────────────────────────────
+// Prices stored in cents (unitPrice × 100). Increments match GT exchange tiers.
+function gameIncrement(priceCents) {
+  if (priceCents <    5_000) return       50; // < $50   → $0.50
+  if (priceCents <   10_000) return      100; // < $100  → $1
+  if (priceCents <   50_000) return      500; // < $500  → $5
+  if (priceCents <  100_000) return    1_000; // < $1000 → $10
+  if (priceCents <  500_000) return    5_000; // < $5000 → $50
+  if (priceCents < 1_000_000) return  10_000; // < $10k  → $100
+  if (priceCents < 5_000_000) return  50_000; // < $50k  → $500
+  return 100_000;                             // ≥ $50k  → $1000
+}
+
 // ── Items to track ─────────────────────────────────────────────────────────────
 
 const TRACKED_ITEMS = [
@@ -279,6 +292,39 @@ async function pollItem(item) {
           );
           console.log(`[tracker] ${item.matName}: ${flash.toLocaleString()} flash (unattributed) sales`);
         }
+      }
+    }
+
+    // ── Quick sell price ──────────────────────────────────────────────────────
+    // Find first price tier that would take >1hr to clear at 6h avg sales rate.
+    // quick_sell_price = that tier's price - 1 (1 increment below the wall).
+    const qspSalesRes = await client.query(
+      `SELECT COALESCE(SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+               THEN ABS(qty_change) ELSE 0 END), 0)::bigint AS sold
+       FROM tracker_events
+       WHERE mat_id = $1 AND recorded_at > NOW() - INTERVAL '6 hours'`,
+      [item.matId]
+    );
+    const hourly_rate = Number(qspSalesRes.rows[0].sold) / 6;
+
+    if (hourly_rate > 0) {
+      const priceMap = new Map();
+      for (const o of data.orders ?? []) {
+        priceMap.set(Number(o.unitPrice), (priceMap.get(Number(o.unitPrice)) ?? 0) + Number(o.qty));
+      }
+      const tiers = [...priceMap.entries()].sort(([a], [b]) => a - b);
+      let quick_sell_price = null;
+      for (const [price, tierQty] of tiers) {
+        if (tierQty / hourly_rate > 1) {
+          quick_sell_price = price - gameIncrement(price);
+          break;
+        }
+      }
+      if (quick_sell_price !== null) {
+        await client.query(
+          `UPDATE tracker_snapshots SET quick_sell_price = $1 WHERE id = $2`,
+          [quick_sell_price, snapId]
+        );
       }
     }
 

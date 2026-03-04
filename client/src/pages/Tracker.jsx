@@ -20,6 +20,17 @@ const ITEMS = [
 
 const PAX_THRESHOLDS = [0.1, 0.5, 1, 2, 5];
 
+function gameIncrement(priceCents) {
+  if (priceCents <    5_000) return       50; // < $50   → $0.50
+  if (priceCents <   10_000) return      100; // < $100  → $1
+  if (priceCents <   50_000) return      500; // < $500  → $5
+  if (priceCents <  100_000) return    1_000; // < $1000 → $10
+  if (priceCents <  500_000) return    5_000; // < $5000 → $50
+  if (priceCents < 1_000_000) return  10_000; // < $10k  → $100
+  if (priceCents < 5_000_000) return  50_000; // < $50k  → $500
+  return 100_000;                             // ≥ $50k  → $1000
+}
+
 const HOURS_OPTIONS = [
   { hours: 1,   label: '1h'  },
   { hours: 4,   label: '4h'  },
@@ -151,6 +162,7 @@ function RecentActivity({ events, matName, myCompany }) {
               <span style={{ color }}>{text}</span>
               <span style={{ color: '#e0e0f0', fontVariantNumeric: 'tabular-nums' }}>{qty(Number(e.qty))}</span>
               <span style={{ color: '#6b6b8a' }}>{matName}</span>
+              <span style={{ color: '#6b6b8a', fontVariantNumeric: 'tabular-nums' }}>@ {usd(e.unit_price)}</span>
               <span style={{ color: '#3a3a55', fontSize: 11, marginLeft: 'auto', whiteSpace: 'nowrap' }}>{timeAgo(e.recorded_at)}</span>
             </div>
           );
@@ -351,83 +363,6 @@ function SettingsModal({ myCompany, onSave, onClose }) {
   );
 }
 
-// ── Pressure indicator ─────────────────────────────────────────────────────────
-
-const PRESSURE_SIGNAL = {
-  bearish: { label: 'BEARISH', color: '#f87171', arrow: '↓' },
-  bullish: { label: 'BULLISH', color: '#34d399', arrow: '↑' },
-  neutral: { label: 'NEUTRAL', color: '#6b6b8a', arrow: '→' },
-};
-
-function supplyStatus(ratio) {
-  if (ratio === null) return null;
-  if (ratio < 0.3)  return { text: 'FLOODED',      color: '#f87171' };
-  if (ratio < 0.6)  return { text: 'OVERSUPPLIED', color: '#fb923c' };
-  if (ratio < 1.0)  return { text: 'SOFT',         color: '#fbbf24' };
-  if (ratio < 1.5)  return { text: 'BALANCED',     color: '#6b6b8a' };
-  return                   { text: 'TIGHT',         color: '#34d399' };
-}
-
-function changeSpeed(pct) {
-  if (pct === null)  return null;
-  if (pct < -30)  return { text: '↘↘', color: '#f87171', title: 'flooding fast'  };
-  if (pct < -10)  return { text: '↘',  color: '#fb923c', title: 'softening'      };
-  if (pct <=  10) return { text: '→',  color: '#6b6b8a', title: 'stable'         };
-  if (pct <   30) return { text: '↗',  color: '#34d399', title: 'tightening'     };
-  return                  { text: '↗↗', color: '#34d399', title: 'draining fast' };
-}
-
-function PressureIndicator({ data }) {
-  if (!data) return null;
-  const { signal, first_wall, wall_count, at_wall, immediate_cluster, ds_ratio_1h, ds_trend_pct } = data;
-  const s       = PRESSURE_SIGNAL[signal] ?? PRESSURE_SIGNAL.neutral;
-  const status  = supplyStatus(ds_ratio_1h);
-  const change  = changeSpeed(ds_trend_pct);
-  const cluster = immediate_cluster ?? { wall_count: 0, hours: 0, gap_after_pct: null };
-
-  // Wall node: show the immediate cluster picture, not total distant walls
-  let wallNode = null;
-  const wallTip = data.walls.map((w) => `${usd(w.unit_price)}: ${w.hours}h (+${w.distance_pct}%)`).join(' · ');
-  if (wall_count === 0 || cluster.wall_count === 0) {
-    wallNode = <span style={{ color: '#34d399' }} title={wallTip || 'No walls in range'}>No walls</span>;
-  } else if (cluster.wall_count === 1) {
-    // Single wall — show its hours and price, plus escape room if any
-    const escapeLabel = cluster.gap_after_pct !== null
-      ? ` · +${cluster.gap_after_pct}% clear` : '';
-    wallNode = (
-      <span style={{ color: at_wall ? '#fbbf24' : '#6b6b8a' }} title={wallTip}>
-        {at_wall ? '⚓ ' : ''}{first_wall.hours}h @ {usd(first_wall.unit_price)}{escapeLabel}
-      </span>
-    );
-  } else {
-    // Cluster of walls — show count + total hours + escape room gap
-    const escapeLabel = cluster.gap_after_pct !== null
-      ? ` · +${cluster.gap_after_pct}% clear` : '';
-    wallNode = (
-      <span style={{ color: at_wall ? '#fbbf24' : '#f87171' }} title={wallTip}>
-        {at_wall ? '⚓ ' : ''}{cluster.wall_count} walls {cluster.hours}h{escapeLabel}
-      </span>
-    );
-  }
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, paddingTop: 8, borderTop: '1px solid #1e1e3a', marginTop: 6, flexWrap: 'wrap' }}>
-      <span style={{ color: s.color, fontWeight: 700, letterSpacing: 0.5 }}>{s.arrow} {s.label}</span>
-      <span style={{ color: '#3a3a55' }}>·</span>
-      {wallNode}
-      {status && (
-        <>
-          <span style={{ color: '#3a3a55' }}>·</span>
-          <span style={{ color: status.color, fontWeight: 600 }}>{status.text}</span>
-        </>
-      )}
-      {change && (
-        <span style={{ color: change.color, fontWeight: 700, fontSize: 13 }} title={change.title}>{change.text}</span>
-      )}
-    </div>
-  );
-}
-
 // ── Item panel ─────────────────────────────────────────────────────────────────
 
 function groupSnapshots(data, groupBy) {
@@ -473,7 +408,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
   const [companyActivity, setCompanyActivity] = useState(null);
   const [recentEvents,    setRecentEvents]    = useState([]);
   const [orders,          setOrders]          = useState([]);
-  const [pressure,        setPressure]        = useState(null);
+  const [latestBigOrder,  setLatestBigOrder]  = useState(null);
   const [orderbookView,   setOrderbookView]   = useState('density');
   const [loading,         setLoading]         = useState(true);
   const [refreshing,      setRefreshing]      = useState(false);
@@ -494,18 +429,20 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
   const load = useCallback(async () => {
     if (hasData) setRefreshing(true); else setLoading(true);
     try {
-      const [snaps, act, compAct, recent, orderData] = await Promise.all([
+      const [snaps, act, compAct, recent, orderData, bigOrder] = await Promise.all([
         api.trackerSnapshots(item.matId, Math.ceil(hours * 61)),
         api.trackerActivity(item.matId, hours),
         api.trackerCompanyActivity(item.matId, hours),
         api.trackerRecent(item.matId, 10),
         api.trackerOrders(item.matId),
+        api.trackerLatestBigOrder(item.matId),
       ]);
       setSnapshots(snaps);
       setActivity(act);
       setCompanyActivity(compAct);
       setRecentEvents(recent);
       setOrders(orderData?.orders ?? []);
+      setLatestBigOrder(bigOrder);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -547,28 +484,36 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
     setPaxThreshold(next);
   };
 
-  // Rate of change of supply velocity over the last hour.
-  // Split the last hour into two 30-min halves, compute supply velocity (units/hr) for each,
-  // then RoC = second half velocity minus first half velocity.
-  // Negative = drain accelerating (bullish for price), positive = supply building faster (bearish).
-  const now        = Date.now();
-  const t60        = now - 60 * 60 * 1000;
-  const t30        = now - 30 * 60 * 1000;
-  const firstHalf  = snapshots.filter((s) => { const t = new Date(s.recorded_at).getTime(); return t >= t60 && t <= t30; });
-  const secondHalf = snapshots.filter((s) => new Date(s.recorded_at).getTime() > t30);
-  function supplyVelocity(snaps) {
-    if (snaps.length < 2) return null;
-    const change  = Number(snaps[snaps.length - 1].total_qty_available) - Number(snaps[0].total_qty_available);
-    const minutes = (new Date(snaps[snaps.length - 1].recorded_at) - new Date(snaps[0].recorded_at)) / 60_000;
-    return minutes > 0 ? change / minutes * 60 : null;
+  // Quick Sell Price — computed live from current order book vs sold/hr avg
+  const qspHourlyRate = avgSold * 60;
+  let quickSellPrice = null;
+  if (qspHourlyRate > 0 && orders.length > 0) {
+    const priceMap = new Map();
+    for (const o of orders) {
+      priceMap.set(Number(o.unit_price), (priceMap.get(Number(o.unit_price)) ?? 0) + Number(o.qty));
+    }
+    const tiers = [...priceMap.entries()].sort(([a], [b]) => a - b);
+    for (const [price, tierQty] of tiers) {
+      if (tierQty / qspHourlyRate > 1) {
+        quickSellPrice = price - gameIncrement(price);
+        break;
+      }
+    }
   }
-  const v1 = supplyVelocity(firstHalf);
-  const v2 = supplyVelocity(secondHalf);
-  // Normalize to [-1, 1] by velocity magnitude so signal is scale-independent across items
-  const rocNorm = v1 !== null && v2 !== null
-    ? Math.max(-1, Math.min(1, (v2 - v1) / Math.max(Math.abs(v1), Math.abs(v2), 1)))
-    : null;
-  const rocSignal = rocNorm === null ? null : rocNorm < -0.15 ? 'up' : rocNorm > 0.15 ? 'down' : 'neutral';
+
+  // Directional arrow: use server-saved quick_sell_price history from snapshots
+  const qspHistory = snapshots
+    .slice()
+    .reverse()
+    .map((s) => s.quick_sell_price)
+    .filter((v) => v != null)
+    .slice(0, 3);
+  let qspArrow = null;
+  if (qspHistory.length >= 3) {
+    if (qspHistory[0] > qspHistory[1] && qspHistory[1] > qspHistory[2])      qspArrow = { text: '↑', color: '#34d399' };
+    else if (qspHistory[0] < qspHistory[1] && qspHistory[1] < qspHistory[2]) qspArrow = { text: '↓', color: '#f87171' };
+    else                                                                       qspArrow = { text: '→', color: '#6b6b8a' };
+  }
 
   const statsRows = [
     {
@@ -591,9 +536,18 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
     { label: 'Listed',      value: qty(totalListed),  color: '#34d399' },
     { label: 'Sold/hr avg', value: qty(avgSold * 60), color: item.color },
     {
-      label: 'Rate of change',
-      value: rocSignal === 'up' ? '↑ CONTRACTING' : rocSignal === 'down' ? '↓ EXPANDING' : '—',
-      color: rocSignal === 'up' ? '#34d399' : rocSignal === 'down' ? '#f87171' : '#6b6b8a',
+      label: 'Quick Sell Price',
+      value: quickSellPrice !== null ? usd(quickSellPrice) : '—',
+      color: '#e0e0f0',
+      delta: qspArrow ? qspArrow.text : null,
+      deltaColor: qspArrow?.color,
+    },
+    {
+      label: 'Latest Wall',
+      value: latestBigOrder
+        ? `${latestBigOrder.company_name} ${qty(Number(latestBigOrder.qty))} @ ${usd(latestBigOrder.unit_price)}`
+        : '—',
+      color: latestBigOrder ? '#a78bfa' : '#3a3a55',
     },
   ];
 

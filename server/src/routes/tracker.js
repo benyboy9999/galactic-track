@@ -17,7 +17,7 @@ router.get('/snapshots/:matId', async (req, res, next) => {
     const limit = Math.min(Number(req.query.limit) || 120, 12000);
 
     const r = await pool.query(
-      `SELECT id, recorded_at, current_price, avg_price, total_qty_available
+      `SELECT id, recorded_at, current_price, avg_price, total_qty_available, quick_sell_price
        FROM tracker_snapshots
        WHERE mat_id = $1
        ORDER BY recorded_at DESC
@@ -497,6 +497,38 @@ router.get('/pressure/:matId', async (req, res, next) => {
       ds_trend_pct,
       signal,
     });
+  } catch (err) { next(err); }
+});
+
+// GET /api/tracker/latest-big-order/:matId
+// Most recent new_listing or restocked event with qty > 1hr avg sales (6h baseline).
+router.get('/latest-big-order/:matId', async (req, res, next) => {
+  try {
+    const { matId } = req.params;
+
+    const salesRes = await pool.query(
+      `SELECT COALESCE(SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+               THEN ABS(qty_change) ELSE 0 END), 0)::bigint AS sold
+       FROM tracker_events
+       WHERE mat_id = $1 AND recorded_at > NOW() - INTERVAL '6 hours'`,
+      [matId]
+    );
+    const hourly_rate = Number(salesRes.rows[0].sold) / 6;
+    if (hourly_rate <= 0) return res.json(null);
+
+    const r = await pool.query(
+      `SELECT company_name, ABS(qty_change) AS qty, unit_price, recorded_at
+       FROM tracker_events
+       WHERE mat_id = $1
+         AND event_type IN ('new_listing', 'restocked')
+         AND company_name != 'Federal Reserve'
+         AND ABS(qty_change) > $2
+       ORDER BY recorded_at DESC
+       LIMIT 1`,
+      [matId, Math.floor(hourly_rate)]
+    );
+
+    res.json(r.rows[0] ?? null);
   } catch (err) { next(err); }
 });
 
