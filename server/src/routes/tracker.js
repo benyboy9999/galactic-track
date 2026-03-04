@@ -14,7 +14,7 @@ router.get('/status', (req, res) => {
 router.get('/snapshots/:matId', async (req, res, next) => {
   try {
     const { matId } = req.params;
-    const limit = Math.min(Number(req.query.limit) || 120, 1440);
+    const limit = Math.min(Number(req.query.limit) || 120, 12000);
 
     const r = await pool.query(
       `SELECT id, recorded_at, current_price, avg_price, total_qty_available

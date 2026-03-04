@@ -357,6 +357,7 @@ function ItemPanel({ item, hours, refreshTick }) {
   const [activity,        setActivity]        = useState([]);
   const [companyActivity, setCompanyActivity] = useState(null);
   const [recentEvents,    setRecentEvents]    = useState([]);
+  const [orders,          setOrders]          = useState([]);
   const [loading,         setLoading]         = useState(true);
   const [refreshing,      setRefreshing]      = useState(false);
   const [error,           setError]           = useState(null);
@@ -376,16 +377,18 @@ function ItemPanel({ item, hours, refreshTick }) {
   const load = useCallback(async () => {
     if (hasData) setRefreshing(true); else setLoading(true);
     try {
-      const [snaps, act, compAct, recent] = await Promise.all([
-        api.trackerSnapshots(item.matId, 300),
+      const [snaps, act, compAct, recent, orderData] = await Promise.all([
+        api.trackerSnapshots(item.matId, Math.ceil(hours * 61)),
         api.trackerActivity(item.matId, hours),
         api.trackerCompanyActivity(item.matId, hours),
         api.trackerRecent(item.matId, 10),
+        api.trackerOrders(item.matId),
       ]);
       setSnapshots(snaps);
       setActivity(act);
       setCompanyActivity(compAct);
       setRecentEvents(recent);
+      setOrders((orderData?.orders ?? []).slice(0, 5));
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -428,15 +431,25 @@ function ItemPanel({ item, hours, refreshTick }) {
   };
 
   const statsRows = [
-    { label: 'Price',                                   value: latest ? usd(latest.current_price) : '—', color: undefined },
-    { label: `Δ ${hours}h`,                             value: priceChange !== null ? `${priceChange > 0 ? '+' : ''}${priceChange}%` : '—', color: priceChange > 0 ? '#f87171' : priceChange < 0 ? '#34d399' : undefined },
-    { label: 'Supply',                                  value: latest ? qty(latest.total_qty_available) : '—', color: undefined },
-    { label: `Δ ${hours}h`,                             value: supplyChange !== null ? `${supplyChange >= 0 ? '+' : ''}${qty(supplyChange)}` : '—', color: supplyChange < 0 ? '#f87171' : '#34d399' },
-    { label: `Participants ≥${paxThreshold}%`, onClick: cyclePaxThreshold, value: currPax !== null ? String(currPax) : '—', color: undefined },
-    { label: `Δ ${hours}h`,                             value: paxDelta !== null ? `${paxDelta >= 0 ? '+' : ''}${paxDelta}` : '—', color: paxDelta > 0 ? '#34d399' : paxDelta < 0 ? '#f87171' : undefined },
-    { label: `Sold`,                                    value: qty(totalSold),   color: '#f87171' },
-    { label: `Listed`,                                  value: qty(totalListed), color: '#34d399' },
-    { label: 'Sold/hr avg',                             value: qty(avgSold * 60), color: item.color },
+    {
+      label: 'Price', value: latest ? usd(latest.current_price) : '—',
+      delta: priceChange !== null ? `${priceChange > 0 ? '+' : ''}${priceChange}%` : null,
+      deltaColor: priceChange > 0 ? '#f87171' : priceChange < 0 ? '#34d399' : undefined,
+    },
+    {
+      label: 'Supply', value: latest ? qty(latest.total_qty_available) : '—',
+      delta: supplyChange !== null ? `${supplyChange >= 0 ? '+' : ''}${qty(supplyChange)}` : null,
+      deltaColor: supplyChange < 0 ? '#f87171' : '#34d399',
+    },
+    {
+      label: `Participants ≥${paxThreshold}%`, onClick: cyclePaxThreshold,
+      value: currPax !== null ? String(currPax) : '—',
+      delta: paxDelta !== null ? `${paxDelta >= 0 ? '+' : ''}${paxDelta}` : null,
+      deltaColor: paxDelta > 0 ? '#34d399' : paxDelta < 0 ? '#f87171' : undefined,
+    },
+    { label: 'Sold',        value: qty(totalSold),    color: '#f87171' },
+    { label: 'Listed',      value: qty(totalListed),  color: '#34d399' },
+    { label: 'Sold/hr avg', value: qty(avgSold * 60), color: item.color },
   ];
 
   async function openPatterns() {
@@ -502,19 +515,47 @@ function ItemPanel({ item, hours, refreshTick }) {
             <SectionLabel>Stats</SectionLabel>
             <table style={{ width: '100%', fontSize: 12 }}>
               <tbody>
-                {statsRows.map(({ label, value, color, onClick }, i) => (
+                {statsRows.map(({ label, value, color, delta, deltaColor, onClick }, i) => (
                   <tr key={i}>
                     <td
-                      style={{ color: '#6b6b8a', paddingBottom: 4, whiteSpace: 'nowrap', cursor: onClick ? 'pointer' : 'default' }}
+                      style={{ color: '#6b6b8a', paddingBottom: 3, whiteSpace: 'nowrap', cursor: onClick ? 'pointer' : 'default' }}
                       onClick={onClick}
                       title={onClick ? 'Click to cycle threshold' : undefined}
                     >{label}</td>
-                    <td style={{ color: color ?? '#e0e0f0', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{value}</td>
+                    <td style={{ textAlign: 'right', paddingBottom: 3 }}>
+                      <span style={{ color: color ?? '#e0e0f0', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{value}</span>
+                      {delta != null && (
+                        <span style={{ color: deltaColor ?? '#6b6b8a', fontSize: 10, marginLeft: 6, fontVariantNumeric: 'tabular-nums' }}>{delta}</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {orders.length > 0 && (
+            <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 12px' }}>
+              <SectionLabel>Orderbook</SectionLabel>
+              <table style={{ width: '100%', fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: 'left',  color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Company</th>
+                    <th style={{ textAlign: 'right', color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Amount</th>
+                    <th style={{ textAlign: 'right', color: '#3a3a55', fontWeight: 400, paddingBottom: 4 }}>Price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orders.map((o, i) => (
+                    <tr key={o.order_id ?? i}>
+                      <td style={{ color: '#c0c0d8', paddingBottom: 3, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.company_name}>{o.company_name}</td>
+                      <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums', paddingBottom: 3 }}>{qty(o.qty)}</td>
+                      <td style={{ textAlign: 'right', color: '#e0e0f0', fontVariantNumeric: 'tabular-nums', fontWeight: 600, paddingBottom: 3 }}>{usd(o.unit_price)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 12px', flex: 1 }}>
             <RecentActivity events={recentEvents} matName={item.matName} />
           </div>
