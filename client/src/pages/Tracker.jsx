@@ -257,7 +257,57 @@ function CompanyActivity({ data, hours, color }) {
   );
 }
 
+// ── Modal ──────────────────────────────────────────────────────────────────────
+
+function Modal({ title, onClose, children }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 10,
+          padding: '16px 20px', minWidth: 420, maxWidth: 640, maxHeight: '80vh',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>{title}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#6b6b8a', cursor: 'pointer', fontSize: 14, padding: 0 }}>✕</button>
+        </div>
+        <div style={{ overflowY: 'auto' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
 // ── Item panel ─────────────────────────────────────────────────────────────────
+
+function groupSnapshots(data, groupBy) {
+  if (groupBy === '1m') return data;
+  const buckets = new Map();
+  for (const row of data) {
+    const d = new Date(row.recorded_at);
+    if (groupBy === '15m') d.setMinutes(Math.floor(d.getMinutes() / 15) * 15, 0, 0);
+    else                   d.setMinutes(0, 0, 0);
+    const key = d.toISOString();
+    if (!buckets.has(key)) buckets.set(key, { recorded_at: key, prices: [], total_qty_available: 0 });
+    const b = buckets.get(key);
+    b.prices.push(Number(row.current_price));
+    b.total_qty_available = row.total_qty_available; // keep last
+  }
+  return [...buckets.values()].map((b) => ({
+    recorded_at:        b.recorded_at,
+    current_price:      Math.round(b.prices.reduce((s, v) => s + v, 0) / b.prices.length),
+    total_qty_available: b.total_qty_available,
+  }));
+}
 
 function groupActivity(data, groupBy) {
   if (groupBy === '1m') return data;
@@ -284,7 +334,12 @@ function ItemPanel({ item, hours, refreshTick }) {
   const [loading,         setLoading]         = useState(true);
   const [refreshing,      setRefreshing]      = useState(false);
   const [error,           setError]           = useState(null);
-  const [activityGroup,   setActivityGroup]   = useState('1m');
+  const [priceGroup,      setPriceGroup]      = useState('15m');
+  const [activityGroup,   setActivityGroup]   = useState('15m');
+  const [barDetail,       setBarDetail]       = useState(null); // { from, to, events, loading }
+  const [patterns,        setPatterns]        = useState(null); // { byHour, byDow } | null=not loaded
+  const [patternsOpen,    setPatternsOpen]    = useState(false);
+  const activeBarIndex = useRef(null);
   const hasData = snapshots.length > 0;
 
   const load = useCallback(async () => {
@@ -340,6 +395,38 @@ function ItemPanel({ item, hours, refreshTick }) {
     { label: 'Sold/min avg',  value: qty(avgSold),     color: item.color },
   ];
 
+  async function openPatterns() {
+    setPatternsOpen(true);
+    if (patterns !== null) return; // already loaded
+    try {
+      const data = await api.trackerPatterns(item.matId);
+      setPatterns(data);
+    } catch {
+      setPatterns({ byHour: [], byDow: [] });
+    }
+  }
+
+  async function handleBarClick(row) {
+    if (!row?.recorded_at) return;
+    const from = new Date(row.recorded_at);
+    const to   = new Date(from);
+    if      (activityGroup === '1m')   to.setSeconds(to.getSeconds() + 60);
+    else if (activityGroup === '15m')  to.setMinutes(to.getMinutes() + 15);
+    else if (activityGroup === 'hour') to.setHours(to.getHours() + 1);
+    else                               to.setDate(to.getDate() + 1);
+
+    // Toggle off if same bar clicked again
+    if (barDetail?.from === from.toISOString()) { setBarDetail(null); return; }
+
+    setBarDetail({ from: from.toISOString(), to: to.toISOString(), events: null, loading: true });
+    try {
+      const events = await api.trackerEvents(item.matId, from.toISOString(), to.toISOString());
+      setBarDetail((d) => d ? { ...d, events, loading: false } : null);
+    } catch {
+      setBarDetail((d) => d ? { ...d, events: [], loading: false } : null);
+    }
+  }
+
   return (
     <div>
       {/* Refresh indicator */}
@@ -371,15 +458,27 @@ function ItemPanel({ item, hours, refreshTick }) {
         {/* Column 2: charts stacked, each filling half the column height */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 10px 4px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <SectionLabel>Price · last snapshot {fmtTime(latest?.recorded_at)}</SectionLabel>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <SectionLabel>Price · last snapshot {fmtTime(latest?.recorded_at)}</SectionLabel>
+              <div style={{ display: 'flex', gap: 2 }}>
+                {[['1m','1m'],['15m','15m'],['1h','hour']].map(([label, val]) => (
+                  <button key={val} onClick={() => setPriceGroup(val)} style={{
+                    padding: '1px 6px', fontSize: 10, borderRadius: 3, cursor: 'pointer', border: 'none',
+                    background: priceGroup === val ? '#3b3b6a' : 'transparent',
+                    color: priceGroup === val ? '#e0e0f0' : '#6b6b8a',
+                  }}>{label}</button>
+                ))}
+              </div>
+            </div>
             {chartSnaps.length > 1 ? (
               <div style={{ flex: 1, minHeight: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartSnaps}>
+                  <LineChart data={groupSnapshots(chartSnaps, priceGroup)}>
                     <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
-                    <XAxis dataKey="recorded_at" tickFormatter={fmtTime} tick={{ fontSize: 10, fill: '#6b6b8a' }} />
+                    <XAxis dataKey="recorded_at" tickFormatter={fmtTime} tick={{ fontSize: 10, fill: '#6b6b8a' }}
+                      interval={priceGroup === '1m' ? 59 : priceGroup === '15m' ? 3 : 0} />
                     <YAxis tickFormatter={(v) => usd(v)} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={58} />
-                    <Tooltip content={<PriceTooltip />} />
+                    <Tooltip content={<PriceTooltip />} cursor={{ stroke: 'rgba(59, 59, 106, 0.8)', strokeWidth: 1, fill: 'rgba(59, 59, 106, 0.15)' }} />
                     <Line type="monotone" dataKey="current_price" stroke={item.color} dot={false} strokeWidth={2} />
                   </LineChart>
                 </ResponsiveContainer>
@@ -393,7 +492,7 @@ function ItemPanel({ item, hours, refreshTick }) {
               <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
                 Sold vs listed · per {activityGroup}
               </div>
-              <div style={{ display: 'flex', gap: 2 }}>
+              <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
                 {['1m', '15m', 'hour', 'day'].map((g) => (
                   <button key={g} onClick={() => setActivityGroup(g)} style={{
                     padding: '1px 6px', fontSize: 10, borderRadius: 3, cursor: 'pointer', border: 'none',
@@ -401,6 +500,11 @@ function ItemPanel({ item, hours, refreshTick }) {
                     color: activityGroup === g ? '#e0e0f0' : '#6b6b8a',
                   }}>{g}</button>
                 ))}
+                <div style={{ width: 1, height: 10, background: '#1e1e3a', margin: '0 4px' }} />
+                <button onClick={openPatterns} style={{
+                  padding: '1px 6px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+                  border: '1px solid #1e1e3a', background: 'transparent', color: '#6b6b8a',
+                }}>Patterns</button>
               </div>
             </div>
             {(() => {
@@ -411,11 +515,18 @@ function ItemPanel({ item, hours, refreshTick }) {
               return grouped.some((a) => Number(a.qty_sold_since_prev) > 0 || Number(a.qty_listed_since_prev) > 0) ? (
                 <div style={{ flex: 1, minHeight: 0 }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={grouped}>
+                    <BarChart
+                      data={grouped}
+                      style={{ cursor: 'pointer' }}
+                      onMouseMove={(s) => { activeBarIndex.current = s?.activeTooltipIndex ?? null; }}
+                      onMouseLeave={() => { activeBarIndex.current = null; }}
+                      onClick={() => { if (activeBarIndex.current != null) handleBarClick(grouped[activeBarIndex.current]); }}
+                    >
                       <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
-                      <XAxis dataKey="recorded_at" tickFormatter={tickFmt} tick={{ fontSize: 10, fill: '#6b6b8a' }} />
+                      <XAxis dataKey="recorded_at" tickFormatter={tickFmt} tick={{ fontSize: 10, fill: '#6b6b8a' }}
+                        interval={activityGroup === '1m' ? 59 : activityGroup === '15m' ? 3 : 0} />
                       <YAxis tickFormatter={qty} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={44} />
-                      <Tooltip content={<ActivityTooltip />} />
+                      <Tooltip content={<ActivityTooltip />} cursor={{ fill: 'rgba(59, 59, 106, 0.35)' }} />
                       <Bar dataKey="qty_listed_since_prev" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
                       <Bar dataKey="qty_sold_since_prev"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
                     </BarChart>
@@ -428,6 +539,80 @@ function ItemPanel({ item, hours, refreshTick }) {
           </div>
         </div>
       </div>
+
+      {/* Patterns modal */}
+      {patternsOpen && (
+        <Modal title={`Activity patterns · ${item.matName} · all history`} onClose={() => setPatternsOpen(false)}>
+          {!patterns ? (
+            <Spinner />
+          ) : patterns.byHour.length === 0 ? (
+            <div style={{ color: '#3a3a55', fontSize: 12 }}>No data yet — patterns will populate as snapshots accumulate.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              <div>
+                <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>By hour of day</div>
+                <div style={{ height: 160 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={patterns.byHour} margin={{ top: 0, right: 4, left: 0, bottom: 0 }}>
+                      <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
+                      <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#6b6b8a' }} interval={1} />
+                      <YAxis tickFormatter={qty} tick={{ fontSize: 9, fill: '#6b6b8a' }} width={40} />
+                      <Tooltip cursor={{ fill: 'rgba(59,59,106,0.35)' }} contentStyle={{ background: '#13132a', border: '1px solid #1e1e3a', fontSize: 11 }} />
+                      <Bar dataKey="qty_listed" name="Listed" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
+                      <Bar dataKey="qty_sold"   name="Sold"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div>
+                <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>By day of week</div>
+                <div style={{ height: 160 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={patterns.byDow} margin={{ top: 0, right: 4, left: 0, bottom: 0 }}>
+                      <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#6b6b8a' }} />
+                      <YAxis tickFormatter={qty} tick={{ fontSize: 9, fill: '#6b6b8a' }} width={40} />
+                      <Tooltip cursor={{ fill: 'rgba(59,59,106,0.35)' }} contentStyle={{ background: '#13132a', border: '1px solid #1e1e3a', fontSize: 11 }} />
+                      <Bar dataKey="qty_listed" name="Listed" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
+                      <Bar dataKey="qty_sold"   name="Sold"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* Bar drill-down modal */}
+      {barDetail && (
+        <Modal
+          title={`Transactions · ${new Date(barDetail.from).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${activityGroup !== '1m' ? ` – ${new Date(barDetail.to).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''} · ${item.matName}`}
+          onClose={() => setBarDetail(null)}
+        >
+          {barDetail.loading ? (
+            <Spinner />
+          ) : barDetail.events?.length === 0 ? (
+            <div style={{ color: '#3a3a55', fontSize: 12 }}>No events in this window.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {barDetail.events.map((e, i) => {
+                const { text, color } = EVENT_LABEL[e.event_type] ?? { text: e.event_type, color: '#6b6b8a' };
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12 }}>
+                    <span style={{ color: '#c0c0d8', fontWeight: 500 }}>{e.company_name}</span>
+                    <span style={{ color }}>{text}</span>
+                    <span style={{ color: '#e0e0f0', fontVariantNumeric: 'tabular-nums' }}>{qty(Number(e.qty))}</span>
+                    <span style={{ color: '#6b6b8a' }}>{item.matName}</span>
+                    <span style={{ color: '#6b6b8a', fontVariantNumeric: 'tabular-nums' }}>@ {usd(e.unit_price)}</span>
+                    <span style={{ color: '#3a3a55', fontSize: 11, marginLeft: 'auto', whiteSpace: 'nowrap' }}>{fmtTime(e.recorded_at)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Modal>
+      )}
 
       {/* Company activity */}
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '12px 14px' }}>
