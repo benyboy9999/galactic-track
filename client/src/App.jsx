@@ -1,8 +1,5 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { useState, useEffect, useRef } from 'react';
-import Market from './pages/Market';
-import MaterialDetail from './pages/MaterialDetail';
-import Profits from './pages/Profits';
+import { useState, useEffect } from 'react';
 import Tracker from './pages/Tracker';
 import ErrorBoundary from './components/ErrorBoundary';
 import { api } from './api';
@@ -52,8 +49,6 @@ function Nav() {
       <div className="nav-brand">Galactic Tycoons Manager</div>
       <div className="nav-links">
         <NavLink to="/tracker" end>Tracker</NavLink>
-        <NavLink to="/market">Market</NavLink>
-        <NavLink to="/profits">Profit Calc</NavLink>
       </div>
       <TrackerCountdown />
     </nav>
@@ -70,9 +65,6 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Tracker />} />
               <Route path="/tracker" element={<Tracker />} />
-              <Route path="/market" element={<Market />} />
-              <Route path="/market/:matId" element={<MaterialDetail />} />
-              <Route path="/profits" element={<Profits />} />
             </Routes>
           </ErrorBoundary>
         </main>
