@@ -3,6 +3,11 @@
 This sets up a bare git repo on the Linux server so you can push changes from
 your Mac and have the server automatically build and restart.
 
+**Server details**
+- User: `homelab`
+- Project path: `~/Projects/galactic-tycoons-manager`
+- Bare repo path: `~/Projects/galactic-tycoons-manager.git`
+
 ---
 
 ## One-time setup — Linux server
@@ -10,13 +15,13 @@ your Mac and have the server automatically build and restart.
 ### 1. Create the bare repo
 
 ```bash
-git init --bare ~/galactic-tycoons-manager.git
+git init --bare ~/Projects/galactic-tycoons-manager.git
 ```
 
 ### 2. Create the post-receive hook
 
 ```bash
-nano ~/galactic-tycoons-manager.git/hooks/post-receive
+nano ~/Projects/galactic-tycoons-manager.git/hooks/post-receive
 ```
 
 Paste the following:
@@ -25,8 +30,8 @@ Paste the following:
 #!/bin/bash
 set -e
 
-WORK_DIR=~/galactic-tycoons-manager
-GIT_DIR=~/galactic-tycoons-manager.git
+WORK_DIR=~/Projects/galactic-tycoons-manager
+GIT_DIR=~/Projects/galactic-tycoons-manager.git
 
 echo "==> Checking out latest code..."
 git --work-tree="$WORK_DIR" --git-dir="$GIT_DIR" checkout -f main
@@ -47,7 +52,7 @@ echo "==> Deploy complete."
 Make it executable:
 
 ```bash
-chmod +x ~/galactic-tycoons-manager.git/hooks/post-receive
+chmod +x ~/Projects/galactic-tycoons-manager.git/hooks/post-receive
 ```
 
 ---
@@ -68,10 +73,10 @@ git commit -m "initial commit"
 ### 4. Add the Linux server as a remote
 
 ```bash
-git remote add linux user@<host-ip>:~/galactic-tycoons-manager.git
+git remote add linux homelab@<host-ip>:~/Projects/galactic-tycoons-manager.git
 ```
 
-Replace `user` with your Linux username and `<host-ip>` with the server's IP.
+Replace `<host-ip>` with the server's IP address (e.g. `192.168.1.42`).
 
 ### 5. Push for the first time
 
@@ -91,7 +96,7 @@ git add -A
 git commit -m "describe what changed"
 
 # 3. Push to the server — hook runs automatically
-git push linux main
+git push homelab main
 ```
 
 The hook will:
@@ -119,20 +124,20 @@ The hook will:
 **`Permission denied (publickey)`**
 Set up SSH key auth so you don't need a password on every push:
 ```bash
-ssh-copy-id user@<host-ip>
+ssh-copy-id homelab@<host-ip>
 ```
 
 **Hook not running / permission denied**
 ```bash
-chmod +x ~/galactic-tycoons-manager.git/hooks/post-receive
+chmod +x ~/Projects/galactic-tycoons-manager.git/hooks/post-receive
 ```
 
 **PM2 not found in hook**
 The hook runs in a non-interactive shell and may not have PM2 in `$PATH`.
-Fix by using the full path in the hook:
+Find the full path first, then hard-code it in the hook:
 ```bash
-/usr/local/bin/pm2 restart galactic-tycoons
-# or find it with: which pm2
+which pm2
+# e.g. /usr/local/bin/pm2 — use that in the hook instead of just "pm2"
 ```
 
 **Push rejected — non-fast-forward**

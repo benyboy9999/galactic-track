@@ -41,5 +41,9 @@ app.get('*', (_req, res) => res.sendFile(join(publicDir, 'index.html')));
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Galactic Tycoons server running on http://0.0.0.0:${PORT}`);
-  startTracker();
+  if (process.env.TRACKER_ENABLED !== 'false') {
+    startTracker();
+  } else {
+    console.log('Tracker disabled (TRACKER_ENABLED=false)');
+  }
 });

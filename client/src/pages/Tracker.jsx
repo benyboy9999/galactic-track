@@ -489,7 +489,7 @@ export default function Tracker() {
         {status && (
           <span style={{ fontSize: 11, color: '#3a3a55', marginLeft: 8 }}>
             {status.running ? '●' : '○'} {status.pollCount} polls
-            {status.lastError && <span style={{ color: '#f87171', marginLeft: 6 }}>{status.lastError.item} error</span>}
+{status.lastError && <span style={{ color: '#f87171', marginLeft: 6 }}>{status.lastError.item} error</span>}
           </span>
         )}
 

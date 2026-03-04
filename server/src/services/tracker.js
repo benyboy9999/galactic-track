@@ -159,7 +159,7 @@ function diffOrderBooks(prevOrders, currOrders, matId, snapshotAId, snapshotBId)
         companyName: prev.companyName,
         unitPrice:   prev.unitPrice,
         qtyChange:   -(prev.qty - curr.qty),
-        eventType:   cheaperStillExists ? 'cancelled' : 'partial_fill',
+        eventType:   'partial_fill', // partial qty decrease is always a sale — game only allows full-listing cancellations
         snapshotAId, snapshotBId,
       });
     } else if (curr.qty > prev.qty) {
