@@ -16,6 +16,8 @@ const ITEMS = [
   { matId: 92, matName: 'Prefab Kit', color: '#34d399' },
 ];
 
+const PAX_THRESHOLDS = [0.1, 0.5, 1, 2, 5];
+
 const HOURS_OPTIONS = [
   { hours: 1,   label: '1h'  },
   { hours: 4,   label: '4h'  },
@@ -360,6 +362,7 @@ function ItemPanel({ item, hours, refreshTick }) {
   const [error,           setError]           = useState(null);
   const [priceGroup,      setPriceGroup]      = useState('15m');
   const [activityGroup,   setActivityGroup]   = useState('15m');
+  const [paxThreshold,    setPaxThreshold]    = useState(0.1);
   const [barDetail,       setBarDetail]       = useState(null); // { from, to, events, loading }
   const [patterns,        setPatterns]        = useState(null); // { byHour, byDow } | null=not loaded
   const [patternsOpen,    setPatternsOpen]    = useState(false);
@@ -413,14 +416,27 @@ function ItemPanel({ item, hours, refreshTick }) {
   const totalListed = activity.reduce((s, r) => s + Number(r.qty_listed_since_prev), 0);
   const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length) : 0;
 
+  const compRows       = (companyActivity?.rows || []).filter((r) => r.company_name !== 'Federal Reserve');
+  const compTotalSold  = compRows.reduce((s, r) => s + Number(r.qty_sold), 0);
+  const prevTotalSold  = compRows.reduce((s, r) => s + Number(r.prev_qty_sold || 0), 0);
+  const currPax        = compTotalSold > 0 ? compRows.filter((r) => (Number(r.qty_sold) / compTotalSold) * 100 >= paxThreshold).length : null;
+  const prevPax        = prevTotalSold > 0 ? compRows.filter((r) => (Number(r.prev_qty_sold || 0) / prevTotalSold) * 100 >= paxThreshold).length : null;
+  const paxDelta       = currPax !== null && prevPax !== null ? currPax - prevPax : null;
+  const cyclePaxThreshold = () => {
+    const next = PAX_THRESHOLDS[(PAX_THRESHOLDS.indexOf(paxThreshold) + 1) % PAX_THRESHOLDS.length];
+    setPaxThreshold(next);
+  };
+
   const statsRows = [
-    { label: 'Price',         value: latest ? usd(latest.current_price) : '—', color: undefined },
-    { label: `Δ ${hours}h`,   value: priceChange !== null ? `${priceChange > 0 ? '+' : ''}${priceChange}%` : '—', color: priceChange > 0 ? '#f87171' : priceChange < 0 ? '#34d399' : undefined },
-    { label: 'Supply',        value: latest ? qty(latest.total_qty_available) : '—', color: undefined },
-    { label: `Δ ${hours}h`,   value: supplyChange !== null ? `${supplyChange >= 0 ? '+' : ''}${qty(supplyChange)}` : '—', color: supplyChange < 0 ? '#f87171' : '#34d399' },
-    { label: `Sold`,          value: qty(totalSold),   color: '#f87171' },
-    { label: `Listed`,        value: qty(totalListed), color: '#34d399' },
-    { label: 'Sold/hr avg',   value: qty(avgSold * 60), color: item.color },
+    { label: 'Price',                                   value: latest ? usd(latest.current_price) : '—', color: undefined },
+    { label: `Δ ${hours}h`,                             value: priceChange !== null ? `${priceChange > 0 ? '+' : ''}${priceChange}%` : '—', color: priceChange > 0 ? '#f87171' : priceChange < 0 ? '#34d399' : undefined },
+    { label: 'Supply',                                  value: latest ? qty(latest.total_qty_available) : '—', color: undefined },
+    { label: `Δ ${hours}h`,                             value: supplyChange !== null ? `${supplyChange >= 0 ? '+' : ''}${qty(supplyChange)}` : '—', color: supplyChange < 0 ? '#f87171' : '#34d399' },
+    { label: `Participants ≥${paxThreshold}%`, onClick: cyclePaxThreshold, value: currPax !== null ? String(currPax) : '—', color: undefined },
+    { label: `Δ ${hours}h`,                             value: paxDelta !== null ? `${paxDelta >= 0 ? '+' : ''}${paxDelta}` : '—', color: paxDelta > 0 ? '#34d399' : paxDelta < 0 ? '#f87171' : undefined },
+    { label: `Sold`,                                    value: qty(totalSold),   color: '#f87171' },
+    { label: `Listed`,                                  value: qty(totalListed), color: '#34d399' },
+    { label: 'Sold/hr avg',                             value: qty(avgSold * 60), color: item.color },
   ];
 
   async function openPatterns() {
@@ -486,9 +502,13 @@ function ItemPanel({ item, hours, refreshTick }) {
             <SectionLabel>Stats</SectionLabel>
             <table style={{ width: '100%', fontSize: 12 }}>
               <tbody>
-                {statsRows.map(({ label, value, color }, i) => (
+                {statsRows.map(({ label, value, color, onClick }, i) => (
                   <tr key={i}>
-                    <td style={{ color: '#6b6b8a', paddingBottom: 4, whiteSpace: 'nowrap' }}>{label}</td>
+                    <td
+                      style={{ color: '#6b6b8a', paddingBottom: 4, whiteSpace: 'nowrap', cursor: onClick ? 'pointer' : 'default' }}
+                      onClick={onClick}
+                      title={onClick ? 'Click to cycle threshold' : undefined}
+                    >{label}</td>
                     <td style={{ color: color ?? '#e0e0f0', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{value}</td>
                   </tr>
                 ))}
