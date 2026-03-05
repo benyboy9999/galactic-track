@@ -8,6 +8,9 @@ import exchangeRoutes from './routes/exchange.js';
 import gamedataRoutes from './routes/gamedata.js';
 import profitsRoutes from './routes/profits.js';
 import trackerRoutes from './routes/tracker.js';
+import authRoutes from './routes/auth.js';
+import itemsRoutes from './routes/items.js';
+import adminRoutes from './routes/admin.js';
 import { getRateLimitStatus } from './services/gtApi.js';
 import { startTracker } from './services/tracker.js';
 
@@ -24,6 +27,9 @@ app.use('/api/exchange', exchangeRoutes);
 app.use('/api/gamedata', gamedataRoutes);
 app.use('/api/profits', profitsRoutes);
 app.use('/api/tracker', trackerRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/items', itemsRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.get('/api/health',    (req, res) => res.json({ ok: true }));
 app.get('/api/ratelimit', (req, res) => res.json(getRateLimitStatus()));
@@ -40,7 +46,7 @@ app.use(express.static(publicDir));
 app.get('*', (_req, res) => res.sendFile(join(publicDir, 'index.html')));
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Galactic Tycoons server running on http://0.0.0.0:${PORT}`);
+  console.log(`GT-Tracker server running on http://0.0.0.0:${PORT}`);
   if (process.env.TRACKER_ENABLED !== 'false') {
     startTracker();
   } else {

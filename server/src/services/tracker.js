@@ -1,48 +1,32 @@
 /**
  * Market Tracker Service
  *
- * Polls mat-details every 60 seconds for tracked items.
- * Diffs consecutive order books to classify changes as:
- *   new_listing  — order_id appears for first time
- *   restocked    — existing order's qty increased
- *   partial_fill — qty decreased AND no cheaper orders exist → inferred sale
- *   full_fill    — order disappeared AND no cheaper orders exist → inferred sale
- *   cancelled    — qty decreased or disappeared BUT cheaper orders still present
+ * Polls mat-details every 60 seconds for all actively tracked items.
+ * Items and their owner API keys are loaded from the DB each cycle so new
+ * registrations are picked up without a server restart.
  *
- * Rate budget: 5 items × 5 units = 25 units/poll.
- * At 60s intervals that's 5 polls/5-min = 125 units/window for tracker alone.
- * GT API limit: 500/10min = 250/5min. Internal budget target: 230/5min.
- * Remaining headroom for user routes: ~105 units (allDetails=60, prices=5, etc.).
+ * Each item is polled using its owner's API key (their own 500-unit budget).
+ * Items with no owner (unclaimed) are skipped until a user claims them.
  *
- * All API calls go through the shared RateLimiter from gtApi.js so the
- * /api/ratelimit indicator stays accurate.
+ * Rate budget: 5 units per item per poll.
+ * Revoke detection: 401/403 from GT API marks the owner as revoked.
+ * Retention: tracker_orders older than 48h are pruned each cycle.
  */
 
 import pool from '../database/db.js';
 import { gtFetch } from './gtApi.js';
 
 // ── Game price increment lookup ────────────────────────────────────────────────
-// Prices stored in cents (unitPrice × 100). Increments match GT exchange tiers.
 function gameIncrement(priceCents) {
-  if (priceCents <    5_000) return       50; // < $50   → $0.50
-  if (priceCents <   10_000) return      100; // < $100  → $1
-  if (priceCents <   50_000) return      500; // < $500  → $5
-  if (priceCents <  100_000) return    1_000; // < $1000 → $10
-  if (priceCents <  500_000) return    5_000; // < $5000 → $50
-  if (priceCents < 1_000_000) return  10_000; // < $10k  → $100
-  if (priceCents < 5_000_000) return  50_000; // < $50k  → $500
-  return 100_000;                             // ≥ $50k  → $1000
+  if (priceCents <    5_000) return       50;
+  if (priceCents <   10_000) return      100;
+  if (priceCents <   50_000) return      500;
+  if (priceCents <  100_000) return    1_000;
+  if (priceCents <  500_000) return    5_000;
+  if (priceCents < 1_000_000) return  10_000;
+  if (priceCents < 5_000_000) return  50_000;
+  return 100_000;
 }
-
-// ── Items to track ─────────────────────────────────────────────────────────────
-
-const TRACKED_ITEMS = [
-  { matId: 2,  matName: 'Iron'       },
-  { matId: 3,  matName: 'Concrete'   },
-  { matId: 8,  matName: 'Silica'     },
-  { matId: 34, matName: 'Limestone'  },
-  { matId: 92, matName: 'Prefab Kit' },
-];
 
 const POLL_INTERVAL_MS = 60_000;
 const UNITS_PER_ITEM   = 5;
@@ -51,11 +35,26 @@ let intervalHandle = null;
 let lastError      = null;
 let pollCount      = 0;
 let lastPollAt     = null;
+const recentErrors = []; // rolling last-50 errors for admin panel
+
+// ── Load tracked items from DB ─────────────────────────────────────────────────
+
+async function loadTrackedItems() {
+  const r = await pool.query(
+    `SELECT ti.mat_id  AS "matId",
+            ti.mat_name AS "matName",
+            u.api_key   AS "apiKey"
+     FROM tracked_items ti
+     LEFT JOIN users u ON u.id = ti.owner_user_id AND u.revoked = FALSE
+     WHERE ti.active = TRUE`
+  );
+  return r.rows; // apiKey may be null for unclaimed items → skip
+}
 
 // ── API fetch ──────────────────────────────────────────────────────────────────
 
-function fetchMatDetails(matId) {
-  return gtFetch(`/public/exchange/mat-details/${matId}`, UNITS_PER_ITEM);
+function fetchMatDetails(matId, apiKey) {
+  return gtFetch(`/public/exchange/mat-details/${matId}`, UNITS_PER_ITEM, apiKey);
 }
 
 // ── DB helpers ─────────────────────────────────────────────────────────────────
@@ -115,74 +114,28 @@ async function saveEvents(client, events) {
 }
 
 // ── Diff logic ─────────────────────────────────────────────────────────────────
-//
-// Sale rule: an order change is only a SALE if no cheaper orders exist in the
-// current (B) snapshot. Buyers always buy the cheapest listing first, so if
-// cheaper listings are still there untouched, buyers haven't reached this price
-// level — any qty decrease must be a cancellation/adjustment.
 
 function diffOrderBooks(prevOrders, currOrders, matId, snapshotAId, snapshotBId) {
   const prevMap = new Map(prevOrders.map((o) => [o.orderId, o]));
   const currMap = new Map(currOrders.map((o) => [o.orderId, o]));
+  const events  = [];
 
-  const events = [];
-
-  // ── Changes to existing orders ────────────────────────────────────────────
   for (const [orderId, prev] of prevMap) {
     const curr = currMap.get(orderId);
-
-    // Are there any orders cheaper than this one still present in snapshot B?
     const cheaperStillExists = currOrders.some((o) => o.unitPrice < prev.unitPrice);
 
     if (!curr) {
-      // Order disappeared entirely
-      events.push({
-        matId, orderId,
-        companyId:   prev.companyId,
-        companyName: prev.companyName,
-        unitPrice:   prev.unitPrice,
-        qtyChange:   -prev.qty,
-        eventType:   cheaperStillExists ? 'cancelled' : 'full_fill',
-        snapshotAId, snapshotBId,
-      });
+      events.push({ matId, orderId, companyId: prev.companyId, companyName: prev.companyName, unitPrice: prev.unitPrice, qtyChange: -prev.qty, eventType: cheaperStillExists ? 'cancelled' : 'full_fill', snapshotAId, snapshotBId });
     } else if (curr.qty < prev.qty) {
-      // Qty decreased — sale or cancellation depending on price position
-      events.push({
-        matId, orderId,
-        companyId:   prev.companyId,
-        companyName: prev.companyName,
-        unitPrice:   prev.unitPrice,
-        qtyChange:   -(prev.qty - curr.qty),
-        eventType:   'partial_fill', // partial qty decrease is always a sale — game only allows full-listing cancellations
-        snapshotAId, snapshotBId,
-      });
+      events.push({ matId, orderId, companyId: prev.companyId, companyName: prev.companyName, unitPrice: prev.unitPrice, qtyChange: -(prev.qty - curr.qty), eventType: 'partial_fill', snapshotAId, snapshotBId });
     } else if (curr.qty > prev.qty) {
-      // Qty increased — seller added more stock to existing order
-      events.push({
-        matId, orderId,
-        companyId:   prev.companyId,
-        companyName: prev.companyName,
-        unitPrice:   prev.unitPrice,
-        qtyChange:   curr.qty - prev.qty,
-        eventType:   'restocked',
-        snapshotAId, snapshotBId,
-      });
+      events.push({ matId, orderId, companyId: prev.companyId, companyName: prev.companyName, unitPrice: prev.unitPrice, qtyChange: curr.qty - prev.qty, eventType: 'restocked', snapshotAId, snapshotBId });
     }
-    // qty unchanged → nothing to record
   }
 
-  // ── New listings ──────────────────────────────────────────────────────────
   for (const [orderId, curr] of currMap) {
     if (!prevMap.has(orderId)) {
-      events.push({
-        matId, orderId,
-        companyId:   curr.companyId,
-        companyName: curr.companyName,
-        unitPrice:   curr.unitPrice,
-        qtyChange:   curr.qty,
-        eventType:   'new_listing',
-        snapshotAId, snapshotBId,
-      });
+      events.push({ matId, orderId, companyId: curr.companyId, companyName: curr.companyName, unitPrice: curr.unitPrice, qtyChange: curr.qty, eventType: 'new_listing', snapshotAId, snapshotBId });
     }
   }
 
@@ -192,11 +145,8 @@ function diffOrderBooks(prevOrders, currOrders, matId, snapshotAId, snapshotBId)
 // ── Poll one item ──────────────────────────────────────────────────────────────
 
 async function pollItem(item) {
-  const data = await fetchMatDetails(item.matId);
+  const data = await fetchMatDetails(item.matId, item.apiKey);
 
-  // Extract intra-day qtySold accumulator from priceHistory.
-  // priceHistory is newest-first. We want today's live entry; fall back to [0]
-  // (most recent) so we still track across day boundaries correctly.
   const todayStr     = new Date().toISOString().slice(0, 10);
   const priceHistory = data.priceHistory ?? [];
   const todayHistory = priceHistory.find((h) => h.date === todayStr) ?? priceHistory[0] ?? null;
@@ -216,19 +166,11 @@ async function pollItem(item) {
 
     if (prevSnap && prevSnap.orders) {
       const prevOrders = prevSnap.orders.map((o) => ({
-        orderId:     o.orderId,
-        companyId:   o.companyId,
-        companyName: o.companyName,
-        unitPrice:   o.unitPrice,
-        qty:         Number(o.qty),
+        orderId: o.orderId, companyId: o.companyId, companyName: o.companyName,
+        unitPrice: o.unitPrice, qty: Number(o.qty),
       }));
-
       const currOrders = (data.orders ?? []).map((o) => ({
-        orderId:     o.id,
-        companyId:   o.cId,
-        companyName: o.cName,
-        unitPrice:   o.unitPrice,
-        qty:         o.qty,
+        orderId: o.id, companyId: o.cId, companyName: o.cName, unitPrice: o.unitPrice, qty: o.qty,
       }));
 
       const events = diffOrderBooks(prevOrders, currOrders, item.matId, prevSnap.id, snapId);
@@ -242,8 +184,7 @@ async function pollItem(item) {
         const restocked = events.filter((e) => e.eventType === 'restocked');
 
         attributedSold = sales.reduce((s, e) => s + Math.abs(e.qtyChange), 0);
-        qtyListed      = newList.reduce((s, e) => s + e.qtyChange, 0) +
-                         restocked.reduce((s, e) => s + e.qtyChange, 0);
+        qtyListed      = newList.reduce((s, e) => s + e.qtyChange, 0) + restocked.reduce((s, e) => s + e.qtyChange, 0);
         qtyCancelled   = cancelled.reduce((s, e) => s + Math.abs(e.qtyChange), 0);
 
         const parts = [];
@@ -255,32 +196,24 @@ async function pollItem(item) {
     }
 
     // ── Flash sale reconciliation ─────────────────────────────────────────────
-    // Compare intra-day API qtySold delta against diff-attributed sales.
-    // Skip if: dates differ (day rollover), either value is null, or window > 150s
-    // (missed poll would inflate the gap).
     if (
       prevSnap &&
       prevSnap.api_qty_sold      !== null &&
       apiQtySold                 !== null &&
       prevSnap.api_qty_sold_date === apiQtySoldDate
     ) {
-      const windowMs  = Date.now() - new Date(prevSnap.recorded_at).getTime();
+      const windowMs = Date.now() - new Date(prevSnap.recorded_at).getTime();
       if (windowMs <= 150_000) {
         const deltaSold = apiQtySold - Number(prevSnap.api_qty_sold);
         const flash     = Math.max(0, deltaSold - attributedSold);
         if (flash > 0) {
-          await client.query(
-            `UPDATE tracker_snapshots SET flash_qty = $1 WHERE id = $2`,
-            [flash, snapId]
-          );
-          console.log(`[tracker] ${item.matName}: ${flash.toLocaleString()} flash (unattributed) sales`);
+          await client.query(`UPDATE tracker_snapshots SET flash_qty = $1 WHERE id = $2`, [flash, snapId]);
+          console.log(`[tracker] ${item.matName}: ${flash.toLocaleString()} flash sales`);
         }
       }
     }
 
     // ── Quick sell price ──────────────────────────────────────────────────────
-    // Find first price tier that would take >1hr to clear at 6h avg sales rate.
-    // quick_sell_price = that tier's price - 1 (1 increment below the wall).
     const qspSalesRes = await client.query(
       `SELECT COALESCE(SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
                THEN ABS(qty_change) ELSE 0 END), 0)::bigint AS sold
@@ -304,10 +237,7 @@ async function pollItem(item) {
         }
       }
       if (quick_sell_price !== null) {
-        await client.query(
-          `UPDATE tracker_snapshots SET quick_sell_price = $1 WHERE id = $2`,
-          [quick_sell_price, snapId]
-        );
+        await client.query(`UPDATE tracker_snapshots SET quick_sell_price = $1 WHERE id = $2`, [quick_sell_price, snapId]);
       }
     }
 
@@ -320,29 +250,71 @@ async function pollItem(item) {
   }
 }
 
+// ── Order retention ────────────────────────────────────────────────────────────
+// Keep tracker_orders for the last 48h only — older entries are not needed for
+// diffing and would grow the DB unboundedly.
+
+async function pruneOldOrders() {
+  try {
+    const r = await pool.query(
+      `DELETE FROM tracker_orders
+       WHERE snapshot_id IN (
+         SELECT id FROM tracker_snapshots
+         WHERE recorded_at < NOW() - INTERVAL '48 hours'
+       )`
+    );
+    if (r.rowCount > 0) {
+      console.log(`[tracker] pruned ${r.rowCount} old order rows`);
+    }
+  } catch (err) {
+    console.error('[tracker] order pruning failed:', err.message);
+  }
+}
+
 // ── Poll cycle ─────────────────────────────────────────────────────────────────
 
 async function pollAll() {
   lastPollAt = new Date().toISOString();
   pollCount++;
-  for (const item of TRACKED_ITEMS) {
+
+  const items = await loadTrackedItems();
+
+  for (const item of items) {
+    if (!item.apiKey) {
+      // Unclaimed item — no key to poll with
+      continue;
+    }
     try {
       await pollItem(item);
     } catch (err) {
-      if (err.rateLimited) {
+      if (err.status === 401 || err.status === 403) {
+        // Key revoked in-game — mark user as revoked
+        try {
+          await pool.query(`UPDATE users SET revoked = TRUE WHERE api_key = $1`, [item.apiKey]);
+          console.warn(`[tracker] API key revoked for ${item.matName} owner — stopping their polls`);
+        } catch { /* ignore */ }
+      } else if (err.rateLimited) {
         console.warn(`[tracker] rate limited — skipping ${item.matName} this cycle`);
       } else {
         lastError = { item: item.matName, message: err.message, at: new Date().toISOString() };
+        recentErrors.unshift(lastError);
+        if (recentErrors.length > 50) recentErrors.pop();
         console.error(`[tracker] error for ${item.matName}:`, err.message);
       }
     }
   }
+
+  // Prune old order data to keep storage flat
+  await pruneOldOrders();
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 export function startTracker() {
-  console.log(`[tracker] starting — polling ${TRACKED_ITEMS.map((i) => i.matName).join(', ')} every ${POLL_INTERVAL_MS / 1000}s`);
+  loadTrackedItems().then((items) => {
+    const names = items.map((i) => i.matName).join(', ') || '(none — awaiting user registration)';
+    console.log(`[tracker] starting — polling: ${names} every ${POLL_INTERVAL_MS / 1000}s`);
+  });
   pollAll();
   intervalHandle = setInterval(pollAll, POLL_INTERVAL_MS);
 }
@@ -357,10 +329,13 @@ export function stopTracker() {
 export function getTrackerStatus() {
   return {
     running:    intervalHandle !== null,
-    items:      TRACKED_ITEMS,
     pollCount,
     intervalMs: POLL_INTERVAL_MS,
     lastPollAt,
     lastError,
   };
+}
+
+export function getRecentErrors() {
+  return recentErrors;
 }

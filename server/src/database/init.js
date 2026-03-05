@@ -94,13 +94,62 @@ const schema = `
   CREATE INDEX IF NOT EXISTS idx_tevt_event_type  ON tracker_events(event_type);
 
   ALTER TABLE tracker_snapshots ADD COLUMN IF NOT EXISTS quick_sell_price INTEGER;
+
+  -- ── Multi-tenant auth tables ───────────────────────────────────────────────
+
+  CREATE TABLE IF NOT EXISTS users (
+    id            SERIAL PRIMARY KEY,
+    api_key       VARCHAR(128) UNIQUE NOT NULL,
+    session_token VARCHAR(128) UNIQUE NOT NULL,
+    company_id    VARCHAR(64),
+    company_name  VARCHAR(255),
+    credits_used  INT NOT NULL DEFAULT 0,
+    registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen     TIMESTAMPTZ,
+    revoked       BOOLEAN NOT NULL DEFAULT FALSE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_users_session_token ON users(session_token);
+  CREATE INDEX IF NOT EXISTS idx_users_api_key       ON users(api_key);
+
+  CREATE TABLE IF NOT EXISTS tracked_items (
+    mat_id        INT PRIMARY KEY,
+    mat_name      VARCHAR(255) NOT NULL,
+    owner_user_id INT REFERENCES users(id) ON DELETE SET NULL,
+    enabled_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    active        BOOLEAN NOT NULL DEFAULT TRUE
+  );
 `;
+
+// Items that were previously hardcoded — seeded with no owner so the first
+// user to register can claim them via the normal credit flow.
+const LEGACY_ITEMS = [
+  { matId: 2,  matName: 'Iron'       },
+  { matId: 3,  matName: 'Concrete'   },
+  { matId: 8,  matName: 'Silica'     },
+  { matId: 34, matName: 'Limestone'  },
+  { matId: 92, matName: 'Prefab Kit' },
+];
 
 async function init() {
   const client = await pool.connect();
   try {
     await client.query(schema);
     console.log('Database schema initialized.');
+
+    // Seed legacy tracked items if tracked_items table is empty
+    const { rows } = await client.query('SELECT COUNT(*) FROM tracked_items');
+    if (Number(rows[0].count) === 0) {
+      for (const item of LEGACY_ITEMS) {
+        await client.query(
+          `INSERT INTO tracked_items(mat_id, mat_name, owner_user_id, active)
+           VALUES($1, $2, NULL, TRUE)
+           ON CONFLICT(mat_id) DO NOTHING`,
+          [item.matId, item.matName]
+        );
+      }
+      console.log(`Seeded ${LEGACY_ITEMS.length} legacy tracked items.`);
+    }
   } finally {
     client.release();
     await pool.end();

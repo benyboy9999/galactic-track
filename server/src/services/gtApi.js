@@ -2,35 +2,36 @@ import fetch from 'node-fetch';
 import pool from '../database/db.js';
 
 const BASE    = process.env.GT_API_BASE;
-const API_KEY = process.env.GT_API_KEY;
+const API_KEY = process.env.GT_API_KEY; // fallback for non-tracker routes during transition
 
-const TOTAL_BUDGET = 500; // points per 10-min rolling window (with API key)
+const TOTAL_BUDGET = 500; // points per 10-min window per API key
 
-// ── API-driven rate limit state ───────────────────────────────────────────────
-// We read `rate-remaining` and `rate-reset` headers from every GT API response
-// (present on both 200 and 429). Between responses we subtract our own spend
-// locally as a conservative estimate.
-let rl = {
-  remaining:  TOTAL_BUDGET, // last API-reported remaining (rate-remaining header)
-  resetSec:   600,          // last API-reported seconds to window reset (rate-reset header)
-  updatedAt:  0,            // Date.now() when we last got a header update
-  ourSpend:   0,            // points WE have spent since last header update
-};
+// ── Per-key rate limit state ───────────────────────────────────────────────────
+// Each user's API key has its own independent 500-unit budget.
+const rlMap = new Map(); // apiKey → { remaining, resetSec, updatedAt, ourSpend }
 
-function _updateFromHeaders(headers) {
+function getRl(apiKey) {
+  if (!rlMap.has(apiKey)) {
+    rlMap.set(apiKey, { remaining: TOTAL_BUDGET, resetSec: 600, updatedAt: 0, ourSpend: 0 });
+  }
+  return rlMap.get(apiKey);
+}
+
+function _updateFromHeaders(apiKey, headers) {
+  const rl    = getRl(apiKey);
   const rem   = headers.get('rate-remaining');
   const reset = headers.get('rate-reset');
   if (rem !== null) {
-    rl = { remaining: Number(rem), resetSec: reset !== null ? Number(reset) : rl.resetSec, updatedAt: Date.now(), ourSpend: 0 };
+    rlMap.set(apiKey, { remaining: Number(rem), resetSec: reset !== null ? Number(reset) : rl.resetSec, updatedAt: Date.now(), ourSpend: 0 });
   } else if (reset !== null) {
     rl.resetSec = Number(reset);
   }
 }
 
-function _estimated() {
-  // If the reset window has elapsed since the last header update, the rolling
-  // window has cleared — optimistically return full budget so a real call can
-  // get through and refresh the actual remaining count from response headers.
+function _estimated(apiKey) {
+  const rl = getRl(apiKey);
+  // If the reset window has elapsed, optimistically return full budget so a real
+  // call can get through and refresh the actual remaining count from headers.
   if (rl.updatedAt > 0) {
     const elapsed = (Date.now() - rl.updatedAt) / 1000;
     if (elapsed >= rl.resetSec) return TOTAL_BUDGET;
@@ -39,7 +40,6 @@ function _estimated() {
 }
 
 // ── In-flight deduplication ───────────────────────────────────────────────────
-// Ensures concurrent requests for the same key share one in-flight fetch.
 const inFlight = new Map();
 
 function withDedup(key, fn) {
@@ -50,12 +50,11 @@ function withDedup(key, fn) {
 }
 
 // ── Cache TTLs ────────────────────────────────────────────────────────────────
-// These are deliberately conservative — the DB layer means cold starts are cheap.
 const TTL = {
-  gamedata:   60 * 60 * 1000,  // 60 min  (static; changes only on game updates)
-  allDetails:  5 * 60 * 1000,  // 5 min   (60 units — one call per rate window max)
-  prices:      3 * 60 * 1000,  // 3 min   (5 units)
-  details:     5 * 60 * 1000,  // 5 min   (5 units per item)
+  gamedata:   60 * 60 * 1000,  // 60 min
+  allDetails:  5 * 60 * 1000,  // 5 min
+  prices:      3 * 60 * 1000,  // 3 min
+  details:     5 * 60 * 1000,  // 5 min
 };
 
 // ── Memory cache ──────────────────────────────────────────────────────────────
@@ -70,7 +69,7 @@ function memSet(key, data) {
   mem.set(key, { data, ts: Date.now() });
 }
 
-// ── DB cache helpers (survives server restarts / nodemon) ─────────────────────
+// ── DB cache helpers ──────────────────────────────────────────────────────────
 async function dbGet(key) {
   try {
     const r = await pool.query('SELECT data, cached_at FROM game_data_cache WHERE key=$1', [key]);
@@ -89,27 +88,27 @@ async function dbSet(key, data) {
 }
 
 // ── Core fetch ────────────────────────────────────────────────────────────────
-async function gtFetch(path, units) {
-  if (_estimated() < units) {
+// apiKey defaults to the env-var fallback for non-tracker routes.
+async function gtFetch(path, units, apiKey = API_KEY) {
+  if (_estimated(apiKey) < units) {
+    const rl = getRl(apiKey);
     const resetIn = Math.round(Math.max(0, rl.resetSec - (Date.now() - rl.updatedAt) / 1000));
     const err = new Error(
-      `Rate budget insufficient — estimated ${_estimated()} remaining (need ${units}). Resets in ~${resetIn}s.`
+      `Rate budget insufficient — estimated ${_estimated(apiKey)} remaining (need ${units}). Resets in ~${resetIn}s.`
     );
     err.status = 429;
     err.rateLimited = true;
     throw err;
   }
 
-  const url = `${BASE}${path}${API_KEY ? `${path.includes('?') ? '&' : '?'}apikey=${API_KEY}` : ''}`;
+  const url = `${BASE}${path}${apiKey ? `${path.includes('?') ? '&' : '?'}apikey=${apiKey}` : ''}`;
   const res = await fetch(url);
 
-  // Always read rate limit headers — present on both 200 and 429
-  _updateFromHeaders(res.headers);
+  _updateFromHeaders(apiKey, res.headers);
 
   if (res.status === 429) {
-    const err = new Error(
-      `GT API rate limit hit — ${rl.remaining} remaining, resets in ${rl.resetSec}s.`
-    );
+    const rl = getRl(apiKey);
+    const err = new Error(`GT API rate limit hit — ${rl.remaining} remaining, resets in ${rl.resetSec}s.`);
     err.status = 429;
     err.rateLimited = true;
     throw err;
@@ -119,43 +118,36 @@ async function gtFetch(path, units) {
     throw Object.assign(new Error(`GT API ${res.status}: ${text}`), { status: res.status });
   }
 
-  rl.ourSpend += units;
+  getRl(apiKey).ourSpend += units;
   return res.json();
 }
 
 // ── Generic resilient fetch ───────────────────────────────────────────────────
-// Priority: memory cache → DB cache → live API → stale fallback on rate limit
-async function resilientFetch(key, units, ttl, apiFn) {
-  // 1. Memory cache
-  const hot = memGet(key, ttl);
+async function resilientFetch(cacheKey, units, ttl, apiFn) {
+  const hot = memGet(cacheKey, ttl);
   if (hot) return hot.data;
 
-  // 2. Deduplicate concurrent callers
-  return withDedup(key, async () => {
-    // Re-check after taking the "slot"
-    const hot2 = memGet(key, ttl);
+  return withDedup(cacheKey, async () => {
+    const hot2 = memGet(cacheKey, ttl);
     if (hot2) return hot2.data;
 
-    // 3. DB cache (warm start after restart)
-    const dbRow = await dbGet(key);
+    const dbRow = await dbGet(cacheKey);
     if (dbRow && Date.now() - new Date(dbRow.cached_at).getTime() < ttl) {
-      console.log(`[cache] DB hit for "${key}"`);
-      memSet(key, dbRow.data);
+      console.log(`[cache] DB hit for "${cacheKey}"`);
+      memSet(cacheKey, dbRow.data);
       return dbRow.data;
     }
 
-    // 4. Live API call
     try {
       const data = await apiFn();
-      memSet(key, data);
-      dbSet(key, data); // fire-and-forget
+      memSet(cacheKey, data);
+      dbSet(cacheKey, data);
       return data;
     } catch (err) {
       if (err.rateLimited) {
-        // 5. Stale fallback — return whatever we have rather than erroring
-        const stale = mem.get(key) ?? (dbRow ? { data: dbRow.data } : null);
+        const stale = mem.get(cacheKey) ?? (dbRow ? { data: dbRow.data } : null);
         if (stale) {
-          console.warn(`[rate] returning stale cache for "${key}"`);
+          console.warn(`[rate] returning stale cache for "${cacheKey}"`);
           return stale.data;
         }
       }
@@ -166,7 +158,9 @@ async function resilientFetch(key, units, ttl, apiFn) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-export function getRateLimitStatus() {
+// Returns rate limit status for one key (or the env fallback key).
+export function getRateLimitStatus(apiKey = API_KEY) {
+  const rl = getRl(apiKey);
   const elapsed = rl.updatedAt ? (Date.now() - rl.updatedAt) / 1000 : 0;
   return {
     remaining:   rl.remaining,
@@ -175,10 +169,36 @@ export function getRateLimitStatus() {
   };
 }
 
-// Used by tracker.js to route through the same fetch + rate state
+// Returns rate status for every key currently in the map (for admin panel).
+export function getRateLimitStatusAll() {
+  const out = [];
+  for (const [apiKey, rl] of rlMap) {
+    const elapsed = rl.updatedAt ? (Date.now() - rl.updatedAt) / 1000 : 0;
+    out.push({
+      apiKey,   // will be joined with company name in admin route
+      remaining:   rl.remaining,
+      resetIn:     Math.round(Math.max(0, rl.resetSec - elapsed)),
+      totalBudget: TOTAL_BUDGET,
+    });
+  }
+  return out;
+}
+
+// Validate a user's API key and return their company info.
+export async function getCompanyInfo(apiKey) {
+  const res = await fetch(`${BASE}/public/company?apikey=${apiKey}`);
+  if (res.status === 401 || res.status === 403) {
+    throw Object.assign(new Error('Invalid or revoked API key'), { status: res.status });
+  }
+  if (!res.ok) {
+    throw Object.assign(new Error(`GT API ${res.status}`), { status: res.status });
+  }
+  return res.json();
+}
+
 export { gtFetch };
-export function canAffordRateLimit(units) { return _estimated() >= units; }
-export function spendRateLimit(units)     { rl.ourSpend += units; }
+export function canAffordRateLimit(units, apiKey = API_KEY) { return _estimated(apiKey) >= units; }
+export function spendRateLimit(units, apiKey = API_KEY)     { getRl(apiKey).ourSpend += units; }
 
 export async function getGameData() {
   return resilientFetch('gamedata', 1, TTL.gamedata, async () => {

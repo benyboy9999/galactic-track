@@ -5,18 +5,12 @@ import {
 } from 'recharts';
 import { api } from '../api';
 import Spinner from '../components/Spinner';
+import ItemBrowser from '../components/ItemBrowser';
+import { useAuth } from '../context/AuthContext';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const ITEM_COLOR = '#a78bfa';
-
-const ITEMS = [
-  { matId: 2,  matName: 'Iron',       color: ITEM_COLOR },
-  { matId: 3,  matName: 'Concrete',   color: ITEM_COLOR },
-  { matId: 8,  matName: 'Silica',     color: ITEM_COLOR },
-  { matId: 34, matName: 'Limestone',  color: ITEM_COLOR },
-  { matId: 92, matName: 'Prefab Kit', color: ITEM_COLOR },
-];
 
 const PAX_THRESHOLDS = [0.1, 0.5, 1, 2, 5];
 
@@ -368,40 +362,6 @@ function Modal({ title, onClose, children }) {
   );
 }
 
-// ── Settings modal ─────────────────────────────────────────────────────────────
-
-function SettingsModal({ myCompany, onSave, onClose }) {
-  const [draft, setDraft] = useState(myCompany);
-  return (
-    <Modal title="Settings" onClose={onClose}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 300 }}>
-        <div>
-          <div style={{ color: '#6b6b8a', fontSize: 11, marginBottom: 6 }}>My company name</div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              autoFocus
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Enter your company name…"
-              onKeyDown={(e) => { if (e.key === 'Enter') { onSave(draft); onClose(); } }}
-              style={{
-                flex: 1, background: '#13132a', border: '1px solid #1e1e3a', borderRadius: 4,
-                color: '#e0e0f0', padding: '4px 8px', fontSize: 12, outline: 'none',
-              }}
-            />
-            <button
-              onClick={() => { onSave(draft); onClose(); }}
-              style={{ padding: '4px 12px', fontSize: 12, borderRadius: 4, cursor: 'pointer', background: '#3b3b6a', border: 'none', color: '#e0e0f0' }}
-            >Save</button>
-          </div>
-          <div style={{ color: '#3a3a55', fontSize: 10, marginTop: 6 }}>
-            Your company will be highlighted in gold throughout the tracker.
-          </div>
-        </div>
-      </div>
-    </Modal>
-  );
-}
 
 // ── Item panel ─────────────────────────────────────────────────────────────────
 
@@ -1024,24 +984,30 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function Tracker() {
+  const { user, refreshUser } = useAuth();
+  const myCompany = user?.companyName ?? '';
+
   const [hours,          setHours]         = useState(24);
   const [status,         setStatus]        = useState(null);
   const [rateLimit,      setRateLimit]     = useState(null);
-  const [activeTab,      setActiveTab]     = useState(ITEMS[0].matId);
+  const [items,          setItems]         = useState([]);
+  const [activeTab,      setActiveTab]     = useState(null);
   const [refreshTick,    setRefreshTick]   = useState(0);
   const [pollsInWindow,  setPollsInWindow] = useState(null);
-
-  const [myCompany,    setMyCompany]   = useState(() => localStorage.getItem('gt_my_company') ?? '');
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [browserOpen,    setBrowserOpen]   = useState(false);
   const timerRef       = useRef(null);
   const prevLastPollAt = useRef(null);
 
-  function saveMyCompany(name) {
-    const trimmed = name.trim();
-    setMyCompany(trimmed);
-    if (trimmed) localStorage.setItem('gt_my_company', trimmed);
-    else localStorage.removeItem('gt_my_company');
-  }
+  // Build items list from user's tracked items
+  useEffect(() => {
+    if (!user?.trackedItems) return;
+    const next = user.trackedItems.map((ti) => ({ matId: ti.matId, matName: ti.matName, color: ITEM_COLOR }));
+    setItems(next);
+    setActiveTab((prev) => {
+      if (prev && next.find((i) => i.matId === prev)) return prev;
+      return next[0]?.matId ?? null;
+    });
+  }, [user?.trackedItems]);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -1061,13 +1027,16 @@ export default function Tracker() {
     return () => clearInterval(timerRef.current);
   }, [loadStatus]);
 
-  const activeItem = ITEMS.find((i) => i.matId === activeTab);
+  const activeItem = items.find((i) => i.matId === activeTab) ?? null;
+
+  const creditsUsed  = user?.creditsUsed  ?? 0;
+  const creditsTotal = user?.creditsTotal ?? 3;
 
   return (
     <div>
       {/* Compact toolbar: tabs + status + time filters + refresh */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginBottom: 10, borderBottom: '1px solid #1e1e3a' }}>
-        {ITEMS.map((item) => (
+        {items.map((item) => (
           <button
             key={item.matId}
             onClick={() => setActiveTab(item.matId)}
@@ -1082,6 +1051,22 @@ export default function Tracker() {
             {item.matName}
           </button>
         ))}
+
+        {/* Item browser button */}
+        <button
+          onClick={() => setBrowserOpen(true)}
+          title="Manage tracked items"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '3px 10px', fontSize: 11, borderRadius: 4, cursor: 'pointer',
+            background: 'transparent', border: '1px solid #2e2e5a', color: '#6b6b8a',
+            marginLeft: 4,
+          }}
+        >
+          + {Array.from({ length: creditsTotal }, (_, i) => (
+            <span key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: i < creditsUsed ? '#a78bfa' : '#2e2e5a', display: 'inline-block' }} />
+          ))} {creditsUsed}/{creditsTotal}
+        </button>
 
         {status && (() => {
           const expected = status.intervalMs ? Math.round(hours * 3_600_000 / status.intervalMs) : null;
@@ -1122,20 +1107,22 @@ export default function Tracker() {
         >
           Refresh
         </button>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          title="Settings"
-          style={{
-            marginLeft: 4, padding: '2px 7px', fontSize: 13, borderRadius: 4, cursor: 'pointer',
-            background: myCompany ? 'rgba(251,191,36,0.12)' : 'transparent',
-            border: myCompany ? '1px solid rgba(251,191,36,0.3)' : '1px solid transparent',
-            color: myCompany ? '#fbbf24' : '#6b6b8a',
-          }}
-        >⚙</button>
       </div>
 
-      {settingsOpen && (
-        <SettingsModal myCompany={myCompany} onSave={saveMyCompany} onClose={() => setSettingsOpen(false)} />
+      {browserOpen && (
+        <ItemBrowser
+          onClose={() => setBrowserOpen(false)}
+          onTrackedChange={refreshUser}
+        />
+      )}
+
+      {items.length === 0 && (
+        <div style={{ color: '#4a4a6a', fontSize: 13, padding: '40px 0', textAlign: 'center' }}>
+          No items tracked yet.{' '}
+          <button onClick={() => setBrowserOpen(true)} style={{ background: 'none', border: 'none', color: '#a78bfa', cursor: 'pointer', fontSize: 13, textDecoration: 'underline' }}>
+            Add one
+          </button>
+        </div>
       )}
 
       {activeItem && (
