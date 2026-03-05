@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import Tracker from './pages/Tracker';
-import Construction from './pages/Construction';
 import ErrorBoundary from './components/ErrorBoundary';
 import { api } from './api';
 
@@ -50,7 +49,6 @@ function Nav() {
       <div className="nav-brand">Galactic Tycoons Manager</div>
       <div className="nav-links">
         <NavLink to="/tracker" end>Tracker</NavLink>
-        <NavLink to="/construction">Construction</NavLink>
       </div>
       <TrackerCountdown />
     </nav>
@@ -67,7 +65,6 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Tracker />} />
               <Route path="/tracker" element={<Tracker />} />
-              <Route path="/construction" element={<Construction />} />
             </Routes>
           </ErrorBoundary>
         </main>

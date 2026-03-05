@@ -1015,7 +1015,7 @@ export default function Tracker() {
   const [rateLimit,    setRateLimit]   = useState(null);
   const [activeTab,    setActiveTab]   = useState(ITEMS[0].matId);
   const [refreshTick,  setRefreshTick] = useState(0);
-  const [, setSecTick] = useState(0);
+
   const [myCompany,    setMyCompany]   = useState(() => localStorage.getItem('gt_my_company') ?? '');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const timerRef       = useRef(null);
@@ -1046,23 +1046,7 @@ export default function Tracker() {
     return () => clearInterval(timerRef.current);
   }, [loadStatus]);
 
-  // 1-second ticker so the poll countdown updates live between status polls
-  useEffect(() => {
-    const t = setInterval(() => setSecTick((n) => n + 1), 1_000);
-    return () => clearInterval(t);
-  }, []);
-
   const activeItem = ITEMS.find((i) => i.matId === activeTab);
-
-  // ── Countdown to next poll ────────────────────────────────────────────────
-  const nextPollIn = status?.lastPollAt
-    ? Math.max(0, Math.round((new Date(status.lastPollAt).getTime() + (status.intervalMs ?? 60_000) - Date.now()) / 1_000))
-    : null;
-  // If the API window hasn't cleared yet, the real delay is whichever is larger
-  const rateLimitDelay = rateLimit && rateLimit.remaining < 5 && rateLimit.resetIn > 0;
-  const pollCountdown  = rateLimitDelay
-    ? Math.max(nextPollIn ?? 0, rateLimit.resetIn)
-    : nextPollIn;
 
   return (
     <div>
@@ -1090,30 +1074,11 @@ export default function Tracker() {
             {status.lastError && <span style={{ color: '#f87171', marginLeft: 6 }}>{status.lastError.item} error</span>}
           </span>
         )}
-        {pollCountdown !== null && (
-          <span
-            style={{ fontSize: 11, marginLeft: 8, fontVariantNumeric: 'tabular-nums',
-              color: rateLimitDelay ? '#f87171' : '#3a3a55' }}
-            title={rateLimitDelay ? 'Next poll delayed by rate limit' : 'Next poll in'}
-          >
-            {rateLimitDelay ? '⏸ ' : '↻ '}{pollCountdown}s
+        {rateLimit && (
+          <span style={{ fontSize: 11, color: '#3a3a55', marginLeft: 8, fontVariantNumeric: 'tabular-nums' }}>
+            {rateLimit.remaining}/{rateLimit.totalBudget} pts · {rateLimit.resetIn}s
           </span>
         )}
-        {rateLimit && (() => {
-          const pct     = rateLimit.remaining / rateLimit.totalBudget;
-          const barColor = pct > 0.4 ? '#34d399' : pct > 0.15 ? '#f59e0b' : '#f87171';
-          const others  = rateLimit.usedByOthers;
-          return (
-            <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 12, fontSize: 11 }}>
-              <span style={{ color: '#3a3a55' }}>API</span>
-              <span style={{ width: 60, height: 4, background: '#1e1e3a', borderRadius: 2, overflow: 'hidden', display: 'inline-block' }}>
-                <span style={{ display: 'block', width: `${pct * 100}%`, height: '100%', background: barColor, borderRadius: 2 }} />
-              </span>
-              <span style={{ color: barColor, fontVariantNumeric: 'tabular-nums' }}>{rateLimit.remaining}/{rateLimit.totalBudget}</span>
-              {others > 0 && <span style={{ color: '#f59e0b' }} title="Points used by other API consumers on this key">~{others} other</span>}
-            </span>
-          );
-        })()}
 
         <div style={{ flex: 1 }} />
 

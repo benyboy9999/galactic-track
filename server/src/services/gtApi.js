@@ -167,19 +167,11 @@ async function resilientFetch(key, units, ttl, apiFn) {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function getRateLimitStatus() {
-  const elapsed   = rl.updatedAt ? (Date.now() - rl.updatedAt) / 1000 : 0;
-  const resetIn   = Math.round(Math.max(0, rl.resetSec - elapsed));
-  const estimated = _estimated();
+  const elapsed = rl.updatedAt ? (Date.now() - rl.updatedAt) / 1000 : 0;
   return {
-    remaining:            estimated,
-    resetIn,
-    totalBudget:          TOTAL_BUDGET,
-    used:                 TOTAL_BUDGET - estimated,           // all sources combined
-    ourSpendSinceReport:  rl.ourSpend,                        // our spend since last API header
-    usedByOthers:         Math.max(0, TOTAL_BUDGET - rl.remaining - rl.ourSpend), // approx at time of last report
-    lastApiRemaining:     rl.remaining,
-    lastApiResetSec:      rl.resetSec,
-    lastUpdated:          rl.updatedAt || null,
+    remaining:   rl.remaining,
+    resetIn:     Math.round(Math.max(0, rl.resetSec - elapsed)),
+    totalBudget: TOTAL_BUDGET,
   };
 }
 
