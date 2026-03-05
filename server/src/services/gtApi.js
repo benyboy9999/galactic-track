@@ -28,6 +28,13 @@ function _updateFromHeaders(headers) {
 }
 
 function _estimated() {
+  // If the reset window has elapsed since the last header update, the rolling
+  // window has cleared — optimistically return full budget so a real call can
+  // get through and refresh the actual remaining count from response headers.
+  if (rl.updatedAt > 0) {
+    const elapsed = (Date.now() - rl.updatedAt) / 1000;
+    if (elapsed >= rl.resetSec) return TOTAL_BUDGET;
+  }
   return Math.max(0, rl.remaining - rl.ourSpend);
 }
 
