@@ -23,7 +23,7 @@ ssh "$SERVER" "
   npm ci --prefix server
 
   echo '→ Running DB migrations'
-  node server/src/database/init.js
+  cd server && node src/database/init.js && cd ..
 
   echo '→ Reloading app'
   pm2 reload galactic-track || pm2 start server/src/index.js --name galactic-track
