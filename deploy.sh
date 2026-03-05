@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-SERVER=${GT_SERVER:-"root@YOUR_DROPLET_IP"}
+SERVER=${GT_SERVER:-"root@galactic-track.com"}
 APP_DIR=${GT_APP_DIR:-"/opt/galactic-track"}
 
 echo "→ Deploying to $SERVER:$APP_DIR"
