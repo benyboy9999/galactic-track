@@ -65,7 +65,7 @@ router.post('/track', requireAuth, async (req, res, next) => {
 
     // Get item name from gamedata
     const gameData = await getGameData();
-    const item = Object.values(gameData.items ?? {}).find((i) => i.id === matId);
+    const item = (gameData.materials ?? []).find((i) => i.id === matId);
     if (!item) return res.status(404).json({ error: 'Item not found in gamedata' });
 
     await pool.query(
