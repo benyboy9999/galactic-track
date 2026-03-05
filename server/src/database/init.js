@@ -121,35 +121,11 @@ const schema = `
   );
 `;
 
-// Items that were previously hardcoded — seeded with no owner so the first
-// user to register can claim them via the normal credit flow.
-const LEGACY_ITEMS = [
-  { matId: 2,  matName: 'Iron'       },
-  { matId: 3,  matName: 'Concrete'   },
-  { matId: 8,  matName: 'Silica'     },
-  { matId: 34, matName: 'Limestone'  },
-  { matId: 92, matName: 'Prefab Kit' },
-];
-
 async function init() {
   const client = await pool.connect();
   try {
     await client.query(schema);
     console.log('Database schema initialized.');
-
-    // Seed legacy tracked items if tracked_items table is empty
-    const { rows } = await client.query('SELECT COUNT(*) FROM tracked_items');
-    if (Number(rows[0].count) === 0) {
-      for (const item of LEGACY_ITEMS) {
-        await client.query(
-          `INSERT INTO tracked_items(mat_id, mat_name, owner_user_id, active)
-           VALUES($1, $2, NULL, TRUE)
-           ON CONFLICT(mat_id) DO NOTHING`,
-          [item.matId, item.matName]
-        );
-      }
-      console.log(`Seeded ${LEGACY_ITEMS.length} legacy tracked items.`);
-    }
   } finally {
     client.release();
     await pool.end();

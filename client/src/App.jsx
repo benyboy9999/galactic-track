@@ -1,7 +1,8 @@
-import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation, Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Tracker from './pages/Tracker';
+import ItemGrid from './pages/ItemGrid';
 import Login from './pages/Login';
 import Admin from './pages/Admin';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -54,9 +55,10 @@ function Nav() {
 
   return (
     <nav>
-      <div className="nav-brand">GT-Tracker</div>
+      <Link to="/" style={{ textDecoration: 'none' }}><div className="nav-brand">GT-Tracker</div></Link>
       <div className="nav-links">
-        {user && <NavLink to="/tracker" end>Tracker</NavLink>}
+        {user && <NavLink to="/" end>Items</NavLink>}
+        {user && <NavLink to="/tracker">Tracker</NavLink>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         <TrackerCountdown />
@@ -101,7 +103,7 @@ export default function App() {
                 <Route path="/login" element={<Login />} />
                 <Route path="/admin" element={<Admin />} />
                 <Route path="/tracker" element={<RequireAuth><Tracker /></RequireAuth>} />
-                <Route path="/" element={<RequireAuth><Tracker /></RequireAuth>} />
+                <Route path="/" element={<RequireAuth><ItemGrid /></RequireAuth>} />
               </Routes>
             </ErrorBoundary>
           </main>

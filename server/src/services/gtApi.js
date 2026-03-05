@@ -1,8 +1,7 @@
 import fetch from 'node-fetch';
 import pool from '../database/db.js';
 
-const BASE    = process.env.GT_API_BASE;
-const API_KEY = process.env.GT_API_KEY; // fallback for non-tracker routes during transition
+const BASE = process.env.GT_API_BASE;
 
 const TOTAL_BUDGET = 500; // points per 10-min window per API key
 
@@ -89,7 +88,7 @@ async function dbSet(key, data) {
 
 // ── Core fetch ────────────────────────────────────────────────────────────────
 // apiKey defaults to the env-var fallback for non-tracker routes.
-async function gtFetch(path, units, apiKey = API_KEY) {
+async function gtFetch(path, units, apiKey = null) {
   if (_estimated(apiKey) < units) {
     const rl = getRl(apiKey);
     const resetIn = Math.round(Math.max(0, rl.resetSec - (Date.now() - rl.updatedAt) / 1000));
@@ -159,7 +158,7 @@ async function resilientFetch(cacheKey, units, ttl, apiFn) {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 // Returns rate limit status for one key (or the env fallback key).
-export function getRateLimitStatus(apiKey = API_KEY) {
+export function getRateLimitStatus(apiKey = null) {
   const rl = getRl(apiKey);
   const elapsed = rl.updatedAt ? (Date.now() - rl.updatedAt) / 1000 : 0;
   return {
@@ -197,8 +196,8 @@ export async function getCompanyInfo(apiKey) {
 }
 
 export { gtFetch };
-export function canAffordRateLimit(units, apiKey = API_KEY) { return _estimated(apiKey) >= units; }
-export function spendRateLimit(units, apiKey = API_KEY)     { getRl(apiKey).ourSpend += units; }
+export function canAffordRateLimit(units, apiKey = null) { return _estimated(apiKey) >= units; }
+export function spendRateLimit(units, apiKey = null)     { getRl(apiKey).ourSpend += units; }
 
 export async function getGameData() {
   return resilientFetch('gamedata', 1, TTL.gamedata, async () => {
