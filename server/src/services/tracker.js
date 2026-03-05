@@ -217,10 +217,14 @@ function diffOrderBooks(prevOrders, currOrders, matId, snapshotAId, snapshotBId)
 async function pollItem(item) {
   const data = await fetchMatDetails(item.matId);
 
-  // Extract intra-day qtySold accumulator from priceHistory
-  const todayHistory   = data.priceHistory?.[0] ?? null;
-  const apiQtySold     = todayHistory?.qtySold     ?? null;
-  const apiQtySoldDate = todayHistory?.date         ?? null;
+  // Extract intra-day qtySold accumulator from priceHistory.
+  // priceHistory is newest-first. We want today's live entry; fall back to [0]
+  // (most recent) so we still track across day boundaries correctly.
+  const todayStr     = new Date().toISOString().slice(0, 10);
+  const priceHistory = data.priceHistory ?? [];
+  const todayHistory = priceHistory.find((h) => h.date === todayStr) ?? priceHistory[0] ?? null;
+  const apiQtySold     = todayHistory?.qtySold ?? null;
+  const apiQtySoldDate = todayHistory?.date    ?? null;
 
   const client = await pool.connect();
   try {
@@ -230,6 +234,8 @@ async function pollItem(item) {
     const snapId   = await saveSnapshot(client, data, apiQtySold, apiQtySoldDate);
 
     let attributedSold = 0;
+    let qtyListed      = 0;
+    let qtyCancelled   = 0;
 
     if (prevSnap && prevSnap.orders) {
       const prevOrders = prevSnap.orders.map((o) => ({
@@ -258,10 +264,10 @@ async function pollItem(item) {
         const cancelled = events.filter((e) => e.eventType === 'cancelled');
         const restocked = events.filter((e) => e.eventType === 'restocked');
 
-        attributedSold               = sales.reduce((s, e) => s + Math.abs(e.qtyChange), 0);
-        const qtyListed    = newList.reduce((s, e) => s + e.qtyChange, 0) +
-                             restocked.reduce((s, e) => s + e.qtyChange, 0);
-        const qtyCancelled = cancelled.reduce((s, e) => s + Math.abs(e.qtyChange), 0);
+        attributedSold = sales.reduce((s, e) => s + Math.abs(e.qtyChange), 0);
+        qtyListed      = newList.reduce((s, e) => s + e.qtyChange, 0) +
+                         restocked.reduce((s, e) => s + e.qtyChange, 0);
+        qtyCancelled   = cancelled.reduce((s, e) => s + Math.abs(e.qtyChange), 0);
 
         const parts = [];
         if (attributedSold) parts.push(`${attributedSold.toLocaleString()} sold`);
@@ -273,7 +279,7 @@ async function pollItem(item) {
 
     // ── Flash sale reconciliation ─────────────────────────────────────────────
     // Compare intra-day API qtySold delta against diff-attributed sales.
-    // Skip if: dates differ (day rollover), either value is null, or window > 90s
+    // Skip if: dates differ (day rollover), either value is null, or window > 150s
     // (missed poll would inflate the gap).
     if (
       prevSnap &&
