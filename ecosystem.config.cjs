@@ -3,13 +3,13 @@
 //   pm2 start ecosystem.config.cjs   ← start
 //   pm2 save                          ← persist process list across reboots
 //   pm2 startup                       ← register PM2 with the OS init system
-//   pm2 logs galactic-tycoons         ← tail logs
-//   pm2 restart galactic-tycoons      ← restart after a code change
+//   pm2 logs galactic-track           ← tail logs
+//   pm2 restart galactic-track        ← restart after a code change
 
 module.exports = {
   apps: [
     {
-      name: 'galactic-tycoons',
+      name: 'galactic-track',
       script: 'src/index.js',
       cwd: __dirname + '/server',
       watch: false,
