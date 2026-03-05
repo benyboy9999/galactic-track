@@ -87,15 +87,15 @@ async function getLastSnapshot(matId) {
   const r = await pool.query(
     `SELECT s.id, s.total_qty_available, s.recorded_at,
             s.api_qty_sold, s.api_qty_sold_date,
-            json_agg(json_build_object(
+            COALESCE(json_agg(json_build_object(
               'orderId',     o.order_id,
               'companyId',   o.company_id,
               'companyName', o.company_name,
               'unitPrice',   o.unit_price,
               'qty',         o.qty
-            ) ORDER BY o.unit_price ASC, o.qty DESC) AS orders
+            ) ORDER BY o.unit_price ASC, o.qty DESC) FILTER (WHERE o.order_id IS NOT NULL), '[]') AS orders
      FROM tracker_snapshots s
-     JOIN tracker_orders o ON o.snapshot_id = s.id
+     LEFT JOIN tracker_orders o ON o.snapshot_id = s.id
      WHERE s.mat_id = $1
      GROUP BY s.id
      ORDER BY s.recorded_at DESC
@@ -282,7 +282,7 @@ async function pollItem(item) {
       prevSnap.api_qty_sold_date === apiQtySoldDate
     ) {
       const windowMs  = Date.now() - new Date(prevSnap.recorded_at).getTime();
-      if (windowMs <= 90_000) {
+      if (windowMs <= 150_000) {
         const deltaSold = apiQtySold - Number(prevSnap.api_qty_sold);
         const flash     = Math.max(0, deltaSold - attributedSold);
         if (flash > 0) {

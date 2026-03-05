@@ -34,4 +34,5 @@ export const api = {
   trackerAwards:        (matId, hours = 24) => get(`/tracker/awards/${matId}?hours=${hours}`),
   trackerPressure:      (matId) => get(`/tracker/pressure/${matId}`),
   trackerLatestBigOrder: (matId) => get(`/tracker/latest-big-order/${matId}`),
+  trackerCompanyEvents: (matId, company, hours = 24) => get(`/tracker/company-events/${matId}?company=${encodeURIComponent(company)}&hours=${hours}`),
 };

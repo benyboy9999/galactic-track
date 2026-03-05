@@ -192,8 +192,10 @@ const ACTIVITY_COLS = [
   { key: 'share_delta',    label: 'Growth'     },
 ];
 
-function CompanyActivity({ data, hours, color, onAwards, myCompany }) {
-  const [sort, setSort] = useState({ key: 'sales_pct', dir: 1 }); // desc by default
+function CompanyActivity({ data, hours, color, onAwards, myCompany, onCompanyClick }) {
+  const [sort,       setSort]       = useState({ key: 'sales_pct', dir: 1 });
+  const [hoveredRow, setHoveredRow] = useState(null);
+  const [showAll,    setShowAll]    = useState(false);
 
   if (!data || !data.rows.filter((r) => r.company_name !== 'Federal Reserve').length) {
     return <div style={{ color: '#3a3a55', fontSize: 12 }}>No company activity yet — collecting data.</div>;
@@ -201,6 +203,7 @@ function CompanyActivity({ data, hours, color, onAwards, myCompany }) {
 
   function toggleSort(key) {
     setSort((s) => s.key === key ? { key, dir: -s.dir } : { key, dir: -1 });
+    setShowAll(false);
   }
 
   const rows = data.rows.filter((r) => r.company_name !== 'Federal Reserve');
@@ -209,6 +212,8 @@ function CompanyActivity({ data, hours, color, onAwards, myCompany }) {
   const totalSold    = rows.reduce((s, r) => s + Number(r.qty_sold), 0);
   const prevTotalSold = rows.reduce((s, r) => s + Number(r.prev_qty_sold || 0), 0);
   const hasPrevData  = prevTotalSold > 0;
+
+  const PAGE = 20;
 
   const sorted = [...rows]
     .map((r) => {
@@ -234,11 +239,13 @@ function CompanyActivity({ data, hours, color, onAwards, myCompany }) {
     color: sort.key === key ? '#c0c0d8' : '#6b6b8a',
   });
 
+  const visible = showAll ? sorted : sorted.slice(0, PAGE);
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
-          Company activity — last {hours}h · click columns to sort
+          Company activity — last {hours}h · click columns to sort · click row for detail
         </div>
         {onAwards && (
           <button onClick={onAwards} style={{
@@ -250,6 +257,7 @@ function CompanyActivity({ data, hours, color, onAwards, myCompany }) {
       <table style={{ fontSize: 12, width: '100%' }}>
         <thead>
           <tr>
+            <th style={{ textAlign: 'left', color: '#3a3a55', width: 24 }}>#</th>
             <th style={{ textAlign: 'left', color: '#6b6b8a' }}>Company</th>
             {ACTIVITY_COLS.map(({ key, label }) => (
               <th key={key} style={thStyle(key)} onClick={() => toggleSort(key)}>
@@ -259,38 +267,63 @@ function CompanyActivity({ data, hours, color, onAwards, myCompany }) {
           </tr>
         </thead>
         <tbody>
-          {sorted.map((row, i) => (
-            <tr key={row.company_id} style={{ background: myCompany && row.company_name === myCompany ? 'rgba(251,191,36,0.08)' : i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
-              <td style={{ color: myCompany && row.company_name === myCompany ? '#fbbf24' : '#c0c0d8', fontWeight: 500 }}>{row.company_name}</td>
-              <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
-                  <ShareBar pct={row.sales_pct} color="#f87171" />
-                  <span style={{ color: row.sales_pct > 0 ? '#f87171' : '#3a3a55', minWidth: 38 }}>{row.sales_pct > 0 ? `${row.sales_pct}%` : '—'}</span>
-                </div>
-              </td>
-              <td style={{ textAlign: 'right', color: row.qty_sold > 0 ? '#f87171' : '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>
-                {row.qty_sold > 0 ? qty(row.qty_sold) : '—'}
-              </td>
-              <td style={{ textAlign: 'right', color: row.revenue > 0 ? '#fbbf24' : '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>
-                {row.revenue > 0 ? usdK(row.revenue) : '—'}
-              </td>
-              <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums' }}>
-                {row.avg_sale_price > 0 ? usd(row.avg_sale_price) : '—'}
-              </td>
-              <td style={{ textAlign: 'right', color: '#34d399', fontVariantNumeric: 'tabular-nums' }}>
-                {row.qty_placed > 0 ? `+${qty(row.qty_placed)}` : '—'}
-              </td>
-              <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                {qty(row.current_listed)}
-              </td>
-              <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums',
-                color: row.share_delta === null ? '#3a3a55' : row.share_delta > 0 ? '#34d399' : row.share_delta < 0 ? '#f87171' : '#6b6b8a' }}>
-                {row.share_delta === null ? '—' : row.share_delta > 0 ? `+${row.share_delta}%` : `${row.share_delta}%`}
-              </td>
-            </tr>
-          ))}
+          {visible.map((row, i) => {
+            const isMe      = myCompany && row.company_name === myCompany;
+            const isHovered = hoveredRow === row.company_id;
+            const bg = isMe      ? 'rgba(251,191,36,0.08)'
+                     : isHovered ? 'rgba(255,255,255,0.05)'
+                     : i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)';
+            return (
+              <tr
+                key={row.company_id}
+                style={{ background: bg, cursor: 'pointer' }}
+                onMouseEnter={() => setHoveredRow(row.company_id)}
+                onMouseLeave={() => setHoveredRow(null)}
+                onClick={() => onCompanyClick?.(row)}
+              >
+                <td style={{ color: '#3a3a55', paddingRight: 6, paddingBottom: 2 }}>{i + 1}</td>
+                <td style={{ color: isMe ? '#fbbf24' : '#c0c0d8', fontWeight: 500, paddingBottom: 2 }}>{row.company_name}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', paddingBottom: 2 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                    <ShareBar pct={row.sales_pct} color="#f87171" />
+                    <span style={{ color: row.sales_pct > 0 ? '#f87171' : '#3a3a55', minWidth: 38 }}>{row.sales_pct > 0 ? `${row.sales_pct}%` : '—'}</span>
+                  </div>
+                </td>
+                <td style={{ textAlign: 'right', color: row.qty_sold > 0 ? '#f87171' : '#3a3a55', fontVariantNumeric: 'tabular-nums', paddingBottom: 2 }}>
+                  {row.qty_sold > 0 ? qty(row.qty_sold) : '—'}
+                </td>
+                <td style={{ textAlign: 'right', color: row.revenue > 0 ? '#fbbf24' : '#3a3a55', fontVariantNumeric: 'tabular-nums', paddingBottom: 2 }}>
+                  {row.revenue > 0 ? usdK(row.revenue) : '—'}
+                </td>
+                <td style={{ textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums', paddingBottom: 2 }}>
+                  {row.avg_sale_price > 0 ? usd(row.avg_sale_price) : '—'}
+                </td>
+                <td style={{ textAlign: 'right', color: '#34d399', fontVariantNumeric: 'tabular-nums', paddingBottom: 2 }}>
+                  {row.qty_placed > 0 ? `+${qty(row.qty_placed)}` : '—'}
+                </td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', paddingBottom: 2 }}>
+                  {qty(row.current_listed)}
+                </td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', paddingBottom: 2,
+                  color: row.share_delta === null ? '#3a3a55' : row.share_delta > 0 ? '#34d399' : row.share_delta < 0 ? '#f87171' : '#6b6b8a' }}>
+                  {row.share_delta === null ? '—' : row.share_delta > 0 ? `+${row.share_delta}%` : `${row.share_delta}%`}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
+      {!showAll && sorted.length > PAGE && (
+        <button
+          onClick={() => setShowAll(true)}
+          style={{
+            marginTop: 8, padding: '3px 10px', fontSize: 11, borderRadius: 3, cursor: 'pointer',
+            border: '1px solid #1e1e3a', background: 'transparent', color: '#6b6b8a',
+          }}
+        >
+          View {sorted.length - PAGE} more
+        </button>
+      )}
       <div style={{ fontSize: 10, color: '#3a3a55', marginTop: 8 }}>
         Placed = new listings + restocks · Sold = confirmed fills at lowest price · Cancelled = removed while cheaper orders exist
       </div>
@@ -418,11 +451,14 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
   const [paxThreshold,    setPaxThreshold]    = useState(0.1);
   const [barDetail,       setBarDetail]       = useState(null); // { from, to, events, loading }
   const [patterns,        setPatterns]        = useState(null); // { byHour, byDow } | null=not loaded
-  const [patternsOpen,    setPatternsOpen]    = useState(false);
-  const [awardsOpen,      setAwardsOpen]      = useState(false);
-  const [awardsHours,     setAwardsHours]     = useState(24);
-  const [awardsData,      setAwardsData]      = useState(null);
-  const [awardsLoading,   setAwardsLoading]   = useState(false);
+  const [patternsOpen,      setPatternsOpen]      = useState(false);
+  const [awardsOpen,        setAwardsOpen]        = useState(false);
+  const [awardsHours,       setAwardsHours]       = useState(24);
+  const [awardsData,        setAwardsData]        = useState(null);
+  const [awardsLoading,     setAwardsLoading]     = useState(false);
+  const [companyModal,      setCompanyModal]      = useState(null); // { company_name } | null
+  const [companyEvents,     setCompanyEvents]     = useState([]);
+  const [companyEventsLoad, setCompanyEventsLoad] = useState(false);
   const activeBarIndex = useRef(null);
   const hasData = snapshots.length > 0;
 
@@ -471,6 +507,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
 
   const totalSold   = activity.reduce((s, r) => s + Number(r.qty_sold_since_prev), 0);
   const totalListed = activity.reduce((s, r) => s + Number(r.qty_listed_since_prev), 0);
+  const totalFlash  = activity.reduce((s, r) => s + Number(r.flash_qty || 0), 0);
   const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length) : 0;
 
   const compRows       = (companyActivity?.rows || []).filter((r) => r.company_name !== 'Federal Reserve');
@@ -534,6 +571,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
     },
     { label: 'Sold',        value: qty(totalSold),    color: '#f87171' },
     { label: 'Listed',      value: qty(totalListed),  color: '#34d399' },
+    { label: 'Flash sales', value: totalFlash > 0 ? qty(totalFlash) : '—', color: totalFlash > 0 ? '#f59e0b' : '#3a3a55' },
     { label: 'Sold/hr avg', value: qty(avgSold * 60), color: item.color },
     {
       label: 'Quick Sell Price',
@@ -577,6 +615,20 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
   function openAwards() {
     setAwardsOpen(true);
     if (!awardsData) loadAwards(awardsHours);
+  }
+
+  async function openCompany(row) {
+    setCompanyModal(row);
+    setCompanyEventsLoad(true);
+    setCompanyEvents([]);
+    try {
+      const data = await api.trackerCompanyEvents(item.matId, row.company_name, hours);
+      setCompanyEvents(data);
+    } catch {
+      setCompanyEvents([]);
+    } finally {
+      setCompanyEventsLoad(false);
+    }
   }
 
   async function handleBarClick(row) {
@@ -926,8 +978,31 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
 
       {/* Company activity */}
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '12px 14px' }}>
-        <CompanyActivity data={companyActivity} hours={hours} color={item.color} onAwards={openAwards} myCompany={myCompany} />
+        <CompanyActivity data={companyActivity} hours={hours} color={item.color} onAwards={openAwards} myCompany={myCompany} onCompanyClick={openCompany} />
       </div>
+
+      {/* Company events modal */}
+      {companyModal && (
+        <Modal title={companyModal.company_name} onClose={() => setCompanyModal(null)}>
+          {companyEventsLoad ? <Spinner /> : companyEvents.length === 0 ? (
+            <div style={{ color: '#3a3a55', fontSize: 12 }}>No events in this period.</div>
+          ) : (
+            <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {companyEvents.map((e, i) => {
+                const { text, color } = EVENT_LABEL[e.event_type] ?? { text: e.event_type, color: '#6b6b8a' };
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 12 }}>
+                    <span style={{ color: '#3a3a55', minWidth: 80, fontSize: 10, flexShrink: 0 }}>{fmtTime(e.recorded_at)}</span>
+                    <span style={{ color, minWidth: 70, flexShrink: 0 }}>{text}</span>
+                    <span style={{ color: '#e0e0f0', fontVariantNumeric: 'tabular-nums' }}>{qty(Number(e.qty))}</span>
+                    <span style={{ color: '#6b6b8a', fontVariantNumeric: 'tabular-nums' }}>@ {usd(e.unit_price)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

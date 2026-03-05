@@ -500,6 +500,29 @@ router.get('/pressure/:matId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/tracker/company-events/:matId?company=NAME&hours=24
+// All events for a specific company within the time window
+router.get('/company-events/:matId', async (req, res, next) => {
+  try {
+    const { matId } = req.params;
+    const { company, hours } = req.query;
+    if (!company) return res.status(400).json({ error: 'company is required' });
+    const h = Math.min(Number(hours) || 24, 720);
+
+    const r = await pool.query(
+      `SELECT event_type, ABS(qty_change) AS qty, unit_price, recorded_at
+       FROM tracker_events
+       WHERE mat_id = $1
+         AND company_name = $2
+         AND recorded_at > NOW() - ($3 || ' hours')::interval
+       ORDER BY recorded_at DESC
+       LIMIT 200`,
+      [matId, company, h]
+    );
+    res.json(r.rows);
+  } catch (err) { next(err); }
+});
+
 // GET /api/tracker/latest-big-order/:matId
 // Most recent new_listing or restocked event with qty > 1hr avg sales (6h baseline).
 router.get('/latest-big-order/:matId', async (req, res, next) => {
