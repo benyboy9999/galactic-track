@@ -1,7 +1,7 @@
-import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import Tracker from './pages/Tracker';
+import ItemDetail from './pages/ItemDetail';
 import ItemGrid from './pages/ItemGrid';
 import Login from './pages/Login';
 import Admin from './pages/Admin';
@@ -48,33 +48,153 @@ function TrackerCountdown() {
   );
 }
 
+// ── User settings modal ───────────────────────────────────────────────────────
+
+function SettingsModal({ onClose }) {
+  const { user, refreshUser } = useAuth();
+  const [untracking, setUntracking] = useState(null);
+  const [err, setErr] = useState('');
+
+  const creditsUsed  = user?.creditsUsed  ?? 0;
+  const creditsTotal = user?.creditsTotal ?? 3;
+  const trackedItems = user?.trackedItems ?? [];
+
+  async function handleUntrack(matId) {
+    setUntracking(matId);
+    setErr('');
+    try {
+      await api.untrackItem(matId);
+      await refreshUser();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setUntracking(null);
+    }
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end',
+        zIndex: 1000, paddingTop: 48, paddingRight: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 10,
+          padding: '16px 20px', minWidth: 280,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <span style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+            {user?.companyName}
+          </span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#6b6b8a', cursor: 'pointer', fontSize: 14, padding: 0 }}>✕</button>
+        </div>
+
+        {/* Credits */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Credits</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {Array.from({ length: creditsTotal }, (_, i) => (
+                <div key={i} style={{
+                  width: 12, height: 12, borderRadius: '50%',
+                  background: i < creditsUsed ? '#a78bfa' : '#2e2e5a',
+                  border: '1px solid ' + (i < creditsUsed ? '#7c3aed' : '#1e1e3a'),
+                }} />
+              ))}
+            </div>
+            <span style={{ color: '#6b6b8a', fontSize: 12 }}>{creditsUsed}/{creditsTotal} used</span>
+          </div>
+        </div>
+
+        {/* Tracked items */}
+        <div>
+          <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+            Your tracked items
+          </div>
+          {trackedItems.length === 0 ? (
+            <div style={{ color: '#3a3a55', fontSize: 12 }}>None — click any item to start tracking.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {trackedItems.map((ti) => (
+                <div key={ti.matId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ color: '#e0e0f0', fontSize: 13 }}>{ti.matName}</span>
+                  <button
+                    onClick={() => handleUntrack(ti.matId)}
+                    disabled={untracking === ti.matId}
+                    style={{
+                      background: 'none', border: '1px solid #2e2e5a', borderRadius: 4,
+                      padding: '2px 8px', color: '#6b6b8a', fontSize: 11,
+                      cursor: untracking === ti.matId ? 'not-allowed' : 'pointer',
+                      opacity: untracking === ti.matId ? 0.5 : 1,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {untracking === ti.matId ? '…' : 'Untrack'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {err && <p style={{ color: '#f87171', fontSize: 12, marginTop: 8 }}>{err}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Nav ───────────────────────────────────────────────────────────────────────
 
 function Nav() {
   const { user, logout } = useAuth();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const creditsUsed  = user?.creditsUsed  ?? 0;
+  const creditsTotal = user?.creditsTotal ?? 3;
 
   return (
-    <nav>
-      <Link to="/" style={{ textDecoration: 'none' }}><div className="nav-brand">GT-Tracker</div></Link>
-      <div className="nav-links">
-        {user && <NavLink to="/" end>Items</NavLink>}
-        {user && <NavLink to="/tracker">Tracker</NavLink>}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <TrackerCountdown />
-        {user && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
-            <span style={{ color: '#6b6b8a' }}>{user.companyName}</span>
+    <>
+      <nav>
+        <Link to="/" style={{ textDecoration: 'none' }}><div className="nav-brand">GT-Tracker</div></Link>
+        <div className="nav-links" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <TrackerCountdown />
+          {user && (
+            <button
+              onClick={() => setSettingsOpen(true)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                background: 'none', border: '1px solid #2e2e5a', borderRadius: 6,
+                padding: '3px 10px', color: '#6b6b8a', fontSize: 12, cursor: 'pointer',
+              }}
+            >
+              {Array.from({ length: creditsTotal }, (_, i) => (
+                <span key={i} style={{
+                  width: 7, height: 7, borderRadius: '50%',
+                  background: i < creditsUsed ? '#a78bfa' : '#2e2e5a',
+                  display: 'inline-block',
+                }} />
+              ))}
+              <span style={{ marginLeft: 2 }}>{user.companyName}</span>
+            </button>
+          )}
+          {user && (
             <button
               onClick={logout}
               style={{ background: 'none', border: '1px solid #2e2e5a', borderRadius: 4, padding: '3px 10px', color: '#6b6b8a', fontSize: 11, cursor: 'pointer' }}
             >
               Sign out
             </button>
-          </div>
-        )}
-      </div>
-    </nav>
+          )}
+        </div>
+      </nav>
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+    </>
   );
 }
 
@@ -84,7 +204,7 @@ function RequireAuth({ children }) {
   const { user, ready } = useAuth();
   const location = useLocation();
 
-  if (!ready) return null; // wait for session check
+  if (!ready) return null;
   if (!user)  return <Navigate to="/login" state={{ from: location }} replace />;
   return children;
 }
@@ -102,7 +222,7 @@ export default function App() {
               <Routes>
                 <Route path="/login" element={<Login />} />
                 <Route path="/admin" element={<Admin />} />
-                <Route path="/tracker" element={<RequireAuth><Tracker /></RequireAuth>} />
+                <Route path="/item/:matId" element={<RequireAuth><ItemDetail /></RequireAuth>} />
                 <Route path="/" element={<RequireAuth><ItemGrid /></RequireAuth>} />
               </Routes>
             </ErrorBoundary>
