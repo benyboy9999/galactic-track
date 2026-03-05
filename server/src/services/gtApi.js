@@ -100,8 +100,8 @@ async function gtFetch(path, units) {
     throw err;
   }
 
-  const headers = API_KEY ? { 'X-API-Key': API_KEY } : {};
-  const res = await fetch(`${BASE}${path}`, { headers });
+  const url = `${BASE}${path}${API_KEY ? `${path.includes('?') ? '&' : '?'}apikey=${API_KEY}` : ''}`;
+  const res = await fetch(url);
 
   // Always read rate limit headers — present on both 200 and 429
   _updateFromHeaders(res.headers);
