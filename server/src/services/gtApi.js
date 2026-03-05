@@ -4,41 +4,32 @@ import pool from '../database/db.js';
 const BASE    = process.env.GT_API_BASE;
 const API_KEY = process.env.GT_API_KEY;
 
-// ── Rate limiter ──────────────────────────────────────────────────────────────
-// GT API budget: 500 units / 10 min with API key = 250 / 5 min. We target 230 to keep a buffer.
-class RateLimiter {
-  constructor(maxUnits = 230, windowMs = 5 * 60 * 1000) {
-    this.maxUnits  = maxUnits;
-    this.windowMs  = windowMs;
-    this.usage     = []; // [{ ts, units, path }]
-  }
+const TOTAL_BUDGET = 500; // points per 10-min rolling window (with API key)
 
-  _prune() {
-    const cutoff = Date.now() - this.windowMs;
-    this.usage = this.usage.filter((u) => u.ts > cutoff);
-  }
+// ── API-driven rate limit state ───────────────────────────────────────────────
+// We read `rate-remaining` and `rate-reset` headers from every GT API response
+// (present on both 200 and 429). Between responses we subtract our own spend
+// locally as a conservative estimate.
+let rl = {
+  remaining:  TOTAL_BUDGET, // last API-reported remaining (rate-remaining header)
+  resetSec:   600,          // last API-reported seconds to window reset (rate-reset header)
+  updatedAt:  0,            // Date.now() when we last got a header update
+  ourSpend:   0,            // points WE have spent since last header update
+};
 
-  used()      { this._prune(); return this.usage.reduce((s, u) => s + u.units, 0); }
-  available() { return this.maxUnits - this.used(); }
-  canAfford(units) { return this.available() >= units; }
-
-  spend(units, path) {
-    this.usage.push({ ts: Date.now(), units, path });
-    console.log(`[rate] spent ${units} on ${path} — ${this.available()} remaining in window`);
-  }
-
-  status() {
-    this._prune();
-    const used = this.used();
-    const oldest = this.usage[0];
-    const resetsIn = oldest
-      ? Math.max(0, Math.ceil((oldest.ts + this.windowMs - Date.now()) / 1000))
-      : 0;
-    return { used, available: this.maxUnits - used, max: this.maxUnits, resetsIn };
+function _updateFromHeaders(headers) {
+  const rem   = headers.get('rate-remaining');
+  const reset = headers.get('rate-reset');
+  if (rem !== null) {
+    rl = { remaining: Number(rem), resetSec: reset !== null ? Number(reset) : rl.resetSec, updatedAt: Date.now(), ourSpend: 0 };
+  } else if (reset !== null) {
+    rl.resetSec = Number(reset);
   }
 }
 
-const rl = new RateLimiter();
+function _estimated() {
+  return Math.max(0, rl.remaining - rl.ourSpend);
+}
 
 // ── In-flight deduplication ───────────────────────────────────────────────────
 // Ensures concurrent requests for the same key share one in-flight fetch.
@@ -92,10 +83,10 @@ async function dbSet(key, data) {
 
 // ── Core fetch ────────────────────────────────────────────────────────────────
 async function gtFetch(path, units) {
-  if (!rl.canAfford(units)) {
+  if (_estimated() < units) {
+    const resetIn = Math.round(Math.max(0, rl.resetSec - (Date.now() - rl.updatedAt) / 1000));
     const err = new Error(
-      `Rate budget exceeded (${rl.available()} / ${units} units needed). ` +
-      `Resets in ~${rl.status().resetsIn}s.`
+      `Rate budget insufficient — estimated ${_estimated()} remaining (need ${units}). Resets in ~${resetIn}s.`
     );
     err.status = 429;
     err.rateLimited = true;
@@ -105,8 +96,13 @@ async function gtFetch(path, units) {
   const headers = API_KEY ? { 'X-API-Key': API_KEY } : {};
   const res = await fetch(`${BASE}${path}`, { headers });
 
+  // Always read rate limit headers — present on both 200 and 429
+  _updateFromHeaders(res.headers);
+
   if (res.status === 429) {
-    const err = new Error('GT API returned 429 — rate limit hit at the source.');
+    const err = new Error(
+      `GT API rate limit hit — ${rl.remaining} remaining, resets in ${rl.resetSec}s.`
+    );
     err.status = 429;
     err.rateLimited = true;
     throw err;
@@ -116,7 +112,7 @@ async function gtFetch(path, units) {
     throw Object.assign(new Error(`GT API ${res.status}: ${text}`), { status: res.status });
   }
 
-  rl.spend(units, path);
+  rl.ourSpend += units;
   return res.json();
 }
 
@@ -164,13 +160,26 @@ async function resilientFetch(key, units, ttl, apiFn) {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function getRateLimitStatus() {
-  return rl.status();
+  const elapsed   = rl.updatedAt ? (Date.now() - rl.updatedAt) / 1000 : 0;
+  const resetIn   = Math.round(Math.max(0, rl.resetSec - elapsed));
+  const estimated = _estimated();
+  return {
+    remaining:            estimated,
+    resetIn,
+    totalBudget:          TOTAL_BUDGET,
+    used:                 TOTAL_BUDGET - estimated,           // all sources combined
+    ourSpendSinceReport:  rl.ourSpend,                        // our spend since last API header
+    usedByOthers:         Math.max(0, TOTAL_BUDGET - rl.remaining - rl.ourSpend), // approx at time of last report
+    lastApiRemaining:     rl.remaining,
+    lastApiResetSec:      rl.resetSec,
+    lastUpdated:          rl.updatedAt || null,
+  };
 }
 
-// Expose rate limiter primitives so tracker.js can register its API calls
-// with the shared budget — preventing double-counting against the 200-unit limit.
-export function canAffordRateLimit(units) { return rl.canAfford(units); }
-export function spendRateLimit(units, path) { rl.spend(units, path); }
+// Used by tracker.js to route through the same fetch + rate state
+export { gtFetch };
+export function canAffordRateLimit(units) { return _estimated() >= units; }
+export function spendRateLimit(units)     { rl.ourSpend += units; }
 
 export async function getGameData() {
   return resilientFetch('gamedata', 1, TTL.gamedata, async () => {

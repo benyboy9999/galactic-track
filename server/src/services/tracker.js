@@ -18,12 +18,8 @@
  * /api/ratelimit indicator stays accurate.
  */
 
-import fetch from 'node-fetch';
 import pool from '../database/db.js';
-import { spendRateLimit, canAffordRateLimit } from './gtApi.js';
-
-const BASE    = process.env.GT_API_BASE;
-const API_KEY = process.env.GT_API_KEY;
+import { gtFetch } from './gtApi.js';
 
 // ── Game price increment lookup ────────────────────────────────────────────────
 // Prices stored in cents (unitPrice × 100). Increments match GT exchange tiers.
@@ -58,27 +54,8 @@ let lastPollAt     = null;
 
 // ── API fetch ──────────────────────────────────────────────────────────────────
 
-async function fetchMatDetails(matId) {
-  if (!canAffordRateLimit(UNITS_PER_ITEM)) {
-    throw Object.assign(
-      new Error(`Rate budget insufficient for tracker poll (need ${UNITS_PER_ITEM} units)`),
-      { rateLimited: true }
-    );
-  }
-
-  const headers = API_KEY ? { 'X-API-Key': API_KEY } : {};
-  const res = await fetch(`${BASE}/public/exchange/mat-details/${matId}`, { headers });
-
-  if (res.status === 429) {
-    throw Object.assign(new Error('GT API 429 — tracker backing off'), { rateLimited: true });
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`GT API ${res.status} for matId ${matId}: ${text}`);
-  }
-
-  spendRateLimit(UNITS_PER_ITEM, `/public/exchange/mat-details/${matId}`);
-  return res.json();
+function fetchMatDetails(matId) {
+  return gtFetch(`/public/exchange/mat-details/${matId}`, UNITS_PER_ITEM);
 }
 
 // ── DB helpers ─────────────────────────────────────────────────────────────────

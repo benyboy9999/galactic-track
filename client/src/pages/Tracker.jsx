@@ -1012,6 +1012,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
 export default function Tracker() {
   const [hours,        setHours]       = useState(24);
   const [status,       setStatus]      = useState(null);
+  const [rateLimit,    setRateLimit]   = useState(null);
   const [activeTab,    setActiveTab]   = useState(ITEMS[0].matId);
   const [refreshTick,  setRefreshTick] = useState(0);
   const [myCompany,    setMyCompany]   = useState(() => localStorage.getItem('gt_my_company') ?? '');
@@ -1028,8 +1029,9 @@ export default function Tracker() {
 
   const loadStatus = useCallback(async () => {
     try {
-      const s = await api.trackerStatus();
+      const [s, rl] = await Promise.all([api.trackerStatus(), api.ratelimit()]);
       setStatus(s);
+      setRateLimit(rl);
       if (s.lastPollAt && prevLastPollAt.current !== null && s.lastPollAt !== prevLastPollAt.current) {
         setRefreshTick((t) => t + 1);
       }
@@ -1068,9 +1070,25 @@ export default function Tracker() {
         {status && (
           <span style={{ fontSize: 11, color: '#3a3a55', marginLeft: 8 }}>
             {status.running ? '●' : '○'} {status.pollCount} polls
-{status.lastError && <span style={{ color: '#f87171', marginLeft: 6 }}>{status.lastError.item} error</span>}
+            {status.lastError && <span style={{ color: '#f87171', marginLeft: 6 }}>{status.lastError.item} error</span>}
           </span>
         )}
+        {rateLimit && (() => {
+          const pct     = rateLimit.remaining / rateLimit.totalBudget;
+          const barColor = pct > 0.4 ? '#34d399' : pct > 0.15 ? '#f59e0b' : '#f87171';
+          const others  = rateLimit.usedByOthers;
+          return (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 12, fontSize: 11 }}>
+              <span style={{ color: '#3a3a55' }}>API</span>
+              <span style={{ width: 60, height: 4, background: '#1e1e3a', borderRadius: 2, overflow: 'hidden', display: 'inline-block' }}>
+                <span style={{ display: 'block', width: `${pct * 100}%`, height: '100%', background: barColor, borderRadius: 2 }} />
+              </span>
+              <span style={{ color: barColor, fontVariantNumeric: 'tabular-nums' }}>{rateLimit.remaining}/{rateLimit.totalBudget}</span>
+              <span style={{ color: '#3a3a55' }}>reset {rateLimit.resetIn}s</span>
+              {others > 0 && <span style={{ color: '#f59e0b' }} title="Points used by other API consumers on this key">~{others} other</span>}
+            </span>
+          );
+        })()}
 
         <div style={{ flex: 1 }} />
 
