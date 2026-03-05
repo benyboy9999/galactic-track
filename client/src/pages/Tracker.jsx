@@ -62,6 +62,13 @@ const fmtTime = (iso) => {
   if (!iso) return '';
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
+const fmtDateTime = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const date = d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return `${date} · ${time}`;
+};
 
 // ── Tooltips ───────────────────────────────────────────────────────────────────
 
@@ -999,7 +1006,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
                 const { text, color } = EVENT_LABEL[e.event_type] ?? { text: e.event_type, color: '#6b6b8a' };
                 return (
                   <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 12 }}>
-                    <span style={{ color: '#3a3a55', minWidth: 80, fontSize: 10, flexShrink: 0 }}>{fmtTime(e.recorded_at)}</span>
+                    <span style={{ color: '#3a3a55', minWidth: 110, fontSize: 10, flexShrink: 0 }}>{fmtDateTime(e.recorded_at)}</span>
                     <span style={{ color, minWidth: 70, flexShrink: 0 }}>{text}</span>
                     <span style={{ color: '#e0e0f0', fontVariantNumeric: 'tabular-nums' }}>{qty(Number(e.qty))}</span>
                     <span style={{ color: '#6b6b8a', fontVariantNumeric: 'tabular-nums' }}>@ {usd(e.unit_price)}</span>
