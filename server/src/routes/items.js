@@ -12,11 +12,15 @@ router.get('/', async (req, res, next) => {
   try {
     const gameData = await getGameData();
 
+    const SOURCE_LABEL = { 1: 'Raw', 2: 'Manufactured', 3: 'Special' };
+
     // Build a flat list of all materials from gamedata
-    const materials = [];
-    for (const [, item] of Object.entries(gameData.items ?? {})) {
-      materials.push({ matId: item.id, matName: item.name, category: item.category ?? null });
-    }
+    const materials = (gameData.materials ?? []).map((item) => ({
+      matId:    item.id,
+      matName:  item.name,
+      category: SOURCE_LABEL[item.source] ?? null,
+      tier:     item.tier ?? null,
+    }));
     materials.sort((a, b) => a.matName.localeCompare(b.matName));
 
     // Overlay which are actively tracked

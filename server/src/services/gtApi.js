@@ -282,6 +282,37 @@ async function storePriceSnapshot(prices) {
   }
 }
 
+// ── Sprite URL discovery ──────────────────────────────────────────────────────
+// The game's SVG sprite has a content-hash filename that changes on deploys.
+// We auto-discover it: HTML → main JS URL → sprite filename. Cached 1 hour.
+
+const GAME_ORIGIN = 'https://g2.galactictycoons.com';
+let spriteCache = null; // { url, ts }
+const SPRITE_TTL = 60 * 60 * 1000;
+
+export async function getSpriteUrl() {
+  if (spriteCache && Date.now() - spriteCache.ts < SPRITE_TTL) {
+    return spriteCache.url;
+  }
+  try {
+    const html    = await fetch(GAME_ORIGIN).then((r) => r.text());
+    const mainJs  = html.match(/\/assets\/main-[^"']+\.js/)?.[0];
+    if (!mainJs) throw new Error('main JS not found in HTML');
+
+    const js      = await fetch(GAME_ORIGIN + mainJs).then((r) => r.text());
+    const sprite  = js.match(/sprite-[A-Za-z0-9_-]+\.svg/)?.[0];
+    if (!sprite) throw new Error('sprite filename not found in JS');
+
+    const url = `${GAME_ORIGIN}/assets/${sprite}`;
+    spriteCache = { url, ts: Date.now() };
+    console.log(`[sprite] discovered: ${url}`);
+    return url;
+  } catch (err) {
+    console.warn('[sprite] discovery failed:', err.message);
+    return null;
+  }
+}
+
 export async function getPriceHistory(matId, days = 30) {
   const res = await pool.query(
     `SELECT date_trunc('hour', recorded_at) AS hour,

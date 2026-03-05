@@ -3,3 +3,4 @@ server/public/
 server/.env
 *.sql
 ecosystem.config.cjs~
+server/sprite-cache.svg

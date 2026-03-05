@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 
+const IS_DEV = import.meta.env.DEV;
+
 export default function Login() {
   const [apiKey,  setApiKey]  = useState('');
   const [err,     setErr]     = useState('');
@@ -17,7 +19,7 @@ export default function Login() {
     try {
       const data = await api.login(apiKey.trim());
       login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal);
-      navigate('/tracker', { replace: true });
+      navigate('/', { replace: true });
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -88,6 +90,32 @@ export default function Login() {
         <p style={{ margin: '20px 0 0', fontSize: 11, color: '#3a3a55', textAlign: 'center' }}>
           Your API key is stored securely server-side and never exposed to other users.
         </p>
+
+        {IS_DEV && (
+          <button
+            onClick={async () => {
+              setLoading(true);
+              setErr('');
+              try {
+                const data = await api.devLogin();
+                login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal);
+                navigate('/', { replace: true });
+              } catch (e) {
+                setErr(e.message);
+              } finally {
+                setLoading(false);
+              }
+            }}
+            disabled={loading}
+            style={{
+              marginTop: 12, width: '100%', background: 'none',
+              border: '1px dashed #2e2e5a', borderRadius: 5, padding: '8px 0',
+              color: '#3a3a55', fontSize: 12, cursor: 'pointer',
+            }}
+          >
+            Dev login (local only)
+          </button>
+        )}
       </div>
     </div>
   );

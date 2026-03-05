@@ -109,4 +109,32 @@ router.post('/logout', requireAuth, async (req, res, next) => {
   }
 });
 
+// POST /api/auth/dev-login
+// DEV ONLY — creates/reuses a local test user without a real GT API key.
+// Always returns 404 in production.
+router.post('/dev-login', async (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  try {
+    const upsert = await pool.query(
+      `INSERT INTO users(api_key, session_token, company_id, company_name, last_seen)
+       VALUES($1, $2, $3, $4, NOW())
+       ON CONFLICT(api_key) DO UPDATE
+         SET last_seen = NOW(), revoked = FALSE
+       RETURNING id, session_token, credits_used`,
+      ['dev-local', randomUUID(), '0', 'Dev User']
+    );
+    const user = upsert.rows[0];
+    res.json({
+      sessionToken: user.session_token,
+      companyName:  'Dev User',
+      creditsUsed:  user.credits_used,
+      creditsTotal: CREDITS_TOTAL,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

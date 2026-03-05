@@ -3,6 +3,65 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 
+// Manual overrides where API name ≠ sprite ID
+const ICON_OVERRIDES = {
+  // Plural → singular
+  'Cows':                             'Cow',
+  'Chickens':                         'Chicken',
+  // Spelling / abbreviation differences
+  'Copper Wire':                      'CopperWiring',
+  'Consumer Electronics':             'Electronics',
+  'Electric Motor':                   'Motor',
+  'Artificial Intelligence':          'AI',
+  'Advanced Processing Unit':         'APU',
+  'Nanites':                          'Nanobots',
+  'Bio-Nutrient Blend':               'NutrientBlend',
+  'Hydrogen Fuel':                    'HydrogenFuelCell',
+  'Superconducting Coil':             'HyperCoil',
+  'Field Cooling System':             'FieldCooling',
+  // API name lacks tier prefix that sprite has
+  'Iron':                             'IronBar',
+  'Copper':                           'CopperBar',
+  'Rations':                          'BasicRations',
+  'Exosuit':                          'BasicExosuit',
+  'Tools':                            'BasicTools',
+  'Construction Kit':                 'BasicConstructionKit',
+  'Prefab Kit':                       'BasicPrefabKit',
+  'Amenities':                        'BasicAmenities',
+  'Hull Plate':                       'BasicHullPlate',
+  'Linear FTL Emitter':               'BasicFTLEmitter',
+  'Truss':                            'ReinforcedTruss',
+  'Titanium Carbide Drill':           'AdvancedDrill',
+  // Ship bridges (T1 → T4)
+  'Shuttle Bridge':                   'BasicShipBridge',
+  'Hauler Bridge':                    'AdvancedShipBridge',
+  'Freighter Bridge':                 'T4ShipBridge',
+  // FTL tiers
+  'Quantum FTL Emitter':              'AdvancedFTLEmitter',
+  'Extra-dimensional FTL Emitter':    'SuperiorFTLEmitter',
+  // Ship elements
+  'Starlifter Structural Elements':   'T4ShipElements',
+  // Renamed / unexpected sprite IDs
+  'Molecular Fusion Kit':             'WeldingKit2',
+  'Ethanol':                          'Gasoline',
+  'Graphenium Wire':                  'Superconductors',
+  'Starglass Hull Plate':             'QuadraniumHullPlate',
+  // Pack / shipment items
+  'Medicine Shipment':                'Pack_Medicine',
+  'Food Shipment':                    'Pack_Food',
+  'Ship Parts Shipment':              'Pack_ShipParts',
+  'Defense systems pack':             'Pack_Defense',
+  'Habitats Shipment':                'Pack_Habitats',
+  'Scientific Instruments Shipment':  'Pack_Scientific',
+  'Gifts':                            'Pack_Gifts',
+};
+
+// "Basic Construction Kit" → "BasicConstructionKit"
+function toIconId(name) {
+  if (ICON_OVERRIDES[name]) return ICON_OVERRIDES[name];
+  return name.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+}
+
 function CreditPips({ used, total }) {
   return (
     <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
@@ -26,10 +85,12 @@ export default function ItemGrid() {
   const [search,     setSearch]     = useState('');
   const [confirming, setConfirming] = useState(null); // item obj being confirmed
   const [working,    setWorking]    = useState(null); // matId being tracked
-
   const creditsUsed  = user?.creditsUsed  ?? 0;
   const creditsTotal = user?.creditsTotal ?? 3;
   const full = creditsUsed >= creditsTotal;
+
+  // Same-origin proxy — avoids cross-origin SVG <use> CORS block
+  const spriteUrl = '/api/gamedata/sprite';
 
   const loadItems = useCallback(async () => {
     try {
@@ -152,11 +213,25 @@ export default function ItemGrid() {
                 onMouseEnter={(e) => { if (clickable) e.currentTarget.style.borderColor = isMine ? '#c4b5fd' : '#4a4a8a'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.borderColor = borderColor; }}
               >
+                {spriteUrl && (
+                  <svg width="36" height="36" style={{ flexShrink: 0 }}>
+                    <use href={`${spriteUrl}#${toIconId(item.matName)}`} width="36" height="36" />
+                  </svg>
+                )}
                 <span style={{ fontSize: 13, fontWeight: 500, color: nameColor, lineHeight: 1.3 }}>
                   {item.matName}
                 </span>
 
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 'auto' }}>
+                  {item.tier && (
+                    <span style={{
+                      fontSize: 10, color: '#4a4a6a',
+                      background: '#13132a', border: '1px solid #1e1e3a',
+                      borderRadius: 4, padding: '1px 6px',
+                    }}>
+                      T{item.tier}
+                    </span>
+                  )}
                   {item.category && (
                     <span style={{
                       fontSize: 10, color: '#4a4a6a',
