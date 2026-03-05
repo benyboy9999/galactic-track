@@ -333,7 +333,7 @@ router.get('/recent/:matId', async (req, res, next) => {
        FROM tracker_events
        WHERE mat_id = $1
          AND company_name != 'Federal Reserve'
-       ORDER BY recorded_at DESC
+       ORDER BY recorded_at DESC, unit_price ASC, order_id ASC
        LIMIT $2`,
       [matId, limit]
     );

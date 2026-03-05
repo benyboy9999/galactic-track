@@ -435,7 +435,7 @@ function groupActivity(data, groupBy) {
   return [...buckets.values()];
 }
 
-function ItemPanel({ item, hours, refreshTick, myCompany }) {
+function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
   const [snapshots,       setSnapshots]       = useState([]);
   const [activity,        setActivity]        = useState([]);
   const [companyActivity, setCompanyActivity] = useState(null);
@@ -489,6 +489,13 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
   }, [item.matId, hours, refreshTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!onPollCount) return;
+    const cutoff = Date.now() - hours * 3_600_000;
+    const count = snapshots.filter((s) => new Date(s.recorded_at).getTime() >= cutoff).length;
+    onPollCount(count);
+  }, [snapshots, hours, onPollCount]);
 
   if (loading) return <div style={{ padding: 32 }}><Spinner /></div>;
   if (error)   return <div style={{ padding: 16, color: '#f87171', fontSize: 13 }}>{error}</div>;
@@ -1010,11 +1017,12 @@ function ItemPanel({ item, hours, refreshTick, myCompany }) {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function Tracker() {
-  const [hours,        setHours]       = useState(24);
-  const [status,       setStatus]      = useState(null);
-  const [rateLimit,    setRateLimit]   = useState(null);
-  const [activeTab,    setActiveTab]   = useState(ITEMS[0].matId);
-  const [refreshTick,  setRefreshTick] = useState(0);
+  const [hours,          setHours]         = useState(24);
+  const [status,         setStatus]        = useState(null);
+  const [rateLimit,      setRateLimit]     = useState(null);
+  const [activeTab,      setActiveTab]     = useState(ITEMS[0].matId);
+  const [refreshTick,    setRefreshTick]   = useState(0);
+  const [pollsInWindow,  setPollsInWindow] = useState(null);
 
   const [myCompany,    setMyCompany]   = useState(() => localStorage.getItem('gt_my_company') ?? '');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1068,12 +1076,17 @@ export default function Tracker() {
           </button>
         ))}
 
-        {status && (
-          <span style={{ fontSize: 11, color: '#3a3a55', marginLeft: 8 }}>
-            {status.running ? '●' : '○'} {status.pollCount} polls
-            {status.lastError && <span style={{ color: '#f87171', marginLeft: 6 }}>{status.lastError.item} error</span>}
-          </span>
-        )}
+        {status && (() => {
+          const expected = status.intervalMs ? Math.round(hours * 3_600_000 / status.intervalMs) : null;
+          const pct = pollsInWindow !== null && expected ? Math.round(pollsInWindow / expected * 100) : null;
+          return (
+            <span style={{ fontSize: 11, color: '#3a3a55', marginLeft: 8, fontVariantNumeric: 'tabular-nums' }}>
+              {status.running ? '●' : '○'} {pollsInWindow ?? '—'}/{expected ?? '—'}
+              {pct !== null && <span style={{ color: '#2a2a45', marginLeft: 4 }}>({pct}%)</span>}
+              {status.lastError && <span style={{ color: '#f87171', marginLeft: 6 }}>{status.lastError.item} error</span>}
+            </span>
+          );
+        })()}
         {rateLimit && (
           <span style={{ fontSize: 11, color: '#3a3a55', marginLeft: 8, fontVariantNumeric: 'tabular-nums' }}>
             {rateLimit.remaining}/{rateLimit.totalBudget} pts · {rateLimit.resetIn}s
@@ -1119,7 +1132,7 @@ export default function Tracker() {
       )}
 
       {activeItem && (
-        <ItemPanel key={`${activeItem.matId}-${hours}`} item={activeItem} hours={hours} refreshTick={refreshTick} myCompany={myCompany} />
+        <ItemPanel key={`${activeItem.matId}-${hours}`} item={activeItem} hours={hours} refreshTick={refreshTick} myCompany={myCompany} onPollCount={setPollsInWindow} />
       )}
 
       <div style={{ color: '#3a3a55', fontSize: 10, marginTop: 10 }}>
