@@ -40,18 +40,35 @@ router.get('/', async (req, res, next) => {
     const filtered = materials.filter((m) => m.tier !== 9);
 
     // Overlay which are actively tracked
-    const tracked = await pool.query(
-      `SELECT ti.mat_id, u.company_name
-       FROM tracked_items ti
-       LEFT JOIN users u ON u.id = ti.owner_user_id
-       WHERE ti.active = TRUE`
-    );
-    const trackedMap = new Map(tracked.rows.map((r) => [r.mat_id, r.company_name ?? null]));
+    const [tracked, snapCounts] = await Promise.all([
+      pool.query(
+        `SELECT ti.mat_id, u.company_name
+         FROM tracked_items ti
+         LEFT JOIN users u ON u.id = ti.owner_user_id
+         WHERE ti.active = TRUE`
+      ),
+      pool.query(
+        `SELECT mat_id, COUNT(*)::int AS count
+         FROM tracker_snapshots
+         WHERE recorded_at > NOW() - INTERVAL '24 hours'
+         GROUP BY mat_id`
+      ),
+    ]);
+
+    const POLL_INTERVAL_MS  = 60_000;
+    const EXPECTED_24H      = Math.round(24 * 3_600_000 / POLL_INTERVAL_MS); // 1440
+    const DATA_READY_THRESH = EXPECTED_24H * 0.8;
+
+    const trackedMap   = new Map(tracked.rows.map((r) => [r.mat_id, r.company_name ?? null]));
+    const snapCountMap = new Map(snapCounts.rows.map((r) => [r.mat_id, r.count]));
 
     const result = filtered.map((m) => ({
       ...m,
       tracked:   trackedMap.has(m.matId),
       trackedBy: trackedMap.get(m.matId) ?? null,
+      dataReady: trackedMap.has(m.matId)
+        ? (snapCountMap.get(m.matId) ?? 0) >= DATA_READY_THRESH
+        : false,
     }));
 
     res.json(result);

@@ -186,15 +186,10 @@ export default function ItemGrid() {
           {item.matName}
         </span>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 'auto' }}>
-          {item.tier && (
-            <span style={{ fontSize: 10, color: '#3a3a5a', background: '#0d0d1e', border: '1px solid #1a1a30', borderRadius: 4, padding: '1px 6px' }}>
-              T{item.tier}
-            </span>
-          )}
           {item.tracked && (
-            <span style={{ fontSize: 10, color: '#5a5a7a', background: '#0d0d22', border: '1px solid #2e2e5a', borderRadius: 4, padding: '1px 6px' }}>
-              Tracked
-            </span>
+            item.dataReady
+              ? <span style={{ fontSize: 10, color: '#34d399', background: '#0a1f18', border: '1px solid #065f46', borderRadius: 4, padding: '1px 6px' }}>Active</span>
+              : <span style={{ fontSize: 10, color: '#a78bfa', background: '#1e1440', border: '1px solid #4c1d95', borderRadius: 4, padding: '1px 6px' }}>Recently added</span>
           )}
         </div>
       </div>
