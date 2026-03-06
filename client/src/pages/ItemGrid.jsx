@@ -74,6 +74,10 @@ export default function ItemGrid() {
   const [tierFilter,  setTierFilter]  = useState(null);  // null = all
   const [catFilter,   setCatFilter]   = useState('');    // '' = all
   const [promoteOpen, setPromoteOpen] = useState(false);
+  const [favourites,  setFavourites]  = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('gt-favourites') ?? '[]')); }
+    catch { return new Set(); }
+  });
 
   const spriteUrl   = '/api/gamedata/sprite';
   const creditsUsed = user?.creditsUsed ?? 0;
@@ -112,7 +116,18 @@ export default function ItemGrid() {
     });
   }, [items, search, tierFilter, catFilter]);
 
-  const trackedItems   = filtered.filter((i) => i.tracked);
+  function toggleFavourite(e, matId) {
+    e.stopPropagation();
+    setFavourites((prev) => {
+      const next = new Set(prev);
+      next.has(matId) ? next.delete(matId) : next.add(matId);
+      localStorage.setItem('gt-favourites', JSON.stringify([...next]));
+      return next;
+    });
+  }
+
+  const trackedItems   = filtered.filter((i) => i.tracked)
+    .sort((a, b) => (favourites.has(b.matId) ? 1 : 0) - (favourites.has(a.matId) ? 1 : 0));
   const untrackedItems = filtered.filter((i) => !i.tracked);
 
   function handleCardClick(item) {
@@ -124,28 +139,24 @@ export default function ItemGrid() {
   }
 
   function ItemCard({ item }) {
-    const isMine     = item.tracked && item.trackedBy === user?.companyName;
-    const isOthers   = item.tracked && !isMine;
     const isUntracked = !item.tracked;
+    const isFav = favourites.has(item.matId);
 
-    let borderColor = '#1a1a36';
-    let bg          = '#080818';
-    let nameColor   = '#4a4a6a';
-    let boxShadow   = 'none';
-    if (isMine)   { borderColor = '#a78bfa'; bg = '#12082a'; nameColor = '#e0e0ff'; boxShadow = '0 0 0 1px #7c3aed22, 0 2px 12px #7c3aed33'; }
-    if (isOthers) { borderColor = '#2e2e5a'; bg = '#0d0d22'; nameColor = '#7070a0'; }
+    const borderColor = item.tracked ? '#2e2e5a' : '#1a1a36';
+    const bg          = item.tracked ? '#0d0d22' : '#080818';
+    const nameColor   = item.tracked ? '#e0e0f0' : '#4a4a6a';
 
     return (
       <div
         onClick={() => handleCardClick(item)}
         style={{
-          background: bg, border: `1px solid ${borderColor}`, borderRadius: 8, boxShadow,
-          padding: '14px 12px', cursor: 'pointer', transition: 'border-color 0.15s, box-shadow 0.15s',
-          display: 'flex', flexDirection: 'column', gap: 6, minHeight: 80,
+          background: bg, border: `1px solid ${borderColor}`, borderRadius: 8,
+          padding: '14px 12px', cursor: 'pointer', transition: 'border-color 0.15s',
+          display: 'flex', flexDirection: 'column', gap: 6, minHeight: 80, position: 'relative',
           opacity: isUntracked ? 0.5 : 1,
         }}
         onMouseEnter={(e) => {
-          e.currentTarget.style.borderColor = isMine ? '#c4b5fd' : isOthers ? '#4a4a8a' : '#2a2a50';
+          e.currentTarget.style.borderColor = item.tracked ? '#4a4a8a' : '#2a2a50';
           e.currentTarget.style.opacity = '1';
         }}
         onMouseLeave={(e) => {
@@ -153,6 +164,21 @@ export default function ItemGrid() {
           e.currentTarget.style.opacity = isUntracked ? '0.5' : '1';
         }}
       >
+        {item.tracked && (
+          <button
+            onClick={(e) => toggleFavourite(e, item.matId)}
+            title={isFav ? 'Unpin' : 'Pin to top'}
+            style={{
+              position: 'absolute', top: 8, right: 8,
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: 12, lineHeight: 1, padding: 2,
+              color: isFav ? '#fbbf24' : '#2e2e5a',
+              opacity: isFav ? 1 : 0.6,
+            }}
+          >
+            ★
+          </button>
+        )}
         <svg width="36" height="36" style={{ flexShrink: 0, filter: isUntracked ? 'grayscale(1)' : 'none' }}>
           <use href={`${spriteUrl}#${toIconId(item.matName)}`} width="36" height="36" />
         </svg>
@@ -165,12 +191,7 @@ export default function ItemGrid() {
               T{item.tier}
             </span>
           )}
-          {isMine && (
-            <span style={{ fontSize: 10, color: '#a78bfa', background: '#1e1440', borderRadius: 4, padding: '1px 6px' }}>
-              Tracked
-            </span>
-          )}
-          {isOthers && (
+          {item.tracked && (
             <span style={{ fontSize: 10, color: '#5a5a7a', background: '#0d0d22', border: '1px solid #2e2e5a', borderRadius: 4, padding: '1px 6px' }}>
               Tracked
             </span>
