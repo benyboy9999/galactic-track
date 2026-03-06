@@ -291,11 +291,11 @@ export default function ItemGrid() {
           >
             <div style={{ fontSize: 28, marginBottom: 16 }}>📊</div>
             <p style={{ margin: '0 0 10px', color: '#e0e0ff', fontSize: 15, fontWeight: 600 }}>
-              Choose items to track first!
+              Track at least 1 item first!
             </p>
             <p style={{ margin: '0 0 24px', color: '#6b6b8a', fontSize: 13, lineHeight: 1.6 }}>
               Pick up to 3 items from the <em>Not yet tracked</em> section below to start collecting
-              market data. Once you're tracking your own items you'll be able to view all tracked
+              market data. Once you're tracking at least 1 item of your own you'll be able to view all tracked
               items on the platform.
             </p>
             <button
