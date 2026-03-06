@@ -131,7 +131,7 @@ export default function ItemGrid() {
   const untrackedItems = filtered.filter((i) => !i.tracked);
 
   function handleCardClick(item) {
-    if (item.tracked && creditsUsed === 0) {
+    if (item.tracked && creditsUsed === 0 && !import.meta.env.DEV) {
       setPromoteOpen(true);
     } else {
       navigate(`/${toSlug(item.matName)}`);

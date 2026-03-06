@@ -94,14 +94,6 @@ function ActivityTooltip({ active, payload }) {
 
 // ── Reusable components ────────────────────────────────────────────────────────
 
-function StatChip({ label, value, color }) {
-  return (
-    <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 16px', minWidth: 110 }}>
-      <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>{label}</div>
-      <div style={{ color: color ?? '#e0e0f0', fontSize: 17, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
-    </div>
-  );
-}
 
 function ShareBar({ pct, color }) {
   return (
@@ -194,7 +186,7 @@ const ACTIVITY_COLS = [
   { key: 'share_delta',    label: 'Growth'     },
 ];
 
-function CompanyActivity({ data, hours, color, onAwards, myCompany, onCompanyClick }) {
+function CompanyActivity({ data, hours, onAwards, myCompany, onCompanyClick }) {
   const [sort,       setSort]       = useState({ key: 'sales_pct', dir: 1 });
   const [hoveredRow, setHoveredRow] = useState(null);
   const [showAll,    setShowAll]    = useState(false);
@@ -402,13 +394,12 @@ function groupActivity(data, groupBy) {
   return [...buckets.values()];
 }
 
-function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
+function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount, intervalMs = 60_000 }) {
   const [snapshots,       setSnapshots]       = useState([]);
   const [activity,        setActivity]        = useState([]);
   const [companyActivity, setCompanyActivity] = useState(null);
   const [recentEvents,    setRecentEvents]    = useState([]);
   const [orders,          setOrders]          = useState([]);
-  const [latestBigOrder,  setLatestBigOrder]  = useState(null);
   const [orderbookView,   setOrderbookView]   = useState('density');
   const [loading,         setLoading]         = useState(true);
   const [refreshing,      setRefreshing]      = useState(false);
@@ -432,20 +423,18 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
   const load = useCallback(async () => {
     if (hasData) setRefreshing(true); else setLoading(true);
     try {
-      const [snaps, act, compAct, recent, orderData, bigOrder] = await Promise.all([
+      const [snaps, act, compAct, recent, orderData] = await Promise.all([
         api.trackerSnapshots(item.matId, Math.ceil(hours * 61)),
         api.trackerActivity(item.matId, hours),
         api.trackerCompanyActivity(item.matId, hours),
         api.trackerRecent(item.matId, 10),
         api.trackerOrders(item.matId),
-        api.trackerLatestBigOrder(item.matId),
       ]);
       setSnapshots(snaps);
       setActivity(act);
       setCompanyActivity(compAct);
       setRecentEvents(recent);
       setOrders(orderData?.orders ?? []);
-      setLatestBigOrder(bigOrder);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -481,8 +470,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
 
   const totalSold   = activity.reduce((s, r) => s + Number(r.qty_sold_since_prev), 0);
   const totalListed = activity.reduce((s, r) => s + Number(r.qty_listed_since_prev), 0);
-  const totalFlash  = activity.reduce((s, r) => s + Number(r.flash_qty || 0), 0);
-  const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length) : 0;
+const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length) : 0;
 
   const compRows       = (companyActivity?.rows || []).filter((r) => r.company_name !== 'Federal Reserve');
   const compTotalSold  = compRows.reduce((s, r) => s + Number(r.qty_sold), 0);
@@ -615,9 +603,25 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
     }
   }
 
+  const snapsLast24h = snapshots.filter(
+    (s) => new Date(s.recorded_at).getTime() >= Date.now() - 24 * 3_600_000
+  ).length;
+  const expectedLast24h = Math.round(24 * 3_600_000 / intervalMs);
+  const isNew = snapsLast24h < expectedLast24h * 0.8;
+
   return (
     <div>
       {refreshing && <div style={{ color: '#3a3a55', fontSize: 11, marginBottom: 6 }}>refreshing…</div>}
+
+      {isNew && (
+        <div style={{
+          marginBottom: 10, padding: '7px 12px',
+          background: '#1e1440', border: '1px solid #4c1d95', borderRadius: 6,
+          color: '#a78bfa', fontSize: 12,
+        }}>
+          This item was recently added — data will improve over time.
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, marginBottom: 10 }}>
 
@@ -939,7 +943,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
 
       {/* Company activity */}
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '12px 14px' }}>
-        <CompanyActivity data={companyActivity} hours={hours} color={item.color} onAwards={openAwards} myCompany={myCompany} onCompanyClick={openCompany} />
+        <CompanyActivity data={companyActivity} hours={hours} onAwards={openAwards} myCompany={myCompany} onCompanyClick={openCompany} />
       </div>
 
       {/* Company events modal */}
@@ -1140,6 +1144,7 @@ export default function ItemDetail() {
           refreshTick={refreshTick}
           myCompany={myCompany}
           onPollCount={setPollsInWindow}
+          intervalMs={status?.intervalMs ?? 60_000}
         />
       )}
 
