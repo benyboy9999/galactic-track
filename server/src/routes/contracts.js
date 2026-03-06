@@ -36,14 +36,16 @@ router.get('/', optionalAuth, async (req, res, next) => {
       `SELECT c.id, c.type, c.company_name, c.mat_id, c.mat_name,
               c.planet, c.max_daily_qty, c.created_at, c.owner_user_id,
               c.status, c.bumped_at,
+              u.company_logo, u.company_tag,
               CASE WHEN c.owner_user_id = $1 THEN
                 COALESCE(json_agg(ci.company_name ORDER BY ci.created_at) FILTER (WHERE ci.id IS NOT NULL), '[]'::json)
               ELSE NULL END AS interests,
               EXISTS(SELECT 1 FROM contract_interests ci2 WHERE ci2.contract_id = c.id AND ci2.user_id = $1) AS i_am_interested
        FROM contracts c
+       LEFT JOIN users u ON u.id = c.owner_user_id
        LEFT JOIN contract_interests ci ON ci.contract_id = c.id
        WHERE ${conditions.join(' AND ')}
-       GROUP BY c.id
+       GROUP BY c.id, u.company_logo, u.company_tag
        ORDER BY COALESCE(c.bumped_at, c.created_at) DESC`,
       params
     );

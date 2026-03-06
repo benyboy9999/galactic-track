@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import pool from '../database/db.js';
-import { getCompanyInfo } from '../services/gtApi.js';
+import { getCompanyInfo, getCompanyDetail } from '../services/gtApi.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
@@ -63,6 +63,14 @@ router.post('/login', async (req, res, next) => {
         user.credits_used += ids.length;
       }
     }
+
+    // Fire-and-forget: refresh logo + guild tag using the user's own API key
+    getCompanyDetail(companyId, apiKey.trim()).then((detail) => {
+      pool.query(
+        `UPDATE users SET company_logo = $1, company_tag = $2 WHERE id = $3`,
+        [detail.ic ?? null, detail.gTag ?? '', user.id]
+      );
+    }).catch(() => {});
 
     res.json({
       sessionToken: user.session_token,

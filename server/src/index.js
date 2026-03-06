@@ -12,7 +12,7 @@ import authRoutes from './routes/auth.js';
 import itemsRoutes from './routes/items.js';
 import adminRoutes from './routes/admin.js';
 import contractsRoutes from './routes/contracts.js';
-import { getRateLimitStatus } from './services/gtApi.js';
+import { getRateLimitStatus, getCompanyDetail } from './services/gtApi.js';
 import { startTracker } from './services/tracker.js';
 import pool from './database/db.js';
 
@@ -48,6 +48,34 @@ const publicDir = join(__dirname, '../public');
 app.use(express.static(publicDir));
 app.get('*', (_req, res) => res.sendFile(join(publicDir, 'index.html')));
 
+// Fetch and cache logos for users with active contracts but no logo stored yet.
+async function backfillCompanyLogos() {
+  try {
+    const r = await pool.query(
+      `SELECT DISTINCT u.id, u.company_id, u.api_key
+       FROM users u
+       JOIN contracts c ON c.owner_user_id = u.id AND c.active = TRUE
+       WHERE u.company_logo IS NULL AND u.company_id IS NOT NULL AND u.company_id != ''`
+    );
+    if (!r.rows.length) return;
+    console.log(`Backfilling logos for ${r.rows.length} company/companies…`);
+    for (const user of r.rows) {
+      try {
+        const detail = await getCompanyDetail(user.company_id, user.api_key);
+        await pool.query(
+          `UPDATE users SET company_logo = $1, company_tag = $2 WHERE id = $3`,
+          [detail.ic ?? null, detail.gTag ?? '', user.id]
+        );
+      } catch (e) {
+        console.warn(`Logo backfill failed for user ${user.id}: ${e.message}`);
+      }
+    }
+    console.log('Logo backfill complete.');
+  } catch (e) {
+    console.error('Logo backfill error:', e.message);
+  }
+}
+
 async function expireContracts() {
   try {
     const r = await pool.query(
@@ -70,4 +98,6 @@ app.listen(PORT, '0.0.0.0', () => {
   // Expire stale contracts on startup and every 6 hours
   expireContracts();
   setInterval(expireContracts, 6 * 60 * 60 * 1000);
+  // Backfill logos for users with active contracts who don't have one yet
+  backfillCompanyLogos();
 });

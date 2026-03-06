@@ -195,6 +195,11 @@ export async function getCompanyInfo(apiKey) {
   return res.json();
 }
 
+// Fetch full company detail (logo + guild tag). Costs 12 units from the caller's key.
+export async function getCompanyDetail(companyId, apiKey) {
+  return gtFetch(`/public/company/${companyId}/detail`, 12, apiKey);
+}
+
 export { gtFetch };
 export function canAffordRateLimit(units, apiKey = null) { return _estimated(apiKey) >= units; }
 export function spendRateLimit(units, apiKey = null)     { getRl(apiKey).ourSpend += units; }

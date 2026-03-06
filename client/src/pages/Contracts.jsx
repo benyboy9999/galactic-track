@@ -2,6 +2,49 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 
+// 20-colour palette used by Galactic Tycoons company logos (index matches ic encoding)
+const LOGO_PALETTE = [
+  '#111111', '#ffffff', '#ff4444', '#ff8800', '#ffdd00',
+  '#aaff44', '#00cc00', '#00aaaa', '#00ffff', '#44aaff',
+  '#0055ff', '#6600ff', '#aa00ff', '#ff00ff', '#ff88aa',
+  '#cccccc', '#999999', '#555555', '#884400', '#ffcc00',
+];
+
+function decodeCompanyLogo(ic) {
+  try {
+    const binary = atob(ic);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    // Flatten to bit array, MSB first
+    const bits = [];
+    for (const byte of bytes) {
+      for (let b = 7; b >= 0; b--) bits.push((byte >> b) & 1);
+    }
+    // Bits 0-48: 7×7 pixel bitmap; bits 49-53: color index
+    const pixels = Array.from({ length: 7 }, (_, r) =>
+      Array.from({ length: 7 }, (_, c) => bits[r * 7 + c] === 1)
+    );
+    const colorIndex = (bits[49] << 4) | (bits[50] << 3) | (bits[51] << 2) | (bits[52] << 1) | bits[53];
+    return { pixels, color: LOGO_PALETTE[colorIndex] ?? '#ffffff' };
+  } catch { return null; }
+}
+
+function CompanyLogo({ ic, size = 28 }) {
+  const logo = useMemo(() => ic ? decodeCompanyLogo(ic) : null, [ic]);
+  if (!logo) return null;
+  const px = size / 7;
+  return (
+    <svg width={size} height={size} style={{ flexShrink: 0 }}>
+      <rect width={size} height={size} fill="#0a0a18" rx={2} />
+      {logo.pixels.map((row, r) =>
+        row.map((on, c) =>
+          on ? <rect key={`${r}-${c}`} x={c * px} y={r * px} width={px} height={px} fill={logo.color} /> : null
+        )
+      )}
+    </svg>
+  );
+}
+
 const SPRITE_URL = '/api/gamedata/sprite';
 
 const ICON_OVERRIDES = {
@@ -159,9 +202,17 @@ function ContractCard({ contract, isOwn }) {
       {/* Badge row */}
       <div><TypeBadge type={contract.type} /></div>
 
-      {/* Company name */}
-      <div style={{ fontSize: 15, fontWeight: 700, color: '#e0e0ff', lineHeight: 1.3 }}>
-        {contract.company_name}
+      {/* Company logo + name */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {contract.company_logo && <CompanyLogo ic={contract.company_logo} size={28} />}
+        <div style={{ fontSize: 15, fontWeight: 700, color: '#e0e0ff', lineHeight: 1.3 }}>
+          {contract.company_tag && (
+            <span style={{ color: '#7070a0', marginRight: 5 }}>
+              [{contract.company_tag}]
+            </span>
+          )}
+          {contract.company_name}
+        </div>
       </div>
 
       {/* Icon + item */}

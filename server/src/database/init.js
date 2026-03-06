@@ -157,6 +157,9 @@ async function init() {
     await client.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS credits_total INT NOT NULL DEFAULT 3
     `);
+    // Migration: company logo + guild tag cache
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company_logo TEXT`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company_tag  VARCHAR(20) NOT NULL DEFAULT ''`);
     // Migration: contract status + bump tracking
     await client.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'active'`);
     await client.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS bumped_at TIMESTAMPTZ`);
