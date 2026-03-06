@@ -2,65 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { toSlug } from '../utils/slug';
+import { toIconId } from '../utils/materialIcon';
 
-// Manual overrides where API name ≠ sprite ID
-const ICON_OVERRIDES = {
-  // Plural → singular
-  'Cows':                             'Cow',
-  'Chickens':                         'Chicken',
-  // Spelling / abbreviation differences
-  'Copper Wire':                      'CopperWiring',
-  'Consumer Electronics':             'Electronics',
-  'Electric Motor':                   'Motor',
-  'Artificial Intelligence':          'AI',
-  'Advanced Processing Unit':         'APU',
-  'Nanites':                          'Nanobots',
-  'Bio-Nutrient Blend':               'NutrientBlend',
-  'Hydrogen Fuel':                    'HydrogenFuelCell',
-  'Superconducting Coil':             'HyperCoil',
-  'Field Cooling System':             'FieldCooling',
-  // API name lacks tier prefix that sprite has
-  'Iron':                             'IronBar',
-  'Copper':                           'CopperBar',
-  'Rations':                          'BasicRations',
-  'Exosuit':                          'BasicExosuit',
-  'Tools':                            'BasicTools',
-  'Construction Kit':                 'BasicConstructionKit',
-  'Prefab Kit':                       'BasicPrefabKit',
-  'Amenities':                        'BasicAmenities',
-  'Hull Plate':                       'BasicHullPlate',
-  'Linear FTL Emitter':               'BasicFTLEmitter',
-  'Truss':                            'ReinforcedTruss',
-  'Titanium Carbide Drill':           'AdvancedDrill',
-  // Ship bridges (T1 → T4)
-  'Shuttle Bridge':                   'BasicShipBridge',
-  'Hauler Bridge':                    'AdvancedShipBridge',
-  'Freighter Bridge':                 'T4ShipBridge',
-  // FTL tiers
-  'Quantum FTL Emitter':              'AdvancedFTLEmitter',
-  'Extra-dimensional FTL Emitter':    'SuperiorFTLEmitter',
-  // Ship elements
-  'Starlifter Structural Elements':   'T4ShipElements',
-  // Renamed / unexpected sprite IDs
-  'Molecular Fusion Kit':             'WeldingKit2',
-  'Ethanol':                          'Gasoline',
-  'Graphenium Wire':                  'Superconductors',
-  'Starglass Hull Plate':             'QuadraniumHullPlate',
-  // Pack / shipment items
-  'Medicine Shipment':                'Pack_Medicine',
-  'Food Shipment':                    'Pack_Food',
-  'Ship Parts Shipment':              'Pack_ShipParts',
-  'Defense systems pack':             'Pack_Defense',
-  'Habitats Shipment':                'Pack_Habitats',
-  'Scientific Instruments Shipment':  'Pack_Scientific',
-  'Gifts':                            'Pack_Gifts',
-};
-
-// "Basic Construction Kit" → "BasicConstructionKit"
-function toIconId(name) {
-  if (ICON_OVERRIDES[name]) return ICON_OVERRIDES[name];
-  return name.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
-}
 
 export default function ItemGrid() {
   const navigate = useNavigate();

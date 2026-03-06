@@ -1,31 +1,37 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
+import { toIconId } from '../utils/materialIcon';
 
-// 20-colour palette used by Galactic Tycoons company logos (index matches ic encoding)
+// 20-colour palette used by Galactic Tycoons company logos
 const LOGO_PALETTE = [
-  '#111111', '#ffffff', '#ff4444', '#ff8800', '#ffdd00',
-  '#aaff44', '#00cc00', '#00aaaa', '#00ffff', '#44aaff',
-  '#0055ff', '#6600ff', '#aa00ff', '#ff00ff', '#ff88aa',
-  '#cccccc', '#999999', '#555555', '#884400', '#ffcc00',
+  '#db1a1a', '#c34b22', '#f68055', '#f2740d', '#f2ad0d',
+  '#e4e40c', '#99da0b', '#0ac20a', '#10c16e', '#0bd0d0',
+  '#93ceec', '#0da6f2', '#256af4', '#734dff', '#b399e6',
+  '#9933ff', '#dd3cdd', '#eb477e', '#f0a8c0', '#cccccc',
 ];
 
 function decodeCompanyLogo(ic) {
   try {
-    const binary = atob(ic);
+    // Handle URL-safe base64
+    const normalized = ic.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = normalized.length % 4;
+    const padded = padding === 0 ? normalized : normalized + '='.repeat(4 - padding);
+    const binary = atob(padded);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    // Flatten to bit array, MSB first
-    const bits = [];
-    for (const byte of bytes) {
-      for (let b = 7; b >= 0; b--) bits.push((byte >> b) & 1);
-    }
-    // Bits 0-48: 7×7 pixel bitmap; bits 49-53: color index
+    if (bytes.length !== 8) return null;
+    // 49 pixels, LSB first
     const pixels = Array.from({ length: 7 }, (_, r) =>
-      Array.from({ length: 7 }, (_, c) => bits[r * 7 + c] === 1)
+      Array.from({ length: 7 }, (_, c) => {
+        const i = r * 7 + c;
+        return ((bytes[Math.floor(i / 8)] >> (i % 8)) & 1) === 1;
+      })
     );
-    const colorIndex = (bits[49] << 4) | (bits[50] << 3) | (bits[51] << 2) | (bits[52] << 1) | bits[53];
-    return { pixels, color: LOGO_PALETTE[colorIndex] ?? '#ffffff' };
+    // Color: low 6 bits of byte 6; upper 5 bits are swatch index
+    const colorCode = bytes[6] & 0x3f;
+    const swatchIndex = Math.max(0, Math.min(LOGO_PALETTE.length - 1, colorCode >> 1));
+    return { pixels, color: LOGO_PALETTE[swatchIndex] };
   } catch { return null; }
 }
 
@@ -47,19 +53,6 @@ function CompanyLogo({ ic, size = 28 }) {
 
 const SPRITE_URL = '/api/gamedata/sprite';
 
-const ICON_OVERRIDES = {
-  'Cows': 'Cow', 'Iron': 'IronBar', 'Copper': 'CopperBar', 'Rations': 'BasicRations',
-  'Hydrogen Fuel': 'HydrogenFuelCell', 'Superconducting Coil': 'HyperCoil',
-  'Field Cooling System': 'FieldCooling', 'Molecular Fusion Kit': 'WeldingKit2',
-  'Ethanol': 'Gasoline', 'Graphenium Wire': 'Superconductors',
-  'Extra-dimensional FTL Emitter': 'SuperiorFTLEmitter',
-  'Starlifter Structural Elements': 'T4ShipElements',
-};
-
-function toIconId(name) {
-  if (ICON_OVERRIDES[name]) return ICON_OVERRIDES[name];
-  return name.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
-}
 
 function fmtAgo(iso) {
   if (!iso) return '—';
@@ -202,27 +195,27 @@ function ContractCard({ contract, isOwn }) {
       {/* Badge row */}
       <div><TypeBadge type={contract.type} /></div>
 
+      {/* Icon + item — main header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <svg width="24" height="24" style={{ flexShrink: 0 }}>
+          <use href={`${SPRITE_URL}#${toIconId(contract.mat_name)}`} width="24" height="24" />
+        </svg>
+        <span style={{ fontSize: 17, fontWeight: 700, color: '#e0e0ff' }}>
+          {contract.mat_name}
+        </span>
+      </div>
+
       {/* Company logo + name */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {contract.company_logo && <CompanyLogo ic={contract.company_logo} size={28} />}
-        <div style={{ fontSize: 15, fontWeight: 700, color: '#e0e0ff', lineHeight: 1.3 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {contract.company_logo && <CompanyLogo ic={contract.company_logo} size={15} />}
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#c8c8e8', lineHeight: 1.3 }}>
           {contract.company_tag && (
-            <span style={{ color: '#7070a0', marginRight: 5 }}>
+            <span style={{ color: '#8080b0', marginRight: 4 }}>
               [{contract.company_tag}]
             </span>
           )}
           {contract.company_name}
         </div>
-      </div>
-
-      {/* Icon + item */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-        <svg width="20" height="20" style={{ flexShrink: 0 }}>
-          <use href={`${SPRITE_URL}#${toIconId(contract.mat_name)}`} width="20" height="20" />
-        </svg>
-        <span style={{ fontSize: 13, fontWeight: 600, color: '#c0c0d8' }}>
-          {contract.mat_name}
-        </span>
       </div>
 
       {/* Location · qty · time */}
