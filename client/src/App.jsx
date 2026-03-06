@@ -51,15 +51,18 @@ function TrackerCountdown() {
 // ── User settings modal ───────────────────────────────────────────────────────
 
 function SettingsModal({ onClose }) {
-  const { user, refreshUser } = useAuth();
+  const { user, refreshUser, logout } = useAuth();
   const [untracking, setUntracking] = useState(null);
+  const [revoking,   setRevoking]   = useState(false);
   const [err, setErr] = useState('');
 
-  const creditsUsed  = user?.creditsUsed  ?? 0;
-  const creditsTotal = user?.creditsTotal ?? 3;
   const trackedItems = user?.trackedItems ?? [];
 
-  async function handleUntrack(matId) {
+  async function handleUntrack(matId, matName) {
+    const ok = window.confirm(
+      `Stop tracking ${matName}?\n\nThis will end data collection for everyone on the platform — all users will lose access to live market data for this item.`
+    );
+    if (!ok) return;
     setUntracking(matId);
     setErr('');
     try {
@@ -69,6 +72,19 @@ function SettingsModal({ onClose }) {
       setErr(e.message);
     } finally {
       setUntracking(null);
+    }
+  }
+
+  async function handleRevoke() {
+    if (!window.confirm('Delete your account?\n\nAll items you are tracking will stop collecting data for everyone on the platform.')) return;
+    setRevoking(true);
+    try {
+      await api.revokeAccount();
+      await logout();
+      onClose();
+    } catch (e) {
+      setErr(e.message);
+      setRevoking(false);
     }
   }
 
@@ -89,43 +105,26 @@ function SettingsModal({ onClose }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-          <span style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+          <span style={{ color: '#9090b0', fontSize: 13, fontWeight: 500 }}>
             {user?.companyName}
           </span>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#6b6b8a', cursor: 'pointer', fontSize: 14, padding: 0 }}>✕</button>
         </div>
 
-        {/* Credits */}
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Credits</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ display: 'flex', gap: 6 }}>
-              {Array.from({ length: creditsTotal }, (_, i) => (
-                <div key={i} style={{
-                  width: 12, height: 12, borderRadius: '50%',
-                  background: i < creditsUsed ? '#a78bfa' : '#2e2e5a',
-                  border: '1px solid ' + (i < creditsUsed ? '#7c3aed' : '#1e1e3a'),
-                }} />
-              ))}
-            </div>
-            <span style={{ color: '#6b6b8a', fontSize: 12 }}>{creditsUsed}/{creditsTotal} used</span>
-          </div>
-        </div>
-
         {/* Tracked items */}
-        <div>
+        <div style={{ marginBottom: 20 }}>
           <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
             Your tracked items
           </div>
           {trackedItems.length === 0 ? (
-            <div style={{ color: '#3a3a55', fontSize: 12 }}>None — click any item to start tracking.</div>
+            <div style={{ color: '#3a3a55', fontSize: 12 }}>None — click any untracked item to start tracking.</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {trackedItems.map((ti) => (
                 <div key={ti.matId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <span style={{ color: '#e0e0f0', fontSize: 13 }}>{ti.matName}</span>
                   <button
-                    onClick={() => handleUntrack(ti.matId)}
+                    onClick={() => handleUntrack(ti.matId, ti.matName)}
                     disabled={untracking === ti.matId}
                     style={{
                       background: 'none', border: '1px solid #2e2e5a', borderRadius: 4,
@@ -143,6 +142,30 @@ function SettingsModal({ onClose }) {
           )}
           {err && <p style={{ color: '#f87171', fontSize: 12, marginTop: 8 }}>{err}</p>}
         </div>
+
+        {/* Actions */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #1e1e3a', paddingTop: 16 }}>
+          <button
+            onClick={logout}
+            style={{
+              background: 'none', border: '1px solid #2e2e5a', borderRadius: 6,
+              padding: '7px 12px', color: '#9090b0', fontSize: 12, cursor: 'pointer', textAlign: 'left',
+            }}
+          >
+            Sign out
+          </button>
+          <button
+            onClick={handleRevoke}
+            disabled={revoking}
+            style={{
+              background: 'none', border: '1px solid #3a1a1a', borderRadius: 6,
+              padding: '7px 12px', color: '#f87171', fontSize: 12,
+              cursor: revoking ? 'not-allowed' : 'pointer', opacity: revoking ? 0.5 : 1, textAlign: 'left',
+            }}
+          >
+            {revoking ? 'Revoking…' : 'Revoke account'}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -151,11 +174,8 @@ function SettingsModal({ onClose }) {
 // ── Nav ───────────────────────────────────────────────────────────────────────
 
 function Nav() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [settingsOpen, setSettingsOpen] = useState(false);
-
-  const creditsUsed  = user?.creditsUsed  ?? 0;
-  const creditsTotal = user?.creditsTotal ?? 3;
 
   return (
     <>
@@ -167,28 +187,14 @@ function Nav() {
           {user && (
             <button
               onClick={() => setSettingsOpen(true)}
+              title="Settings"
               style={{
-                display: 'flex', alignItems: 'center', gap: 6,
                 background: 'none', border: '1px solid #2e2e5a', borderRadius: 6,
-                padding: '3px 10px', color: '#6b6b8a', fontSize: 12, cursor: 'pointer',
+                padding: '4px 8px', color: '#6b6b8a', fontSize: 16, cursor: 'pointer',
+                lineHeight: 1, display: 'flex', alignItems: 'center',
               }}
             >
-              {Array.from({ length: creditsTotal }, (_, i) => (
-                <span key={i} style={{
-                  width: 7, height: 7, borderRadius: '50%',
-                  background: i < creditsUsed ? '#a78bfa' : '#2e2e5a',
-                  display: 'inline-block',
-                }} />
-              ))}
-              <span style={{ marginLeft: 2 }}>{user.companyName}</span>
-            </button>
-          )}
-          {user && (
-            <button
-              onClick={logout}
-              style={{ background: 'none', border: '1px solid #2e2e5a', borderRadius: 4, padding: '3px 10px', color: '#6b6b8a', fontSize: 11, cursor: 'pointer' }}
-            >
-              Sign out
+              ⚙
             </button>
           )}
         </div>
@@ -222,7 +228,7 @@ export default function App() {
               <Routes>
                 <Route path="/login" element={<Login />} />
                 <Route path="/admin" element={<Admin />} />
-                <Route path="/item/:matId" element={<RequireAuth><ItemDetail /></RequireAuth>} />
+                <Route path="/:slug" element={<RequireAuth><ItemDetail /></RequireAuth>} />
                 <Route path="/" element={<RequireAuth><ItemGrid /></RequireAuth>} />
               </Routes>
             </ErrorBoundary>

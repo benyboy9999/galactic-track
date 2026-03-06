@@ -12,13 +12,28 @@ router.get('/', async (req, res, next) => {
   try {
     const gameData = await getGameData();
 
-    const SOURCE_LABEL = { 1: 'Raw', 2: 'Manufactured', 3: 'Special' };
+    const TYPE_LABEL = {
+      1:  'Metals',
+      2:  'Construction Materials',
+      3:  'Agricultural Products',
+      4:  'Minerals',
+      5:  'Gases and Liquids',
+      6:  'Materials',
+      7:  'Consumables',
+      8:  'Plastics',
+      9:  'Chemicals',
+      10: 'Machinery',
+      11: 'Electronics',
+      12: 'Science',
+      13: 'Ship Parts',
+      14: 'Consumables',
+    };
 
     // Build a flat list of all materials from gamedata
     const materials = (gameData.materials ?? []).map((item) => ({
       matId:    item.id,
       matName:  item.name,
-      category: SOURCE_LABEL[item.source] ?? null,
+      category: TYPE_LABEL[item.type] ?? null,
       tier:     item.tier ?? null,
     }));
     materials.sort((a, b) => a.matName.localeCompare(b.matName));

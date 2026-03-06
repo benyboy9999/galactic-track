@@ -109,6 +109,21 @@ router.post('/logout', requireAuth, async (req, res, next) => {
   }
 });
 
+// DELETE /api/auth/account
+// Revokes the user's account — releases their tracked items and deletes the record.
+router.delete('/account', requireAuth, async (req, res, next) => {
+  try {
+    await pool.query(
+      `UPDATE tracked_items SET active = FALSE, owner_user_id = NULL WHERE owner_user_id = $1`,
+      [req.user.id]
+    );
+    await pool.query(`DELETE FROM users WHERE id = $1`, [req.user.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/auth/dev-login
 // DEV ONLY — creates/reuses a local test user without a real GT API key.
 // Always returns 404 in production.

@@ -45,10 +45,11 @@ async function del(path, authed = false) {
 
 export const api = {
   // ── Auth ───────────────────────────────────────────────────────────────────
-  login:    (apiKey) => post('/auth/login', { apiKey }),
-  devLogin: ()       => post('/auth/dev-login', {}),
-  me:       ()       => get('/auth/me', true),
-  logout:   ()       => post('/auth/logout', {}, true),
+  login:         (apiKey) => post('/auth/login', { apiKey }),
+  devLogin:      ()       => post('/auth/dev-login', {}),
+  me:            ()       => get('/auth/me', true),
+  logout:        ()       => post('/auth/logout', {}, true),
+  revokeAccount: ()       => del('/auth/account', true),
 
   // ── Items ──────────────────────────────────────────────────────────────────
   allItems:    ()       => get('/items'),

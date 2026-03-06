@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { fromSlug } from '../utils/slug';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar,
@@ -978,8 +979,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function ItemDetail() {
-  const { matId: matIdStr } = useParams();
-  const matId = Number(matIdStr);
+  const { slug } = useParams();
   const navigate = useNavigate();
   const { user, refreshUser } = useAuth();
   const myCompany = user?.companyName ?? '';
@@ -998,11 +998,11 @@ export default function ItemDetail() {
   const loadItem = useCallback(async () => {
     try {
       const items = await api.allItems();
-      setItem(items.find((i) => i.matId === matId) ?? null);
+      setItem(fromSlug(slug, items));
     } catch { /* ignore */ } finally {
       setItemLoading(false);
     }
-  }, [matId]);
+  }, [slug]);
 
   useEffect(() => { loadItem(); }, [loadItem]);
 
@@ -1028,7 +1028,7 @@ export default function ItemDetail() {
     setTracking(true);
     setTrackErr('');
     try {
-      await api.trackItem(matId);
+      await api.trackItem(item.matId);
       await Promise.all([loadItem(), refreshUser()]);
     } catch (e) {
       setTrackErr(e.message);
@@ -1037,9 +1037,7 @@ export default function ItemDetail() {
     }
   }
 
-  const creditsUsed  = user?.creditsUsed  ?? 0;
-  const creditsTotal = user?.creditsTotal ?? 3;
-  const hasCredits   = creditsUsed < creditsTotal;
+  const hasCredits = (user?.creditsUsed ?? 0) < (user?.creditsTotal ?? 3);
 
   if (itemLoading) return <div style={{ padding: 40, textAlign: 'center' }}><Spinner /></div>;
   if (!item)       return <div style={{ padding: 40, color: '#f87171' }}>Item not found.</div>;
@@ -1095,7 +1093,7 @@ export default function ItemDetail() {
             Nobody is tracking {item.matName} yet.
           </p>
           <p style={{ color: '#3a3a55', fontSize: 12, marginBottom: 28 }}>
-            Tracking an item uses one credit and starts collecting market data every 60 seconds.
+            Tracking starts collecting market data every 60 seconds, visible to everyone on the platform.
           </p>
           {hasCredits ? (
             <>
@@ -1109,12 +1107,12 @@ export default function ItemDetail() {
                   cursor: tracking ? 'not-allowed' : 'pointer', opacity: tracking ? 0.6 : 1,
                 }}
               >
-                {tracking ? 'Starting…' : `Start tracking — uses 1 credit (${creditsUsed + 1}/${creditsTotal})`}
+                {tracking ? 'Starting…' : 'Start tracking'}
               </button>
             </>
           ) : (
             <p style={{ color: '#6b6b8a', fontSize: 13 }}>
-              No credits remaining — free up a slot from your tracked items to start tracking here.
+              You're already tracking your maximum — untrack an item from Settings to free up a slot.
             </p>
           )}
         </div>
@@ -1123,7 +1121,7 @@ export default function ItemDetail() {
       {/* Tracked — full panel */}
       {item.tracked && (
         <ItemPanel
-          key={`${matId}-${hours}`}
+          key={`${item.matId}-${hours}`}
           item={panelItem}
           hours={hours}
           refreshTick={refreshTick}

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
+import { toSlug } from '../utils/slug';
 
 // Manual overrides where API name ≠ sprite ID
 const ICON_OVERRIDES = {
@@ -62,30 +63,20 @@ function toIconId(name) {
   return name.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
 }
 
-function CreditPips({ used, total }) {
-  return (
-    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-      {Array.from({ length: total }, (_, i) => (
-        <span key={i} style={{
-          width: 8, height: 8, borderRadius: '50%',
-          background: i < used ? '#a78bfa' : '#2e2e5a',
-        }} />
-      ))}
-    </span>
-  );
-}
-
 export default function ItemGrid() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  const [items,   setItems]   = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err,     setErr]     = useState('');
-  const [search,  setSearch]  = useState('');
+  const [items,       setItems]       = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [err,         setErr]         = useState('');
+  const [search,      setSearch]      = useState('');
+  const [tierFilter,  setTierFilter]  = useState(null);  // null = all
+  const [catFilter,   setCatFilter]   = useState('');    // '' = all
+  const [promoteOpen, setPromoteOpen] = useState(false);
 
-  // Same-origin proxy — avoids cross-origin SVG <use> CORS block
-  const spriteUrl = '/api/gamedata/sprite';
+  const spriteUrl   = '/api/gamedata/sprite';
+  const creditsUsed = user?.creditsUsed ?? 0;
 
   const loadItems = useCallback(async () => {
     try {
@@ -99,15 +90,105 @@ export default function ItemGrid() {
 
   useEffect(() => { loadItems(); }, [loadItems]);
 
+  const categories = useMemo(() => {
+    const seen = new Set();
+    items.forEach((i) => { if (i.category) seen.add(i.category); });
+    return [...seen].sort();
+  }, [items]);
+
+  const tiers = useMemo(() => {
+    const seen = new Set();
+    items.forEach((i) => { if (i.tier) seen.add(i.tier); });
+    return [...seen].sort((a, b) => a - b);
+  }, [items]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return q ? items.filter((i) => i.matName.toLowerCase().includes(q)) : items;
-  }, [items, search]);
+    return items.filter((i) => {
+      if (q && !i.matName.toLowerCase().includes(q)) return false;
+      if (tierFilter !== null && i.tier !== tierFilter) return false;
+      if (catFilter && i.category !== catFilter) return false;
+      return true;
+    });
+  }, [items, search, tierFilter, catFilter]);
+
+  const trackedItems   = filtered.filter((i) => i.tracked);
+  const untrackedItems = filtered.filter((i) => !i.tracked);
+
+  function handleCardClick(item) {
+    if (item.tracked && creditsUsed === 0) {
+      setPromoteOpen(true);
+    } else {
+      navigate(`/${toSlug(item.matName)}`);
+    }
+  }
+
+  function ItemCard({ item }) {
+    const isMine     = item.tracked && item.trackedBy === user?.companyName;
+    const isOthers   = item.tracked && !isMine;
+    const isUntracked = !item.tracked;
+
+    let borderColor = '#1a1a36';
+    let bg          = '#080818';
+    let nameColor   = '#4a4a6a';
+    let boxShadow   = 'none';
+    if (isMine)   { borderColor = '#a78bfa'; bg = '#12082a'; nameColor = '#e0e0ff'; boxShadow = '0 0 0 1px #7c3aed22, 0 2px 12px #7c3aed33'; }
+    if (isOthers) { borderColor = '#2e2e5a'; bg = '#0d0d22'; nameColor = '#7070a0'; }
+
+    return (
+      <div
+        onClick={() => handleCardClick(item)}
+        style={{
+          background: bg, border: `1px solid ${borderColor}`, borderRadius: 8, boxShadow,
+          padding: '14px 12px', cursor: 'pointer', transition: 'border-color 0.15s, box-shadow 0.15s',
+          display: 'flex', flexDirection: 'column', gap: 6, minHeight: 80,
+          opacity: isUntracked ? 0.5 : 1,
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = isMine ? '#c4b5fd' : isOthers ? '#4a4a8a' : '#2a2a50';
+          e.currentTarget.style.opacity = '1';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = borderColor;
+          e.currentTarget.style.opacity = isUntracked ? '0.5' : '1';
+        }}
+      >
+        <svg width="36" height="36" style={{ flexShrink: 0, filter: isUntracked ? 'grayscale(1)' : 'none' }}>
+          <use href={`${spriteUrl}#${toIconId(item.matName)}`} width="36" height="36" />
+        </svg>
+        <span style={{ fontSize: 13, fontWeight: 500, color: nameColor, lineHeight: 1.3 }}>
+          {item.matName}
+        </span>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 'auto' }}>
+          {item.tier && (
+            <span style={{ fontSize: 10, color: '#3a3a5a', background: '#0d0d1e', border: '1px solid #1a1a30', borderRadius: 4, padding: '1px 6px' }}>
+              T{item.tier}
+            </span>
+          )}
+          {isMine && (
+            <span style={{ fontSize: 10, color: '#a78bfa', background: '#1e1440', borderRadius: 4, padding: '1px 6px' }}>
+              Tracked
+            </span>
+          )}
+          {isOthers && (
+            <span style={{ fontSize: 10, color: '#5a5a7a', background: '#0d0d22', border: '1px solid #2e2e5a', borderRadius: 4, padding: '1px 6px' }}>
+              Tracked
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const gridStyle = {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+    gap: 10,
+  };
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px 20px' }}>
 
-      {/* Header */}
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ margin: 0, fontSize: 20, color: '#e0e0ff' }}>Items</h1>
         <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6b6b8a' }}>
@@ -115,112 +196,115 @@ export default function ItemGrid() {
         </p>
       </div>
 
-      {/* Search */}
       <input
         type="text"
         placeholder="Search items…"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         style={{
-          width: '100%', boxSizing: 'border-box', marginBottom: 20,
+          width: '100%', boxSizing: 'border-box', marginBottom: 12,
           background: '#13132a', border: '1px solid #2e2e5a', borderRadius: 6,
           padding: '10px 14px', color: '#e0e0ff', fontSize: 13,
         }}
       />
 
-      {/* Error */}
+      {/* Filters */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20, alignItems: 'center' }}>
+        {/* Tier chips */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[null, ...tiers].map((t) => (
+            <button
+              key={t ?? 'all'}
+              onClick={() => setTierFilter(t)}
+              style={{
+                background: tierFilter === t ? '#1e1440' : 'none',
+                border: `1px solid ${tierFilter === t ? '#7c3aed' : '#2e2e5a'}`,
+                borderRadius: 4, padding: '3px 8px',
+                color: tierFilter === t ? '#a78bfa' : '#6b6b8a',
+                fontSize: 11, cursor: 'pointer',
+              }}
+            >
+              {t === null ? 'All tiers' : `T${t}`}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ width: 1, height: 18, background: '#1e1e3a' }} />
+
+        {/* Category select */}
+        <select
+          value={catFilter}
+          onChange={(e) => setCatFilter(e.target.value)}
+          style={{
+            background: catFilter ? '#1e1440' : '#13132a',
+            border: `1px solid ${catFilter ? '#7c3aed' : '#2e2e5a'}`,
+            borderRadius: 4, padding: '3px 8px',
+            color: catFilter ? '#a78bfa' : '#6b6b8a',
+            fontSize: 11, cursor: 'pointer',
+          }}
+        >
+          <option value="">All categories</option>
+          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+
       {err && <p style={{ color: '#f87171', marginBottom: 16, fontSize: 13 }}>{err}</p>}
 
-      {/* Grid */}
       {loading ? (
         <p style={{ color: '#6b6b8a', textAlign: 'center', marginTop: 60 }}>Loading…</p>
       ) : (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-          gap: 10,
-        }}>
-          {filtered.map((item) => {
-            const isMine   = item.tracked && item.trackedBy === user?.companyName;
-            const isOthers = item.tracked && !isMine;
-
-            let borderColor = '#2e2e5a';
-            let bg          = '#0d0d22';
-            let nameColor   = '#9090b0';
-            if (isMine)   { borderColor = '#a78bfa'; bg = '#12082a'; nameColor = '#e0e0ff'; }
-            if (isOthers) { borderColor = '#2a3a5a'; nameColor = '#7070a0'; }
-
-            return (
-              <div
-                key={item.matId}
-                onClick={() => navigate(`/item/${item.matId}`)}
-                title={
-                  isMine   ? 'Your tracked item — click to view' :
-                  isOthers ? `Tracked by ${item.trackedBy ?? 'another user'} — click to view` :
-                             `Click to view ${item.matName}`
-                }
-                style={{
-                  background: bg,
-                  border: `1px solid ${borderColor}`,
-                  borderRadius: 8,
-                  padding: '14px 12px',
-                  cursor: 'pointer',
-                  transition: 'border-color 0.15s',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 6,
-                  minHeight: 80,
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = isMine ? '#c4b5fd' : '#4a4a8a'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = borderColor; }}
-              >
-                <svg width="36" height="36" style={{ flexShrink: 0 }}>
-                  <use href={`${spriteUrl}#${toIconId(item.matName)}`} width="36" height="36" />
-                </svg>
-                <span style={{ fontSize: 13, fontWeight: 500, color: nameColor, lineHeight: 1.3 }}>
-                  {item.matName}
-                </span>
-
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 'auto' }}>
-                  {item.tier && (
-                    <span style={{
-                      fontSize: 10, color: '#4a4a6a',
-                      background: '#13132a', border: '1px solid #1e1e3a',
-                      borderRadius: 4, padding: '1px 6px',
-                    }}>
-                      T{item.tier}
-                    </span>
-                  )}
-                  {item.category && (
-                    <span style={{
-                      fontSize: 10, color: '#4a4a6a',
-                      background: '#13132a', border: '1px solid #1e1e3a',
-                      borderRadius: 4, padding: '1px 6px',
-                    }}>
-                      {item.category}
-                    </span>
-                  )}
-                  {isMine && (
-                    <span style={{
-                      fontSize: 10, color: '#a78bfa',
-                      background: '#1e1440', borderRadius: 4, padding: '1px 6px',
-                    }}>
-                      Tracked
-                    </span>
-                  )}
-                  {isOthers && (
-                    <span style={{
-                      fontSize: 10, color: '#6b6b8a',
-                      background: '#13132a', border: '1px solid #2e2e5a',
-                      borderRadius: 4, padding: '1px 6px',
-                    }}>
-                      Tracked
-                    </span>
-                  )}
-                </div>
+        <>
+          {trackedItems.length > 0 && (
+            <>
+              <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                Being tracked
               </div>
-            );
-          })}
+              <div style={gridStyle}>
+                {trackedItems.map((item) => <ItemCard key={item.matId} item={item} />)}
+              </div>
+              <div style={{ borderTop: '1px solid #1e1e3a', margin: '24px 0 20px' }} />
+            </>
+          )}
+
+          {untrackedItems.length > 0 && (
+            <>
+              <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                Not yet tracked
+              </div>
+              <div style={gridStyle}>
+                {untrackedItems.map((item) => <ItemCard key={item.matId} item={item} />)}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* Promote modal — shown to users who haven't tracked any items yet */}
+      {promoteOpen && (
+        <div
+          onClick={() => setPromoteOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: '#0d0d22', border: '1px solid #2e2e5a', borderRadius: 10, padding: '32px 28px', width: 360, textAlign: 'center' }}
+          >
+            <div style={{ fontSize: 28, marginBottom: 16 }}>📊</div>
+            <p style={{ margin: '0 0 10px', color: '#e0e0ff', fontSize: 15, fontWeight: 600 }}>
+              Choose items to track first!
+            </p>
+            <p style={{ margin: '0 0 24px', color: '#6b6b8a', fontSize: 13, lineHeight: 1.6 }}>
+              Pick up to 3 items from the <em>Not yet tracked</em> section below to start collecting
+              market data. Once you're tracking your own items you'll be able to view all tracked
+              items on the platform.
+            </p>
+            <button
+              onClick={() => setPromoteOpen(false)}
+              style={{ background: '#1e0a3a', border: '1px solid #4c1d95', borderRadius: 6, padding: '9px 28px', color: '#a78bfa', fontSize: 13, cursor: 'pointer' }}
+            >
+              Got it
+            </button>
+          </div>
         </div>
       )}
     </div>
