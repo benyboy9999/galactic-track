@@ -1060,12 +1060,25 @@ export default function ItemDetail() {
         <div style={{ flex: 1 }} />
 
         {/* Poll status */}
-        {status && item.tracked && (
-          <span style={{ fontSize: 11, color: '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>
-            {status.running ? '●' : '○'} {pollsInWindow ?? '—'} polls
-            {status.lastError && <span style={{ color: '#f87171', marginLeft: 6 }}>error</span>}
-          </span>
-        )}
+        {status && item.tracked && (() => {
+          const expected = status.intervalMs
+            ? Math.round(hours * 3_600_000 / status.intervalMs)
+            : null;
+          const pct = expected && pollsInWindow != null
+            ? Math.round(pollsInWindow / expected * 100)
+            : null;
+          const pctColor = pct == null ? '#3a3a55' : pct >= 80 ? '#10b981' : pct >= 50 ? '#fbbf24' : '#f87171';
+          return (
+            <span style={{ fontSize: 11, color: '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>
+              {status.running ? '●' : '○'}{' '}
+              <span style={{ color: pctColor }}>
+                {pollsInWindow ?? '—'}{expected != null ? ` / ${expected}` : ''} polls
+                {pct != null && <span style={{ marginLeft: 4 }}>({pct}%)</span>}
+              </span>
+              {status.lastError && <span style={{ color: '#f87171', marginLeft: 6 }}>error</span>}
+            </span>
+          );
+        })()}
 
         {/* Time filters — only when tracking active */}
         {item.tracked && HOURS_OPTIONS.map(({ hours: h, label }) => (
@@ -1109,11 +1122,19 @@ export default function ItemDetail() {
               >
                 {tracking ? 'Starting…' : 'Start tracking'}
               </button>
+              <p style={{ color: '#3a3a55', fontSize: 11, marginTop: 16, lineHeight: 1.6 }}>
+                Data populates gradually — expect up to 24 hours before charts and company activity are fully representative.
+              </p>
             </>
           ) : (
-            <p style={{ color: '#6b6b8a', fontSize: 13 }}>
-              You're already tracking your maximum — untrack an item from Settings to free up a slot.
-            </p>
+            <div style={{ maxWidth: 320, margin: '0 auto' }}>
+              <p style={{ color: '#6b6b8a', fontSize: 13, marginBottom: 12 }}>
+                You're already tracking your full allocation of items.
+              </p>
+              <p style={{ color: '#4a4a6a', fontSize: 12, lineHeight: 1.7 }}>
+                Want this item tracked? Share the platform with a friend — each new member can track up to 3 items, adding data for everyone.
+              </p>
+            </div>
           )}
         </div>
       )}
@@ -1130,9 +1151,6 @@ export default function ItemDetail() {
         />
       )}
 
-      <div style={{ color: '#3a3a55', fontSize: 10, marginTop: 10 }}>
-        Snapshots every 60s · Sales only counted when no cheaper orders exist · Green = listed, Red = sold
-      </div>
     </div>
   );
 }

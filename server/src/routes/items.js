@@ -37,6 +37,8 @@ router.get('/', async (req, res, next) => {
       tier:     item.tier ?? null,
     }));
     materials.sort((a, b) => a.matName.localeCompare(b.matName));
+    // T9 items have no market data — exclude them entirely
+    const filtered = materials.filter((m) => m.tier !== 9);
 
     // Overlay which are actively tracked
     const tracked = await pool.query(
@@ -47,7 +49,7 @@ router.get('/', async (req, res, next) => {
     );
     const trackedMap = new Map(tracked.rows.map((r) => [r.mat_id, r.company_name ?? null]));
 
-    const result = materials.map((m) => ({
+    const result = filtered.map((m) => ({
       ...m,
       tracked:   trackedMap.has(m.matId),
       trackedBy: trackedMap.get(m.matId) ?? null,

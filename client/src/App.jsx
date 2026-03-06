@@ -54,38 +54,52 @@ function SettingsModal({ onClose }) {
   const { user, refreshUser, logout } = useAuth();
   const [untracking, setUntracking] = useState(null);
   const [revoking,   setRevoking]   = useState(false);
-  const [err, setErr] = useState('');
+  const [err,        setErr]        = useState('');
+  const [confirm,    setConfirm]    = useState(null); // { title, body, action, danger }
 
   const trackedItems = user?.trackedItems ?? [];
 
+  function askConfirm(title, body, action, danger = false) {
+    setConfirm({ title, body, action, danger });
+  }
+
   async function handleUntrack(matId, matName) {
-    const ok = window.confirm(
-      `Stop tracking ${matName}?\n\nThis will end data collection for everyone on the platform — all users will lose access to live market data for this item.`
+    askConfirm(
+      `Stop tracking ${matName}?`,
+      'This will end data collection for everyone on the platform — all users will lose access to live market data for this item.',
+      async () => {
+        setUntracking(matId);
+        setErr('');
+        try {
+          await api.untrackItem(matId);
+          await refreshUser();
+        } catch (e) {
+          setErr(e.message);
+        } finally {
+          setUntracking(null);
+        }
+      },
+      true
     );
-    if (!ok) return;
-    setUntracking(matId);
-    setErr('');
-    try {
-      await api.untrackItem(matId);
-      await refreshUser();
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setUntracking(null);
-    }
   }
 
   async function handleRevoke() {
-    if (!window.confirm('Delete your account?\n\nAll items you are tracking will stop collecting data for everyone on the platform.')) return;
-    setRevoking(true);
-    try {
-      await api.revokeAccount();
-      await logout();
-      onClose();
-    } catch (e) {
-      setErr(e.message);
-      setRevoking(false);
-    }
+    askConfirm(
+      'Delete your account?',
+      'All items you are tracking will stop collecting data for everyone on the platform.',
+      async () => {
+        setRevoking(true);
+        try {
+          await api.revokeAccount();
+          await logout();
+          onClose();
+        } catch (e) {
+          setErr(e.message);
+          setRevoking(false);
+        }
+      },
+      true
+    );
   }
 
   return (
@@ -167,6 +181,42 @@ function SettingsModal({ onClose }) {
           </button>
         </div>
       </div>
+
+      {/* In-app confirm dialog */}
+      {confirm && (
+        <div
+          onClick={() => setConfirm(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: '#0d0d22', border: `1px solid ${confirm.danger ? '#3a1a1a' : '#2e2e5a'}`, borderRadius: 10, padding: '28px 28px', width: 340, textAlign: 'center' }}
+          >
+            <p style={{ margin: '0 0 10px', color: '#e0e0ff', fontSize: 14, fontWeight: 600 }}>{confirm.title}</p>
+            <p style={{ margin: '0 0 24px', color: '#6b6b8a', fontSize: 13, lineHeight: 1.6 }}>{confirm.body}</p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+              <button
+                onClick={() => setConfirm(null)}
+                style={{ background: 'none', border: '1px solid #2e2e5a', borderRadius: 6, padding: '7px 20px', color: '#9090b0', fontSize: 12, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => { setConfirm(null); await confirm.action(); }}
+                style={{
+                  background: confirm.danger ? '#2a0a0a' : '#1e1440',
+                  border: `1px solid ${confirm.danger ? '#7f1d1d' : '#4c1d95'}`,
+                  borderRadius: 6, padding: '7px 20px',
+                  color: confirm.danger ? '#f87171' : '#a78bfa',
+                  fontSize: 12, cursor: 'pointer',
+                }}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -175,15 +225,20 @@ function SettingsModal({ onClose }) {
 
 function Nav() {
   const { user } = useAuth();
+  const location = useLocation();
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Show poll countdown only on item detail pages (/:slug), not on / or /login etc.
+  const isItemPage = /^\/[^/]+$/.test(location.pathname) &&
+    !['/', '/login', '/admin'].includes(location.pathname);
 
   return (
     <>
       <nav>
-        <Link to="/" style={{ textDecoration: 'none' }}><div className="nav-brand">GT-Tracker</div></Link>
+        <Link to="/" style={{ textDecoration: 'none' }}><div className="nav-brand">Galactic Track</div></Link>
         <div className="nav-links" />
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <TrackerCountdown />
+          {isItemPage && <TrackerCountdown />}
           {user && (
             <button
               onClick={() => setSettingsOpen(true)}

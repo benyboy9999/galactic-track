@@ -31,15 +31,12 @@ export default function Login() {
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '70vh' }}>
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 10, padding: '36px 40px', width: 380 }}>
         <div style={{ marginBottom: 28 }}>
-          <h1 style={{ margin: '0 0 6px', fontSize: 22, color: '#e0e0ff' }}>GT-Tracker</h1>
-          <p style={{ margin: 0, fontSize: 13, color: '#6b6b8a' }}>Enter your Galactic Tycoons API key to connect.</p>
+          <h1 style={{ margin: '0 0 6px', fontSize: 22, color: '#e0e0ff' }}>Galactic Track</h1>
+          <p style={{ margin: 0, fontSize: 13, color: '#6b6b8a' }}>Provide A Limited API Key</p>
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
-            <label style={{ display: 'block', fontSize: 11, color: '#6b6b8a', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-              GT API Key
-            </label>
             <input
               type="text"
               value={apiKey}
@@ -86,10 +83,6 @@ export default function Login() {
             {loading ? 'Connecting…' : 'Connect'}
           </button>
         </form>
-
-        <p style={{ margin: '20px 0 0', fontSize: 11, color: '#3a3a55', textAlign: 'center' }}>
-          Your API key is stored securely server-side and never exposed to other users.
-        </p>
 
         {IS_DEV && (
           <button
