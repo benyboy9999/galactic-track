@@ -37,11 +37,28 @@ router.post('/logout', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// PATCH /api/admin/users/:userId/credits
+router.patch('/users/:userId/credits', requireAdmin, async (req, res, next) => {
+  try {
+    const { delta } = req.body; // +1 or -1
+    if (delta !== 1 && delta !== -1) return res.status(400).json({ error: 'delta must be 1 or -1' });
+    const r = await pool.query(
+      `UPDATE users
+       SET credits_total = GREATEST(1, credits_total + $1)
+       WHERE id = $2
+       RETURNING credits_total`,
+      [delta, req.params.userId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true, credits_total: r.rows[0].credits_total });
+  } catch (err) { next(err); }
+});
+
 // GET /api/admin/users
 router.get('/users', requireAdmin, async (req, res, next) => {
   try {
     const r = await pool.query(
-      `SELECT u.id, u.company_name, u.credits_used, u.revoked,
+      `SELECT u.id, u.company_name, u.credits_used, u.credits_total, u.revoked,
               u.registered_at, u.last_seen,
               COALESCE(json_agg(json_build_object('matId', ti.mat_id, 'matName', ti.mat_name))
                 FILTER (WHERE ti.mat_id IS NOT NULL), '[]') AS tracked_items

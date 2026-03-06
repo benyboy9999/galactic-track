@@ -104,6 +104,7 @@ const schema = `
     company_id    VARCHAR(64),
     company_name  VARCHAR(255),
     credits_used  INT NOT NULL DEFAULT 0,
+    credits_total INT NOT NULL DEFAULT 3,
     registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen     TIMESTAMPTZ,
     revoked       BOOLEAN NOT NULL DEFAULT FALSE
@@ -125,6 +126,10 @@ async function init() {
   const client = await pool.connect();
   try {
     await client.query(schema);
+    // Migration: add credits_total if it doesn't exist yet
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS credits_total INT NOT NULL DEFAULT 3
+    `);
     console.log('Database schema initialized.');
   } finally {
     client.release();

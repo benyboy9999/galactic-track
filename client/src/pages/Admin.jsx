@@ -211,6 +211,18 @@ function Dashboard({ token, onLogout }) {
     finally { setWorking(null); }
   }
 
+  async function adjustCredits(userId, delta) {
+    setWorking(`credits-${userId}`);
+    try {
+      await adminFetch(`/users/${userId}/credits`, token, {
+        method: 'PATCH',
+        body: JSON.stringify({ delta }),
+      });
+      await load();
+    } catch (e) { alert(e.message); }
+    finally { setWorking(null); }
+  }
+
   async function untrackItem(matId) {
     if (!confirm('Disable this item? The credit will be refunded to its owner.')) return;
     setWorking(matId);
@@ -240,7 +252,23 @@ function Dashboard({ token, onLogout }) {
 
   const userCols = [
     { key: 'company_name', label: 'Company' },
-    { key: 'credits_used', label: 'Credits', render: (r) => `${r.credits_used}/3` },
+    { key: 'credits_used', label: 'Credits', render: (r) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{r.credits_used}/{r.credits_total ?? 3}</span>
+        <button
+          onClick={() => adjustCredits(r.id, -1)}
+          disabled={working === `credits-${r.id}` || (r.credits_total ?? 3) <= 1}
+          title="Decrease limit"
+          style={{ background: 'none', border: '1px solid #2e2e5a', borderRadius: 3, color: '#6b6b8a', cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: '1px 5px' }}
+        >−</button>
+        <button
+          onClick={() => adjustCredits(r.id, 1)}
+          disabled={working === `credits-${r.id}`}
+          title="Increase limit"
+          style={{ background: 'none', border: '1px solid #2e2e5a', borderRadius: 3, color: '#6b6b8a', cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: '1px 5px' }}
+        >+</button>
+      </div>
+    )},
     { key: 'revoked',      label: 'Status', render: (r) => (
       <span style={{ color: r.revoked ? '#f87171' : '#34d399' }}>{r.revoked ? 'revoked' : 'active'}</span>
     )},

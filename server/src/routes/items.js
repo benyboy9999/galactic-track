@@ -4,7 +4,6 @@ import { getGameData } from '../services/gtApi.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
-const CREDITS_TOTAL = 3;
 
 // GET /api/items
 // Returns all game materials, flagging which are currently tracked and by whom.
@@ -67,8 +66,8 @@ router.post('/track', requireAuth, async (req, res, next) => {
     const matId = Number(req.body.matId);
     if (!matId) return res.status(400).json({ error: 'matId is required' });
 
-    if (req.user.credits_used >= CREDITS_TOTAL) {
-      return res.status(403).json({ error: 'Credit limit reached (max 3)' });
+    if (req.user.credits_used >= req.user.credits_total) {
+      return res.status(403).json({ error: `Credit limit reached (max ${req.user.credits_total})` });
     }
 
     // Check item isn't already tracked
@@ -96,7 +95,7 @@ router.post('/track', requireAuth, async (req, res, next) => {
       [req.user.id]
     );
 
-    res.json({ ok: true, creditsUsed: req.user.credits_used + 1, creditsTotal: CREDITS_TOTAL });
+    res.json({ ok: true, creditsUsed: req.user.credits_used + 1, creditsTotal: req.user.credits_total });
   } catch (err) {
     next(err);
   }
@@ -125,7 +124,7 @@ router.delete('/track/:matId', requireAuth, async (req, res, next) => {
       [req.user.id]
     );
 
-    res.json({ ok: true, creditsUsed: Math.max(0, req.user.credits_used - 1), creditsTotal: CREDITS_TOTAL });
+    res.json({ ok: true, creditsUsed: Math.max(0, req.user.credits_used - 1), creditsTotal: req.user.credits_total });
   } catch (err) {
     next(err);
   }
