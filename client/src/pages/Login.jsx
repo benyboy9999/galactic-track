@@ -32,7 +32,7 @@ export default function Login() {
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 10, padding: '36px 40px', width: 380 }}>
         <div style={{ marginBottom: 28 }}>
           <h1 style={{ margin: '0 0 6px', fontSize: 22, color: '#e0e0ff' }}>Galactic Track</h1>
-          <p style={{ margin: 0, fontSize: 13, color: '#6b6b8a' }}>Provide A Public API Key</p>
+          <p style={{ margin: 0, fontSize: 13, color: '#6b6b8a' }}>Provide A Limited API Key</p>
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
