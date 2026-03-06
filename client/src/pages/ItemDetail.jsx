@@ -543,7 +543,6 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
     },
     { label: 'Sold',        value: qty(totalSold),    color: '#f87171' },
     { label: 'Listed',      value: qty(totalListed),  color: '#34d399' },
-    { label: 'Flash sales', value: totalFlash > 0 ? qty(totalFlash) : '—', color: totalFlash > 0 ? '#f59e0b' : '#3a3a55' },
     { label: 'Sold/hr avg', value: qty(avgSold * 60), color: item.color },
     {
       label: 'Quick Sell Price',
@@ -551,13 +550,6 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount }) {
       color: '#e0e0f0',
       delta: qspArrow ? qspArrow.text : null,
       deltaColor: qspArrow?.color,
-    },
-    {
-      label: 'Latest Wall',
-      value: latestBigOrder
-        ? `${latestBigOrder.company_name} ${qty(Number(latestBigOrder.qty))} @ ${usd(latestBigOrder.unit_price)}`
-        : '—',
-      color: latestBigOrder ? '#a78bfa' : '#3a3a55',
     },
   ];
 
