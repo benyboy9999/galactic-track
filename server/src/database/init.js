@@ -120,6 +120,33 @@ const schema = `
     enabled_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     active        BOOLEAN NOT NULL DEFAULT TRUE
   );
+
+  CREATE TABLE IF NOT EXISTS contracts (
+    id            SERIAL PRIMARY KEY,
+    type          VARCHAR(4) NOT NULL CHECK (type IN ('buy', 'sell')),
+    owner_user_id INT REFERENCES users(id) ON DELETE CASCADE,
+    company_name  VARCHAR(255) NOT NULL,
+    mat_id        INT NOT NULL,
+    mat_name      VARCHAR(255) NOT NULL,
+    planet        VARCHAR(255) NOT NULL,
+    max_daily_qty INT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    active        BOOLEAN NOT NULL DEFAULT TRUE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_contracts_active ON contracts(active);
+  CREATE INDEX IF NOT EXISTS idx_contracts_mat_id ON contracts(mat_id);
+
+  CREATE TABLE IF NOT EXISTS contract_interests (
+    id          SERIAL PRIMARY KEY,
+    contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    company_name TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(contract_id, user_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_cint_contract_id ON contract_interests(contract_id);
 `;
 
 async function init() {
@@ -130,6 +157,9 @@ async function init() {
     await client.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS credits_total INT NOT NULL DEFAULT 3
     `);
+    // Migration: contract status + bump tracking
+    await client.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'active'`);
+    await client.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS bumped_at TIMESTAMPTZ`);
     console.log('Database schema initialized.');
   } finally {
     client.release();

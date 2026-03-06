@@ -5,6 +5,7 @@ import ItemDetail from './pages/ItemDetail';
 import ItemGrid from './pages/ItemGrid';
 import Login from './pages/Login';
 import Admin from './pages/Admin';
+import Contracts from './pages/Contracts';
 import ErrorBoundary from './components/ErrorBoundary';
 import { api } from './api';
 
@@ -225,34 +226,51 @@ function SettingsModal({ onClose }) {
 
 function Nav() {
   const { user } = useAuth();
-  const location = useLocation();
+  const location  = useLocation();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Show poll countdown only on item detail pages (/:slug), not on / or /login etc.
-  const isItemPage = /^\/[^/]+$/.test(location.pathname) &&
-    !['/', '/login', '/admin'].includes(location.pathname);
+  const navLink = (to, label) => {
+    const active = location.pathname === to || (to !== '/' && location.pathname.startsWith(to));
+    return (
+      <Link to={to} style={{
+        textDecoration: 'none', fontSize: 13, fontWeight: 500,
+        color: active ? '#e0e0ff' : '#6b6b8a',
+        borderBottom: active ? '2px solid #6366f1' : '2px solid transparent',
+        paddingBottom: 2,
+        transition: 'color 0.15s',
+      }}>{label}</Link>
+    );
+  };
 
   return (
     <>
-      <nav>
-        <Link to="/" style={{ textDecoration: 'none' }}><div className="nav-brand">Galactic Track</div></Link>
-        <div className="nav-links" />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          {isItemPage && <TrackerCountdown />}
-          {user && (
+      <nav style={{ justifyContent: 'space-between' }}>
+        {/* Left: brand + links */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+          <Link to="/" style={{ textDecoration: 'none' }}><div className="nav-brand">Galactic Track</div></Link>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 20, height: 42 }}>
+            {navLink('/', 'Tracker')}
+            {navLink('/contracts', 'Marketplace')}
+          </div>
+        </div>
+
+        {/* Right: company name + settings */}
+        {user && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 12, color: '#6b6b8a', whiteSpace: 'nowrap' }}>{user.companyName}</span>
             <button
               onClick={() => setSettingsOpen(true)}
               title="Settings"
               style={{
                 background: 'none', border: '1px solid #2e2e5a', borderRadius: 6,
-                padding: '4px 8px', color: '#6b6b8a', fontSize: 16, cursor: 'pointer',
+                padding: '4px 8px', color: '#6b6b8a', fontSize: 15, cursor: 'pointer',
                 lineHeight: 1, display: 'flex', alignItems: 'center',
               }}
             >
               ⚙
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </nav>
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </>
@@ -283,6 +301,7 @@ export default function App() {
               <Routes>
                 <Route path="/login" element={<Login />} />
                 <Route path="/admin" element={<Admin />} />
+                <Route path="/contracts" element={<RequireAuth><Contracts /></RequireAuth>} />
                 <Route path="/:slug" element={<RequireAuth><ItemDetail /></RequireAuth>} />
                 <Route path="/" element={<RequireAuth><ItemGrid /></RequireAuth>} />
               </Routes>

@@ -165,27 +165,30 @@ function LoginForm({ onLogin }) {
 // ── Main dashboard ────────────────────────────────────────────────────────────
 
 function Dashboard({ token, onLogout }) {
-  const [users,   setUsers]   = useState([]);
-  const [items,   setItems]   = useState([]);
-  const [rates,   setRates]   = useState([]);
-  const [errors,  setErrors]  = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err,     setErr]     = useState('');
-  const [tab,     setTab]     = useState('users');
-  const [working, setWorking] = useState(null); // id of pending action
+  const [users,     setUsers]     = useState([]);
+  const [items,     setItems]     = useState([]);
+  const [rates,     setRates]     = useState([]);
+  const [errors,    setErrors]    = useState([]);
+  const [contracts, setContracts] = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [err,       setErr]       = useState('');
+  const [tab,       setTab]       = useState('users');
+  const [working,   setWorking]   = useState(null);
 
   const load = useCallback(async () => {
     try {
-      const [u, it, rl, er] = await Promise.all([
+      const [u, it, rl, er, co] = await Promise.all([
         adminFetch('/users',         token),
         adminFetch('/tracked-items', token),
         adminFetch('/rate-limits',   token),
         adminFetch('/errors',        token),
+        adminFetch('/contracts',     token),
       ]);
       setUsers(u);
       setItems(it);
       setRates(rl);
       setErrors(er);
+      setContracts(co);
       setErr('');
     } catch (e) {
       if (e.message.includes('Invalid admin token')) {
@@ -228,6 +231,16 @@ function Dashboard({ token, onLogout }) {
     setWorking(matId);
     try {
       await adminFetch(`/untrack/${matId}`, token, { method: 'POST' });
+      await load();
+    } catch (e) { alert(e.message); }
+    finally { setWorking(null); }
+  }
+
+  async function removeContract(id) {
+    if (!confirm('Force-remove this listing?')) return;
+    setWorking(`contract-${id}`);
+    try {
+      await adminFetch(`/contracts/${id}`, token, { method: 'DELETE' });
       await load();
     } catch (e) { alert(e.message); }
     finally { setWorking(null); }
@@ -306,6 +319,30 @@ function Dashboard({ token, onLogout }) {
     { key: 'message', label: 'Error' },
   ];
 
+  const contractCols = [
+    { key: 'company_name', label: 'Company' },
+    { key: 'type',         label: 'Type',   render: (r) => (
+      <span style={{ color: r.type === 'buy' ? '#34d399' : '#f87171' }}>{r.type}</span>
+    )},
+    { key: 'mat_name',     label: 'Item' },
+    { key: 'planet',       label: 'Location' },
+    { key: 'max_daily_qty', label: 'Qty/day', render: (r) => Number(r.max_daily_qty).toLocaleString() },
+    { key: 'status',       label: 'Status', render: (r) => (
+      <span style={{ color: r.active ? '#34d399' : '#6b6b8a' }}>{r.status}</span>
+    )},
+    { key: 'created_at',   label: 'Posted',  render: (r) => fmtAgo(r.created_at) },
+    { key: 'bumped_at',    label: 'Bumped',  render: (r) => fmtAgo(r.bumped_at) },
+    { key: '_actions',     label: '',        render: (r) => (
+      r.active && (
+        <Btn danger onClick={() => removeContract(r.id)} disabled={working === `contract-${r.id}`}>
+          Remove
+        </Btn>
+      )
+    )},
+  ];
+
+  const activeContracts = contracts.filter((c) => c.active);
+
   if (loading) return <p style={{ color: '#6b6b8a', padding: 32 }}>Loading…</p>;
 
   return (
@@ -322,10 +359,11 @@ function Dashboard({ token, onLogout }) {
       {/* Stats bar */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 28 }}>
         {[
-          { label: 'Users',        value: users.length },
-          { label: 'Active',       value: users.filter((u) => !u.revoked).length },
-          { label: 'Tracked items', value: items.filter((i) => i.active).length },
-          { label: 'Recent errors', value: errors.length },
+          { label: 'Users',           value: users.length },
+          { label: 'Active',          value: users.filter((u) => !u.revoked).length },
+          { label: 'Tracked items',   value: items.filter((i) => i.active).length },
+          { label: 'Active listings', value: contracts.filter((c) => c.active).length },
+          { label: 'Recent errors',   value: errors.length },
         ].map(({ label, value }) => (
           <div key={label} style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 6, padding: '10px 16px', flex: 1 }}>
             <div style={{ fontSize: 11, color: '#6b6b8a', marginBottom: 4 }}>{label}</div>
@@ -337,10 +375,11 @@ function Dashboard({ token, onLogout }) {
       {/* Tab bar */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 6, padding: 4, width: 'fit-content' }}>
         {[
-          { key: 'users',   label: `Users (${users.length})` },
-          { key: 'items',   label: `Items (${items.length})` },
-          { key: 'rates',   label: 'Rate Limits' },
-          { key: 'errors',  label: `Errors (${errors.length})` },
+          { key: 'users',     label: `Users (${users.length})` },
+          { key: 'items',     label: `Items (${items.length})` },
+          { key: 'contracts', label: `Listings (${activeContracts.length})` },
+          { key: 'rates',     label: 'Rate Limits' },
+          { key: 'errors',    label: `Errors (${errors.length})` },
         ].map(({ key, label }) => (
           <button key={key} style={tabStyle(key)} onClick={() => setTab(key)}>{label}</button>
         ))}
@@ -348,10 +387,11 @@ function Dashboard({ token, onLogout }) {
 
       {/* Content */}
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '16px 20px' }}>
-        {tab === 'users'  && <Table cols={userCols}  rows={users}  emptyMsg="No users registered" />}
-        {tab === 'items'  && <Table cols={itemCols}  rows={items}  emptyMsg="No tracked items" />}
-        {tab === 'rates'  && <Table cols={rateCols}  rows={rates}  emptyMsg="No rate limit data yet" />}
-        {tab === 'errors' && <Table cols={errorCols} rows={errors} emptyMsg="No errors recorded" />}
+        {tab === 'users'     && <Table cols={userCols}     rows={users}     emptyMsg="No users registered" />}
+        {tab === 'items'     && <Table cols={itemCols}     rows={items}     emptyMsg="No tracked items" />}
+        {tab === 'contracts' && <Table cols={contractCols} rows={contracts} emptyMsg="No listings" />}
+        {tab === 'rates'     && <Table cols={rateCols}     rows={rates}     emptyMsg="No rate limit data yet" />}
+        {tab === 'errors'    && <Table cols={errorCols}    rows={errors}    emptyMsg="No errors recorded" />}
       </div>
     </div>
   );

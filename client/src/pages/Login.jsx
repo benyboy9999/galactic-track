@@ -18,7 +18,7 @@ export default function Login() {
     setLoading(true);
     try {
       const data = await api.login(apiKey.trim());
-      login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal);
+      login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal, data.id);
       navigate('/', { replace: true });
     } catch (e) {
       setErr(e.message);
@@ -91,7 +91,7 @@ export default function Login() {
               setErr('');
               try {
                 const data = await api.devLogin();
-                login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal);
+                login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal, data.id);
                 navigate('/', { replace: true });
               } catch (e) {
                 setErr(e.message);

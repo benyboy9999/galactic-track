@@ -69,6 +69,7 @@ router.post('/login', async (req, res, next) => {
       companyName,
       creditsUsed:  user.credits_used,
       creditsTotal: user.credits_total,
+      id:           user.id,
     });
   } catch (err) {
     next(err);
@@ -84,6 +85,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
       [req.user.id]
     );
     res.json({
+      id:           req.user.id,
       companyName:  req.user.company_name,
       creditsUsed:  req.user.credits_used,
       creditsTotal: req.user.credits_total,
@@ -145,6 +147,7 @@ router.post('/dev-login', async (req, res, next) => {
       companyName:  'Dev User',
       creditsUsed:  user.credits_used,
       creditsTotal: user.credits_total,
+      id:           user.id,
     });
   } catch (err) {
     next(err);

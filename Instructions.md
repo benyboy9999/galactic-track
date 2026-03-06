@@ -1,9 +1,14 @@
 Developing
-1. Open Tunnel to server for SQL 
-    ssh -L 5432:localhost:5432 homelab@192.168.0.70 -N
+1. Open Tunnel to server for SQL
+    ssh -L 5432:localhost:5432 root@galactic-track.com -N
 2. cd server && npm run dev && cd ../client && npm run dev
 
 Pushing Changes
 1. git add .
 2. git commit -m "change name"
-3. git push homelab main
+3. git push origin main
+4. ssh root@galactic-track.com "cd ~/galactic-track && git pull && npm run build && pm2 restart galactic-track"
+
+DB Changes on live
+1. ssh root@galactic-track.com
+2. sudo -u postgres psql -d galactic_tycoons

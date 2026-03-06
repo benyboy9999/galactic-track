@@ -23,9 +23,9 @@ export function AuthProvider({ children }) {
 
   useEffect(() => { refreshUser(); }, [refreshUser]);
 
-  const login = useCallback((sessionToken, companyName, creditsUsed, creditsTotal) => {
+  const login = useCallback((sessionToken, companyName, creditsUsed, creditsTotal, id) => {
     localStorage.setItem('sessionToken', sessionToken);
-    setUser({ sessionToken, companyName, creditsUsed, creditsTotal });
+    setUser({ sessionToken, companyName, creditsUsed, creditsTotal, id });
   }, []);
 
   const logout = useCallback(async () => {

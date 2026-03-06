@@ -145,4 +145,33 @@ router.post('/untrack/:matId', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/admin/contracts
+router.get('/contracts', requireAdmin, async (req, res, next) => {
+  try {
+    const r = await pool.query(
+      `SELECT c.id, c.type, c.company_name, c.mat_name, c.planet,
+              c.max_daily_qty, c.status, c.created_at, c.bumped_at,
+              c.active, c.owner_user_id
+       FROM contracts c
+       ORDER BY c.created_at DESC
+       LIMIT 200`
+    );
+    res.json(r.rows);
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/admin/contracts/:id  (force-remove)
+router.delete('/contracts/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const r = await pool.query(
+      `UPDATE contracts SET active = FALSE, status = 'cancelled'
+       WHERE id = $1 AND active = TRUE
+       RETURNING id`,
+      [Number(req.params.id)]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Contract not found or already inactive' });
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 export default router;
