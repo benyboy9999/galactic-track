@@ -190,9 +190,9 @@ export default function ItemGrid() {
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px 20px' }}>
 
       <div style={{ marginBottom: 20 }}>
-        <h1 style={{ margin: 0, fontSize: 20, color: '#e0e0ff' }}>Items</h1>
+        <h1 style={{ margin: 0, fontSize: 20, color: '#e0e0ff' }}>Currently Tracked Items</h1>
         <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6b6b8a' }}>
-          Click any item to view its market tracker.
+          Items here are currently being tracked. Not sure what to track? Pick a high-volume item you sell!
         </p>
       </div>
 
