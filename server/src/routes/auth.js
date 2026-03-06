@@ -6,7 +6,6 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-const CREDITS_TOTAL = 3;
 
 // POST /api/auth/login
 // Validates the GT API key, upserts the user, and returns a session token.
@@ -37,13 +36,13 @@ router.post('/login', async (req, res, next) => {
          SET company_name = EXCLUDED.company_name,
              last_seen    = NOW(),
              revoked      = FALSE
-       RETURNING id, session_token, credits_used, revoked`,
+       RETURNING id, session_token, credits_used, credits_total, revoked`,
       [apiKey.trim(), randomUUID(), companyId, companyName]
     );
     const user = upsert.rows[0];
 
     // Auto-assign unclaimed items (legacy seed) up to credit limit
-    const headroom = CREDITS_TOTAL - user.credits_used;
+    const headroom = user.credits_total - user.credits_used;
     if (headroom > 0) {
       const unclaimed = await pool.query(
         `SELECT mat_id FROM tracked_items
@@ -69,7 +68,7 @@ router.post('/login', async (req, res, next) => {
       sessionToken: user.session_token,
       companyName,
       creditsUsed:  user.credits_used,
-      creditsTotal: CREDITS_TOTAL,
+      creditsTotal: user.credits_total,
     });
   } catch (err) {
     next(err);
@@ -87,7 +86,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
     res.json({
       companyName:  req.user.company_name,
       creditsUsed:  req.user.credits_used,
-      creditsTotal: CREDITS_TOTAL,
+      creditsTotal: req.user.credits_total,
       trackedItems: items.rows,
     });
   } catch (err) {
@@ -137,7 +136,7 @@ router.post('/dev-login', async (req, res, next) => {
        VALUES($1, $2, $3, $4, NOW())
        ON CONFLICT(api_key) DO UPDATE
          SET last_seen = NOW(), revoked = FALSE
-       RETURNING id, session_token, credits_used`,
+       RETURNING id, session_token, credits_used, credits_total`,
       ['dev-local', randomUUID(), '0', 'Dev User']
     );
     const user = upsert.rows[0];
@@ -145,7 +144,7 @@ router.post('/dev-login', async (req, res, next) => {
       sessionToken: user.session_token,
       companyName:  'Dev User',
       creditsUsed:  user.credits_used,
-      creditsTotal: CREDITS_TOTAL,
+      creditsTotal: user.credits_total,
     });
   } catch (err) {
     next(err);
