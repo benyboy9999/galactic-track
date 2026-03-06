@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import { useAuth } from '../context/AuthContext';
 import { toSlug } from '../utils/slug';
 
 // Manual overrides where API name ≠ sprite ID
@@ -64,7 +63,6 @@ function toIconId(name) {
 }
 
 export default function ItemGrid() {
-  const { user } = useAuth();
   const navigate = useNavigate();
 
   const [items,       setItems]       = useState([]);
@@ -73,14 +71,12 @@ export default function ItemGrid() {
   const [search,      setSearch]      = useState('');
   const [tierFilter,  setTierFilter]  = useState(null);  // null = all
   const [catFilter,   setCatFilter]   = useState('');    // '' = all
-  const [promoteOpen, setPromoteOpen] = useState(false);
   const [favourites,  setFavourites]  = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('gt-favourites') ?? '[]')); }
     catch { return new Set(); }
   });
 
-  const spriteUrl   = '/api/gamedata/sprite';
-  const creditsUsed = user?.creditsUsed ?? 0;
+  const spriteUrl = '/api/gamedata/sprite';
 
   const loadItems = useCallback(async () => {
     try {
@@ -131,11 +127,7 @@ export default function ItemGrid() {
   const untrackedItems = filtered.filter((i) => !i.tracked);
 
   function handleCardClick(item) {
-    if (item.tracked && creditsUsed === 0 && !import.meta.env.DEV) {
-      setPromoteOpen(true);
-    } else {
-      navigate(`/${toSlug(item.matName)}`);
-    }
+    navigate(`/${toSlug(item.matName)}`);
   }
 
   function ItemCard({ item }) {
@@ -295,34 +287,6 @@ export default function ItemGrid() {
         </>
       )}
 
-      {/* Promote modal — shown to users who haven't tracked any items yet */}
-      {promoteOpen && (
-        <div
-          onClick={() => setPromoteOpen(false)}
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: '#0d0d22', border: '1px solid #2e2e5a', borderRadius: 10, padding: '32px 28px', width: 360, textAlign: 'center' }}
-          >
-            <div style={{ fontSize: 28, marginBottom: 16 }}>📊</div>
-            <p style={{ margin: '0 0 10px', color: '#e0e0ff', fontSize: 15, fontWeight: 600 }}>
-              Track at least 1 item first!
-            </p>
-            <p style={{ margin: '0 0 24px', color: '#6b6b8a', fontSize: 13, lineHeight: 1.6 }}>
-              Pick up to 3 items from the <em>Not yet tracked</em> section below to start collecting
-              market data. Once you're tracking at least 1 item of your own you'll be able to view all tracked
-              items on the platform.
-            </p>
-            <button
-              onClick={() => setPromoteOpen(false)}
-              style={{ background: '#1e0a3a', border: '1px solid #4c1d95', borderRadius: 6, padding: '9px 28px', color: '#a78bfa', fontSize: 13, cursor: 'pointer' }}
-            >
-              Got it
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
