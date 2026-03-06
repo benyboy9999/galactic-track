@@ -31,8 +31,8 @@ function TypeBadge({ type }) {
   const isBuy = type === 'buy';
   return (
     <span style={{
-      fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
-      padding: '2px 7px', borderRadius: 4,
+      fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+      padding: '2px 6px', borderRadius: 4,
       color: isBuy ? '#34d399' : '#f87171',
       background: isBuy ? '#0a1f18' : '#1f0a0a',
       border: `1px solid ${isBuy ? '#065f46' : '#7f1d1d'}`,
@@ -156,12 +156,12 @@ function ContractCard({ contract, isOwn }) {
       background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 7,
       padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 7,
     }}>
-      {/* Company + badge */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: '#e0e0ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {contract.company_name}
-        </span>
-        <TypeBadge type={contract.type} />
+      {/* Badge row */}
+      <div><TypeBadge type={contract.type} /></div>
+
+      {/* Company name */}
+      <div style={{ fontSize: 15, fontWeight: 700, color: '#e0e0ff', lineHeight: 1.3 }}>
+        {contract.company_name}
       </div>
 
       {/* Icon + item */}
