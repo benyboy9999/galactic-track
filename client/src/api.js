@@ -59,7 +59,8 @@ async function del(path, authed = false) {
 export const api = {
   // ── Auth ───────────────────────────────────────────────────────────────────
   login:         (apiKey) => post('/auth/login', { apiKey }),
-  devLogin:      ()       => post('/auth/dev-login', {}),
+  devLogin:      (companyName, companyId) => post('/auth/dev-login', { companyName, companyId }),
+  devSearch:     (q = '')               => get(`/auth/dev-search?q=${encodeURIComponent(q)}`),
   me:            ()       => get('/auth/me', true),
   logout:        ()       => post('/auth/logout', {}, true),
   revokeAccount: ()       => del('/auth/account', true),
@@ -100,6 +101,15 @@ export const api = {
   notifications:           () => get('/contracts/notifications', true),
   markNotificationsRead:   () => patch('/contracts/notifications/read', {}, true),
   dismissNotification:     (id) => del(`/contracts/notifications/${id}`, true),
+
+  // ── Company ────────────────────────────────────────────────────────────────
+  companySummary:  (hours = 24, companyId = null) =>
+    get(`/company/summary?hours=${hours}${companyId ? `&companyId=${companyId}` : ''}`, true),
+  companySearch:   (q = '') => get(`/company/search?q=${encodeURIComponent(q)}`, true),
+  companyEvents:   (companyId = null, limit = 20, from = null, to = null) =>
+    get(`/company/events?limit=${limit}${companyId ? `&companyId=${companyId}` : ''}${from ? `&from=${encodeURIComponent(from)}` : ''}${to ? `&to=${encodeURIComponent(to)}` : ''}`, true),
+  companyTimeline: (hours = 24, companyId = null, bucketSecs = null) =>
+    get(`/company/timeline?hours=${hours}${companyId ? `&companyId=${companyId}` : ''}${bucketSecs ? `&bucketSecs=${bucketSecs}` : ''}`, true),
 
   // ── Tracker ────────────────────────────────────────────────────────────────
   trackerStatus:         () => get('/tracker/status'),

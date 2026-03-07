@@ -136,26 +136,50 @@ router.delete('/account', requireAuth, async (req, res, next) => {
   }
 });
 
+// GET /api/auth/dev-search?q=
+// DEV ONLY — search registered users by company name for impersonation.
+router.get('/dev-search', async (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  try {
+    const q = (req.query.q ?? '').trim();
+    const r = await pool.query(
+      `SELECT company_name, company_id
+       FROM users
+       WHERE company_name ILIKE $1 AND company_id IS NOT NULL AND company_id != '0'
+       ORDER BY company_name ASC
+       LIMIT 10`,
+      [`%${q}%`]
+    );
+    res.json(r.rows);
+  } catch (err) { next(err); }
+});
+
 // POST /api/auth/dev-login
 // DEV ONLY — creates/reuses a local test user without a real GT API key.
+// Accepts optional { companyName, companyId } to impersonate a real company for testing.
 // Always returns 404 in production.
 router.post('/dev-login', async (req, res, next) => {
   if (process.env.NODE_ENV === 'production') {
     return res.status(404).json({ error: 'Not found' });
   }
   try {
+    const { companyName = 'Dev User', companyId = '0' } = req.body;
     const upsert = await pool.query(
       `INSERT INTO users(api_key, api_key_encrypted, session_token, company_id, company_name, last_seen)
        VALUES($1, $2, $3, $4, $5, NOW())
        ON CONFLICT(api_key) DO UPDATE
-         SET last_seen = NOW(), revoked = FALSE
+         SET company_id = EXCLUDED.company_id,
+             company_name = EXCLUDED.company_name,
+             last_seen = NOW(), revoked = FALSE
        RETURNING id, session_token, credits_used, credits_total`,
-      [hashApiKey('dev-local'), encryptApiKey('dev-local'), randomUUID(), '0', 'Dev User']
+      [hashApiKey('dev-local'), encryptApiKey('dev-local'), randomUUID(), companyId, companyName]
     );
     const user = upsert.rows[0];
     res.json({
       sessionToken: user.session_token,
-      companyName:  'Dev User',
+      companyName,
       creditsUsed:  user.credits_used,
       creditsTotal: user.credits_total,
       id:           user.id,

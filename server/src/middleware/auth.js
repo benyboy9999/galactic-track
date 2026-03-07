@@ -7,7 +7,7 @@ export async function optionalAuth(req, res, next) {
   const token = header.slice(7);
   try {
     const r = await pool.query(
-      `SELECT id, api_key_encrypted, company_name, credits_used, credits_total
+      `SELECT id, api_key_encrypted, company_id, company_name, company_logo, company_tag, credits_used, credits_total
        FROM users WHERE session_token = $1 AND revoked = FALSE`,
       [token]
     );
@@ -30,7 +30,7 @@ export async function requireAuth(req, res, next) {
       `UPDATE users
        SET last_seen = NOW()
        WHERE session_token = $1 AND revoked = FALSE
-       RETURNING id, api_key_encrypted, company_name, credits_used, credits_total, max_listings, role`,
+       RETURNING id, api_key_encrypted, company_id, company_name, company_logo, company_tag, credits_used, credits_total, max_listings, role`,
       [token]
     );
     if (!r.rows.length) {

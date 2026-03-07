@@ -12,6 +12,7 @@ import authRoutes from './routes/auth.js';
 import itemsRoutes from './routes/items.js';
 import adminRoutes from './routes/admin.js';
 import contractsRoutes from './routes/contracts.js';
+import companyRoutes from './routes/company.js';
 import { getRateLimitStatus, getCompanyDetail } from './services/gtApi.js';
 import { decryptApiKey } from './utils/apiKeyCrypto.js';
 import { startTracker } from './services/tracker.js';
@@ -34,6 +35,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/items', itemsRoutes);
 app.use('/api/admin',     adminRoutes);
 app.use('/api/contracts', contractsRoutes);
+app.use('/api/company',   companyRoutes);
 
 app.get('/api/health',    (req, res) => res.json({ ok: true }));
 app.get('/api/ratelimit', (req, res) => res.json(getRateLimitStatus()));

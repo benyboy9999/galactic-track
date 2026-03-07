@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 
-
 const IS_DEV = import.meta.env.DEV;
 
 export default function Login() {
@@ -19,6 +18,20 @@ export default function Login() {
     setLoading(true);
     try {
       const data = await api.login(apiKey.trim());
+      login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal, data.id);
+      navigate('/', { replace: true });
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDevLogin() {
+    setLoading(true);
+    setErr('');
+    try {
+      const data = await api.devLogin();
       login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal, data.id);
       navigate('/', { replace: true });
     } catch (e) {
@@ -87,19 +100,7 @@ export default function Login() {
 
         {IS_DEV && (
           <button
-            onClick={async () => {
-              setLoading(true);
-              setErr('');
-              try {
-                const data = await api.devLogin();
-                login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal, data.id);
-                navigate('/', { replace: true });
-              } catch (e) {
-                setErr(e.message);
-              } finally {
-                setLoading(false);
-              }
-            }}
+            onClick={handleDevLogin}
             disabled={loading}
             style={{
               marginTop: 12, width: '100%', background: 'none',

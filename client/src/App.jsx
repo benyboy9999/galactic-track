@@ -10,6 +10,8 @@ import ItemGrid from './pages/ItemGrid';
 import Login from './pages/Login';
 import Admin from './pages/Admin';
 import Contracts from './pages/Contracts';
+import Company from './pages/Company';
+import DevCompanySearch from './components/DevCompanySearch';
 import ErrorBoundary from './components/ErrorBoundary';
 import { api } from './api';
 
@@ -57,12 +59,13 @@ function TrackerCountdown() {
 
 function SettingsModal({ onClose }) {
   const { user, refreshUser, logout } = useAuth();
-  const [untracking, setUntracking] = useState(null);
-  const [revoking,   setRevoking]   = useState(false);
-  const [err,        setErr]        = useState('');
-  const [confirm,    setConfirm]    = useState(null); // { title, body, action, danger }
-  const [soundOn,    setSoundOn]    = useState(() => localStorage.getItem('notifSoundEnabled') !== 'false');
-  const [volume,     setVolume]     = useState(() => parseFloat(localStorage.getItem('notifVolume') ?? '0.4'));
+  const [untracking,   setUntracking]   = useState(null);
+  const [revoking,     setRevoking]     = useState(false);
+  const [err,          setErr]          = useState('');
+  const [confirm,      setConfirm]      = useState(null); // { title, body, action, danger }
+  const [soundOn,      setSoundOn]      = useState(() => localStorage.getItem('notifSoundEnabled') !== 'false');
+  const [volume,       setVolume]       = useState(() => parseFloat(localStorage.getItem('notifVolume') ?? '0.4'));
+  const [devSwitching,  setDevSwitching]  = useState(false);
 
   function toggleSound() {
     const next = !soundOn;
@@ -100,6 +103,21 @@ function SettingsModal({ onClose }) {
       },
       true
     );
+  }
+
+  async function handleDevSwitch(companyName, companyId) {
+    setDevSwitching(true);
+    setErr('');
+    try {
+      const data = await api.devLogin(companyName, companyId);
+      localStorage.setItem('sessionToken', data.sessionToken);
+      await refreshUser();
+      onClose();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setDevSwitching(false);
+    }
   }
 
   async function handleRevoke() {
@@ -220,6 +238,19 @@ function SettingsModal({ onClose }) {
             </button>
           )}
         </div>
+
+        {/* Dev company switcher */}
+        {IS_DEV && (
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+              Dev — switch company
+            </div>
+            <DevCompanySearch
+              onSelect={(companyName, companyId) => handleDevSwitch(companyName, companyId)}
+              disabled={devSwitching}
+            />
+          </div>
+        )}
 
         {/* Actions */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #1e1e3a', paddingTop: 16 }}>
@@ -437,6 +468,7 @@ function Nav() {
           <Link to="/" style={{ textDecoration: 'none' }}><div className="nav-brand">Galactic Track</div></Link>
           <div style={{ display: 'flex', alignItems: 'center', gap: 20, height: 42 }}>
             {navLink('/', 'Tracker')}
+            {navLink('/company', 'Company')}
             {navLink('/contracts', 'Marketplace')}
             {user?.role === 'admin' && navLink('/admin', 'Admin')}
           </div>
@@ -503,6 +535,7 @@ export default function App() {
                 <Route path="/login" element={<Login />} />
                 <Route path="/admin" element={<Admin />} />
                 <Route path="/contracts" element={<RequireAuth><Contracts /></RequireAuth>} />
+                <Route path="/company"   element={<RequireAuth><Company /></RequireAuth>} />
                 <Route path="/:slug" element={<RequireAuth><ItemDetail /></RequireAuth>} />
                 <Route path="/" element={<RequireAuth><ItemGrid /></RequireAuth>} />
               </Routes>
