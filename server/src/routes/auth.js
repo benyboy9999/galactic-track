@@ -70,7 +70,7 @@ router.post('/login', async (req, res, next) => {
     getCompanyDetail(companyId, apiKey.trim()).then((detail) => {
       pool.query(
         `UPDATE users SET company_logo = $1, company_tag = $2 WHERE id = $3`,
-        [detail.ic ?? null, detail.gTag ?? '', user.id]
+        [detail.ic || null, detail.gTag || '', user.id]
       );
     }).catch(() => {});
 

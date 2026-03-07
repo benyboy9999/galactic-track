@@ -51,23 +51,22 @@ const publicDir = join(__dirname, '../public');
 app.use(express.static(publicDir));
 app.get('*', (_req, res) => res.sendFile(join(publicDir, 'index.html')));
 
-// Fetch and cache logos for users with active contracts but no logo stored yet.
+// Fetch and cache logos for all registered users missing a logo.
 async function backfillCompanyLogos() {
   try {
     const r = await pool.query(
-      `SELECT DISTINCT u.id, u.company_id, u.api_key_encrypted
-       FROM users u
-       JOIN contracts c ON c.owner_user_id = u.id AND c.active = TRUE
-       WHERE u.company_logo IS NULL AND u.company_id IS NOT NULL AND u.company_id != ''`
+      `SELECT id, company_id
+       FROM users
+       WHERE (company_logo IS NULL OR company_logo = '') AND company_id IS NOT NULL AND company_id != '' AND company_id != '0'`
     );
     if (!r.rows.length) return;
     console.log(`Backfilling logos for ${r.rows.length} company/companies…`);
     for (const user of r.rows) {
       try {
-        const detail = await getCompanyDetail(user.company_id, decryptApiKey(user.api_key_encrypted));
+        const detail = await getCompanyDetail(user.company_id, null);
         await pool.query(
           `UPDATE users SET company_logo = $1, company_tag = $2 WHERE id = $3`,
-          [detail.ic ?? null, detail.gTag ?? '', user.id]
+          [detail.ic || null, detail.gTag || '', user.id]
         );
       } catch (e) {
         console.warn(`Logo backfill failed for user ${user.id}: ${e.message}`);
