@@ -7,6 +7,9 @@ import { api } from '../api';
 import Spinner from '../components/Spinner';
 import ItemBrowser from '../components/ItemBrowser';
 import { useAuth } from '../context/AuthContext';
+import { toIconId } from '../utils/materialIcon';
+
+const SPRITE_URL = '/api/gamedata/sprite';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -1041,6 +1044,7 @@ export default function Tracker() {
             key={item.matId}
             onClick={() => setActiveTab(item.matId)}
             style={{
+              display: 'flex', alignItems: 'center', gap: 5,
               padding: '5px 14px', fontSize: 12, fontWeight: 600,
               border: 'none', cursor: 'pointer', borderRadius: '5px 5px 0 0',
               background: activeTab === item.matId ? '#13132a' : 'transparent',
@@ -1048,6 +1052,9 @@ export default function Tracker() {
               borderBottom: activeTab === item.matId ? `2px solid ${item.color}` : '2px solid transparent',
             }}
           >
+            <svg width="14" height="14" style={{ flexShrink: 0, opacity: activeTab === item.matId ? 1 : 0.5 }}>
+              <use href={`${SPRITE_URL}#${toIconId(item.matName)}`} width="14" height="14" />
+            </svg>
             {item.matName}
           </button>
         ))}

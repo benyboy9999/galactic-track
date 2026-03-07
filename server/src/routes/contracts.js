@@ -36,7 +36,7 @@ router.get('/', optionalAuth, async (req, res, next) => {
       `SELECT c.id, c.type, c.company_name, c.mat_id, c.mat_name,
               c.planet, c.max_daily_qty, c.created_at, c.owner_user_id,
               c.status, c.bumped_at,
-              u.company_logo, u.company_tag,
+              u.company_logo, u.company_tag, u.last_seen,
               CASE WHEN c.owner_user_id = $1 THEN
                 COALESCE(json_agg(ci.company_name ORDER BY ci.created_at) FILTER (WHERE ci.id IS NOT NULL), '[]'::json)
               ELSE NULL END AS interests,
@@ -45,7 +45,7 @@ router.get('/', optionalAuth, async (req, res, next) => {
        LEFT JOIN users u ON u.id = c.owner_user_id
        LEFT JOIN contract_interests ci ON ci.contract_id = c.id
        WHERE ${conditions.join(' AND ')}
-       GROUP BY c.id, u.company_logo, u.company_tag
+       GROUP BY c.id, u.company_logo, u.company_tag, u.last_seen
        ORDER BY COALESCE(c.bumped_at, c.created_at) DESC`,
       params
     );
@@ -64,13 +64,14 @@ router.post('/', requireAuth, async (req, res, next) => {
     if (!planet?.trim())                       return res.status(400).json({ error: 'planet is required' });
     if (!maxDailyQty || maxDailyQty < 1)      return res.status(400).json({ error: 'maxDailyQty must be at least 1' });
 
-    // Enforce per-user listing cap
+    // Enforce per-user listing cap (uses per-user max_listings, falls back to module constant)
+    const userMax = req.user.max_listings ?? MAX_LISTINGS;
     const count = await pool.query(
       `SELECT COUNT(*) FROM contracts WHERE owner_user_id = $1 AND active = TRUE`,
       [req.user.id]
     );
-    if (Number(count.rows[0].count) >= MAX_LISTINGS) {
-      return res.status(400).json({ error: `You can have at most ${MAX_LISTINGS} active listings` });
+    if (Number(count.rows[0].count) >= userMax) {
+      return res.status(400).json({ error: `You can have at most ${userMax} active listings` });
     }
 
     const r = await pool.query(
@@ -210,6 +211,17 @@ router.patch('/notifications/read', requireAuth, async (req, res, next) => {
     await pool.query(
       `UPDATE notifications SET read = TRUE WHERE user_id = $1 AND read = FALSE`,
       [req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/contracts/notifications/:id  (dismiss one notification)
+router.delete('/notifications/:id', requireAuth, async (req, res, next) => {
+  try {
+    await pool.query(
+      `DELETE FROM notifications WHERE id = $1 AND user_id = $2`,
+      [Number(req.params.id), req.user.id]
     );
     res.json({ ok: true });
   } catch (err) { next(err); }

@@ -54,11 +54,42 @@ router.patch('/users/:userId/credits', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// PATCH /api/admin/users/:userId/max-listings
+router.patch('/users/:userId/max-listings', requireAdmin, async (req, res, next) => {
+  try {
+    const { delta } = req.body; // +1 or -1
+    if (delta !== 1 && delta !== -1) return res.status(400).json({ error: 'delta must be 1 or -1' });
+    const r = await pool.query(
+      `UPDATE users
+       SET max_listings = GREATEST(1, max_listings + $1)
+       WHERE id = $2
+       RETURNING max_listings`,
+      [delta, req.params.userId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true, max_listings: r.rows[0].max_listings });
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/admin/users/:userId/role
+router.patch('/users/:userId/role', requireAdmin, async (req, res, next) => {
+  try {
+    const { role } = req.body;
+    if (!['admin', 'user'].includes(role)) return res.status(400).json({ error: 'role must be admin or user' });
+    const r = await pool.query(
+      `UPDATE users SET role = $1 WHERE id = $2 RETURNING role`,
+      [role, req.params.userId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true, role: r.rows[0].role });
+  } catch (err) { next(err); }
+});
+
 // GET /api/admin/users
 router.get('/users', requireAdmin, async (req, res, next) => {
   try {
     const r = await pool.query(
-      `SELECT u.id, u.company_name, u.credits_used, u.credits_total, u.revoked,
+      `SELECT u.id, u.company_name, u.credits_used, u.credits_total, u.max_listings, u.role, u.revoked,
               u.registered_at, u.last_seen,
               COALESCE(json_agg(json_build_object('matId', ti.mat_id, 'matName', ti.mat_name))
                 FILTER (WHERE ti.mat_id IS NOT NULL), '[]') AS tracked_items

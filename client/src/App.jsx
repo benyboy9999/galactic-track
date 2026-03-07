@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate, Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NotificationsProvider, useNotifications } from './context/NotificationsContext';
@@ -296,9 +296,10 @@ function fmtNotifAgo(iso) {
 }
 
 function NotificationBell() {
-  const { unread, notifications, markRead } = useNotifications();
+  const { unread, notifications, markRead, dismiss } = useNotifications();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (!open) return;
@@ -310,6 +311,15 @@ function NotificationBell() {
   function toggle() {
     if (!open) markRead();
     setOpen((v) => !v);
+  }
+
+  function handleNotifClick(n) {
+    setOpen(false);
+    if (n.contract_id) {
+      navigate(`/contracts?focus=${n.contract_id}`);
+    } else {
+      navigate('/contracts');
+    }
   }
 
   return (
@@ -357,14 +367,29 @@ function NotificationBell() {
               <div key={n.id} style={{
                 padding: '10px 16px', borderBottom: '1px solid #13132a',
                 background: n.read ? 'transparent' : '#0d0d2e',
+                display: 'flex', alignItems: 'flex-start', gap: 8,
               }}>
-                <div style={{ fontSize: 13, color: '#c8c8e8', lineHeight: 1.4 }}>
-                  <span style={{ color: '#a78bfa', fontWeight: 600 }}>{n.from_company}</span>
-                  {' is interested in your '}
-                  <span style={{ color: '#e0e0ff', fontWeight: 600 }}>{n.mat_name}</span>
-                  {' listing'}
+                <div
+                  onClick={() => handleNotifClick(n)}
+                  style={{ flex: 1, cursor: n.contract_id ? 'pointer' : 'default' }}
+                >
+                  <div style={{ fontSize: 13, color: '#c8c8e8', lineHeight: 1.4 }}>
+                    <span style={{ color: '#a78bfa', fontWeight: 600 }}>{n.from_company}</span>
+                    {' is interested in your '}
+                    <span style={{ color: '#e0e0ff', fontWeight: 600 }}>{n.mat_name}</span>
+                    {' listing'}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#3a3a55', marginTop: 3 }}>{fmtNotifAgo(n.created_at)}</div>
                 </div>
-                <div style={{ fontSize: 11, color: '#3a3a55', marginTop: 3 }}>{fmtNotifAgo(n.created_at)}</div>
+                <button
+                  onClick={() => dismiss(n.id)}
+                  title="Dismiss"
+                  style={{
+                    background: 'none', border: 'none', color: '#3a3a55',
+                    cursor: 'pointer', fontSize: 12, padding: '2px 4px', lineHeight: 1,
+                    flexShrink: 0,
+                  }}
+                >✕</button>
               </div>
             ))
           )}
@@ -403,6 +428,7 @@ function Nav() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 20, height: 42 }}>
             {navLink('/', 'Tracker')}
             {navLink('/contracts', 'Marketplace')}
+            {user?.role === 'admin' && navLink('/admin', 'Admin')}
           </div>
         </div>
 
@@ -430,6 +456,16 @@ function Nav() {
   );
 }
 
+// ── Document title (unread count) ────────────────────────────────────────────
+
+function TabTitle() {
+  const { unread } = useNotifications();
+  useEffect(() => {
+    document.title = unread > 0 ? `(${unread}) Galactic-Track` : 'Galactic-Track';
+  }, [unread]);
+  return null;
+}
+
 // ── Route guard ───────────────────────────────────────────────────────────────
 
 function RequireAuth({ children }) {
@@ -449,6 +485,7 @@ export default function App() {
       <AuthProvider>
         <NotificationsProvider>
         <BrowserRouter>
+          <TabTitle />
           <Nav />
           <main>
             <ErrorBoundary>

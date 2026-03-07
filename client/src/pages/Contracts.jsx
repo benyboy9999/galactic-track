@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { toIconId } from '../utils/materialIcon';
@@ -78,7 +79,7 @@ function TypeBadge({ type }) {
   );
 }
 
-function BumpButton({ contract, actioning, onBump }) {
+function BumpButton({ contract, actioning, onBump, compact = false }) {
   const isActioning = actioning?.id === contract.id && actioning?.type === 'bump';
   const bumpedAt = contract.bumped_at ? new Date(contract.bumped_at) : null;
   const cooldownMs = bumpedAt ? (bumpedAt.getTime() + 3_600_000) - Date.now() : 0;
@@ -92,9 +93,10 @@ function BumpButton({ contract, actioning, onBump }) {
     <button
       onClick={() => !onCooldown && !isActioning && onBump(contract.id)}
       disabled={onCooldown || isActioning}
-      title={onCooldown ? `Bump available in ${cooldownStr}` : 'Move to top of listings'}
+      title={onCooldown ? `Bump available in ${cooldownStr}` : 'Move to top of listings & reset 7-day expiry'}
       style={{
-        flex: 1, background: 'none',
+        ...(compact ? { width: 64 } : { flex: 1 }),
+        background: 'none',
         border: `1px solid ${onCooldown ? '#2e2e5a' : '#1e3a2a'}`,
         borderRadius: 4, padding: '4px 0',
         color: onCooldown ? '#3a3a55' : '#34d399',
@@ -197,8 +199,16 @@ function ContractCard({ contract, isOwn }) {
     }
   }
 
+  const onlineDot = (() => {
+    if (!contract.last_seen) return { color: '#3a3a55', label: 'Last seen: unknown' };
+    const ageSec = (Date.now() - new Date(contract.last_seen).getTime()) / 1000;
+    if (ageSec < 300)   return { color: '#10b981', label: `Online · last seen ${fmtAgo(contract.last_seen)}` };
+    if (ageSec < 86400) return { color: '#fbbf24', label: `Last seen ${fmtAgo(contract.last_seen)}` };
+    return { color: '#f87171', label: `Last seen ${fmtAgo(contract.last_seen)}` };
+  })();
+
   return (
-    <div style={{
+    <div id={`contract-${contract.id}`} style={{
       background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 7,
       padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 7,
     }}>
@@ -215,8 +225,9 @@ function ContractCard({ contract, isOwn }) {
         </span>
       </div>
 
-      {/* Company logo + name */}
+      {/* Company logo + name + online indicator */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span title={onlineDot.label} style={{ color: onlineDot.color, fontSize: 10, flexShrink: 0 }}>●</span>
         {contract.company_logo && <CompanyLogo ic={contract.company_logo} size={15} />}
         <div style={{ fontSize: 14, fontWeight: 700, color: '#c8c8e8', lineHeight: 1.3 }}>
           {contract.company_tag && (
@@ -713,7 +724,7 @@ function ManageListingsModal({ listings, deleting, actioning, onCancel, onBump, 
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-                  <BumpButton contract={c} actioning={actioning} onBump={onBump} />
+                  <BumpButton contract={c} actioning={actioning} onBump={onBump} compact />
                   <button
                     onClick={() => { onEdit(c); onClose(); }}
                     disabled={busy}
@@ -736,6 +747,9 @@ function ManageListingsModal({ listings, deleting, actioning, onCancel, onBump, 
 
 export default function Contracts() {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const focusId = searchParams.get('focus') ? Number(searchParams.get('focus')) : null;
+  const didFocus = useRef(false);
 
   const [contracts,    setContracts]    = useState([]);
   const [items,        setItems]        = useState([]);
@@ -777,6 +791,18 @@ export default function Contracts() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Scroll to and briefly highlight a contract when arriving via notification link
+  useEffect(() => {
+    if (!focusId || loading || didFocus.current) return;
+    const el = document.getElementById(`contract-${focusId}`);
+    if (!el) return;
+    didFocus.current = true;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.style.outline = '2px solid #fbbf24';
+    el.style.outlineOffset = '2px';
+    setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = ''; }, 2500);
+  }, [focusId, loading]);
 
   const filtered = useMemo(() => {
     const q = (itemSearch || pillItem).trim().toLowerCase();

@@ -177,6 +177,10 @@ async function init() {
     // Migration: contract status + bump tracking
     await client.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'active'`);
     await client.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS bumped_at TIMESTAMPTZ`);
+    // Migration: per-user max listings cap
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS max_listings INT NOT NULL DEFAULT 10`);
+    // Migration: user role (admin/user)
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'user'`);
     console.log('Database schema initialized.');
   } finally {
     client.release();

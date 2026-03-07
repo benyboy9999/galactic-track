@@ -3,7 +3,7 @@ import { api } from '../api';
 import { useAuth } from './AuthContext';
 import { playNotificationChime } from '../utils/notifSound';
 
-const NotificationsContext = createContext({ unread: 0, notifications: [], markRead: () => {}, refresh: () => {} });
+const NotificationsContext = createContext({ unread: 0, notifications: [], markRead: () => {}, dismiss: () => {}, refresh: () => {} });
 
 const POLL_INTERVAL = 45_000;
 
@@ -32,6 +32,17 @@ export function NotificationsProvider({ children }) {
     try { await api.markNotificationsRead(); } catch { /* ignore */ }
   }, [unread]);
 
+  const dismiss = useCallback((id) => {
+    setNotifications((prev) => {
+      const next = prev.filter((n) => n.id !== id);
+      const newUnread = next.filter((n) => !n.read).length;
+      prevUnreadRef.current = newUnread;
+      setUnread(newUnread);
+      return next;
+    });
+    api.dismissNotification(id).catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (!user) {
       setUnread(0);
@@ -45,7 +56,7 @@ export function NotificationsProvider({ children }) {
   }, [user, refresh]);
 
   return (
-    <NotificationsContext.Provider value={{ unread, notifications, markRead, refresh }}>
+    <NotificationsContext.Provider value={{ unread, notifications, markRead, dismiss, refresh }}>
       {children}
     </NotificationsContext.Provider>
   );

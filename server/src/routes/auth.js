@@ -97,6 +97,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
       companyName:  req.user.company_name,
       creditsUsed:  req.user.credits_used,
       creditsTotal: req.user.credits_total,
+      role:         req.user.role ?? 'user',
       trackedItems: items.rows,
     });
   } catch (err) {

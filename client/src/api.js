@@ -99,6 +99,7 @@ export const api = {
   // ── Notifications ──────────────────────────────────────────────────────────
   notifications:           () => get('/contracts/notifications', true),
   markNotificationsRead:   () => patch('/contracts/notifications/read', {}, true),
+  dismissNotification:     (id) => del(`/contracts/notifications/${id}`, true),
 
   // ── Tracker ────────────────────────────────────────────────────────────────
   trackerStatus:         () => get('/tracker/status'),

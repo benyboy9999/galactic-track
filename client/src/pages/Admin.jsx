@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 
 const BASE = '/api/admin';
 
@@ -175,6 +175,7 @@ function Dashboard({ token, onLogout }) {
   const [err,       setErr]       = useState('');
   const [tab,       setTab]       = useState('users');
   const [working,   setWorking]   = useState(null);
+  const [userSort,  setUserSort]  = useState({ key: 'last_seen', dir: 'desc' });
 
   const load = useCallback(async () => {
     try {
@@ -229,6 +230,30 @@ function Dashboard({ token, onLogout }) {
     finally { setWorking(null); }
   }
 
+  async function adjustMaxListings(userId, delta) {
+    setWorking(`maxlist-${userId}`);
+    try {
+      await adminFetch(`/users/${userId}/max-listings`, token, {
+        method: 'PATCH',
+        body: JSON.stringify({ delta }),
+      });
+      await load();
+    } catch (e) { alert(e.message); }
+    finally { setWorking(null); }
+  }
+
+  async function setUserRole(userId, role) {
+    setWorking(`role-${userId}`);
+    try {
+      await adminFetch(`/users/${userId}/role`, token, {
+        method: 'PATCH',
+        body: JSON.stringify({ role }),
+      });
+      await load();
+    } catch (e) { alert(e.message); }
+    finally { setWorking(null); }
+  }
+
   async function untrackItem(matId) {
     if (!confirm('Disable this item? The credit will be refunded to its owner.')) return;
     setWorking(matId);
@@ -266,8 +291,33 @@ function Dashboard({ token, onLogout }) {
     fontWeight: tab === t ? 600 : 400,
   });
 
+  function sortHeader(key, label) {
+    const active = userSort.key === key;
+    return (
+      <span
+        onClick={() => setUserSort((s) => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))}
+        style={{ cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+      >
+        {label}
+        <span style={{ fontSize: 9, color: active ? '#a78bfa' : '#3a3a55' }}>
+          {active ? (userSort.dir === 'desc' ? '↓' : '↑') : '↕'}
+        </span>
+      </span>
+    );
+  }
+
+  const sortedUsers = useMemo(() => {
+    const { key, dir } = userSort;
+    return [...users].sort((a, b) => {
+      const av = a[key] ?? '';
+      const bv = b[key] ?? '';
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      return dir === 'desc' ? -cmp : cmp;
+    });
+  }, [users, userSort]);
+
   const userCols = [
-    { key: 'company_name', label: 'Company' },
+    { key: 'company_name', label: sortHeader('company_name', 'Company') },
     { key: 'credits_used', label: 'Credits', render: (r) => (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontVariantNumeric: 'tabular-nums' }}>{r.credits_used}/{r.credits_total ?? 3}</span>
@@ -285,12 +335,38 @@ function Dashboard({ token, onLogout }) {
         >+</button>
       </div>
     )},
+    { key: 'max_listings', label: 'Max listings', render: (r) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{r.max_listings ?? 10}</span>
+        <button
+          onClick={() => adjustMaxListings(r.id, -1)}
+          disabled={working === `maxlist-${r.id}` || (r.max_listings ?? 10) <= 1}
+          title="Decrease max listings"
+          style={{ background: 'none', border: '1px solid #2e2e5a', borderRadius: 3, color: '#6b6b8a', cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: '1px 5px' }}
+        >−</button>
+        <button
+          onClick={() => adjustMaxListings(r.id, 1)}
+          disabled={working === `maxlist-${r.id}`}
+          title="Increase max listings"
+          style={{ background: 'none', border: '1px solid #2e2e5a', borderRadius: 3, color: '#6b6b8a', cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: '1px 5px' }}
+        >+</button>
+      </div>
+    )},
+    { key: 'role', label: 'Role', render: (r) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ color: r.role === 'admin' ? '#a78bfa' : '#6b6b8a' }}>{r.role ?? 'user'}</span>
+        {r.role === 'admin'
+          ? <Btn onClick={() => setUserRole(r.id, 'user')} disabled={working === `role-${r.id}`}>Remove admin</Btn>
+          : <Btn onClick={() => setUserRole(r.id, 'admin')} disabled={working === `role-${r.id}`}>Set admin</Btn>
+        }
+      </div>
+    )},
     { key: 'revoked',      label: 'Status', render: (r) => (
       <span style={{ color: r.revoked ? '#f87171' : '#34d399' }}>{r.revoked ? 'revoked' : 'active'}</span>
     )},
     { key: 'tracked_items', label: 'Items', render: (r) => (r.tracked_items ?? []).map((i) => i.matName).join(', ') || '—' },
-    { key: 'last_seen',    label: 'Last seen', render: (r) => fmtAgo(r.last_seen) },
-    { key: 'registered_at', label: 'Joined', render: (r) => fmtDate(r.registered_at) },
+    { key: 'last_seen',    label: sortHeader('last_seen', 'Last seen'), render: (r) => fmtAgo(r.last_seen) },
+    { key: 'registered_at', label: sortHeader('registered_at', 'Joined'), render: (r) => fmtDate(r.registered_at) },
     { key: '_actions',     label: '', render: (r) => (
       !r.revoked && <Btn danger onClick={() => revokeUser(r.id)} disabled={working === r.id}>Revoke</Btn>
     )},
@@ -371,17 +447,20 @@ function Dashboard({ token, onLogout }) {
       </div>
 
       {/* Stats bar */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 28 }}>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 28, flexWrap: 'wrap' }}>
         {[
-          { label: 'Users',           value: users.length },
-          { label: 'Active',          value: users.filter((u) => !u.revoked).length },
-          { label: 'Tracked items',   value: items.filter((i) => i.active).length },
-          { label: 'Active listings', value: contracts.filter((c) => c.active).length },
-          { label: 'Recent errors',   value: errors.length },
-        ].map(({ label, value }) => (
-          <div key={label} style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 6, padding: '10px 16px', flex: 1 }}>
+          { label: 'Users',              value: users.length },
+          { label: 'Active',             value: users.filter((u) => !u.revoked).length },
+          { label: 'Tracked items',      value: items.filter((i) => i.active).length },
+          { label: 'Active listings',    value: contracts.filter((c) => c.active).length },
+          { label: 'Online (< 5m)',      value: users.filter((u) => u.last_seen && (Date.now() - new Date(u.last_seen).getTime()) < 300_000).length,  color: '#10b981' },
+          { label: 'Active (< 24h)',     value: users.filter((u) => u.last_seen && (Date.now() - new Date(u.last_seen).getTime()) < 86_400_000).length, color: '#fbbf24' },
+          { label: 'Dormant (> 24h)',    value: users.filter((u) => !u.last_seen || (Date.now() - new Date(u.last_seen).getTime()) >= 86_400_000).length, color: '#6b6b8a' },
+          { label: 'Recent errors',      value: errors.length, color: errors.length ? '#f87171' : undefined },
+        ].map(({ label, value, color }) => (
+          <div key={label} style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 6, padding: '10px 16px', flex: '1 1 auto', minWidth: 100 }}>
             <div style={{ fontSize: 11, color: '#6b6b8a', marginBottom: 4 }}>{label}</div>
-            <div style={{ fontSize: 20, fontWeight: 600, color: '#e0e0ff' }}>{value}</div>
+            <div style={{ fontSize: 20, fontWeight: 600, color: color ?? '#e0e0ff' }}>{value}</div>
           </div>
         ))}
       </div>
@@ -402,7 +481,7 @@ function Dashboard({ token, onLogout }) {
 
       {/* Content */}
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '16px 20px' }}>
-        {tab === 'users'     && <Table cols={userCols}     rows={users}     emptyMsg="No users registered" />}
+        {tab === 'users'     && <Table cols={userCols}     rows={sortedUsers} emptyMsg="No users registered" />}
         {tab === 'items'     && <Table cols={itemCols}     rows={items}     emptyMsg="No tracked items" />}
         {tab === 'contracts' && <Table cols={contractCols} rows={contracts} emptyMsg="No listings" />}
         {tab === 'interests' && <Table cols={interestCols} rows={interests} emptyMsg="No interests recorded" />}

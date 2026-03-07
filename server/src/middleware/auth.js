@@ -26,7 +26,7 @@ export async function requireAuth(req, res, next) {
       `UPDATE users
        SET last_seen = NOW()
        WHERE session_token = $1 AND revoked = FALSE
-       RETURNING id, api_key, company_name, credits_used, credits_total`,
+       RETURNING id, api_key, company_name, credits_used, credits_total, max_listings, role`,
       [token]
     );
     if (!r.rows.length) {
