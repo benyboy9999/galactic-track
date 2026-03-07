@@ -112,6 +112,13 @@ router.post('/track', requireAuth, async (req, res, next) => {
       [req.user.id]
     );
 
+    // Log the event (fire-and-forget)
+    pool.query(
+      `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action)
+       VALUES($1, $2, $3, $4, 'tracked')`,
+      [matId, item.name, req.user.id, req.user.company_name]
+    ).catch(() => {});
+
     res.json({ ok: true, creditsUsed: req.user.credits_used + 1, creditsTotal: req.user.credits_total });
   } catch (err) {
     next(err);
@@ -132,14 +139,27 @@ router.delete('/track/:matId', requireAuth, async (req, res, next) => {
       return res.status(403).json({ error: 'You do not own this tracked item' });
     }
 
-    await pool.query(
-      `UPDATE tracked_items SET active = FALSE WHERE mat_id = $1`,
+    const item = await pool.query(
+      `UPDATE tracked_items SET active = FALSE WHERE mat_id = $1 RETURNING mat_name`,
       [matId]
     );
+    const matName = item.rows[0].mat_name;
     await pool.query(
       `UPDATE users SET credits_used = GREATEST(0, credits_used - 1) WHERE id = $1`,
       [req.user.id]
     );
+
+    // Log the event and notify all admin users (fire-and-forget)
+    pool.query(
+      `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action)
+       VALUES($1, $2, $3, $4, 'untracked')`,
+      [matId, matName, req.user.id, req.user.company_name]
+    ).catch(() => {});
+    pool.query(
+      `INSERT INTO notifications(user_id, type, mat_name, from_company)
+       SELECT id, 'untracked', $1, $2 FROM users WHERE role = 'admin'`,
+      [matName, req.user.company_name]
+    ).catch(() => {});
 
     res.json({ ok: true, creditsUsed: Math.max(0, req.user.credits_used - 1), creditsTotal: req.user.credits_total });
   } catch (err) {

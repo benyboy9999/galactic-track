@@ -161,6 +161,20 @@ const schema = `
 
   CREATE INDEX IF NOT EXISTS idx_notif_user_id ON notifications(user_id);
   CREATE INDEX IF NOT EXISTS idx_notif_read    ON notifications(user_id, read);
+
+  -- ── Tracking event log ────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS tracking_log (
+    id           SERIAL PRIMARY KEY,
+    mat_id       INT NOT NULL,
+    mat_name     VARCHAR(255) NOT NULL,
+    user_id      INT REFERENCES users(id) ON DELETE SET NULL,
+    company_name VARCHAR(255),
+    action       VARCHAR(16) NOT NULL,   -- 'tracked' | 'untracked'
+    by_admin     BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_tlog_created_at ON tracking_log(created_at);
 `;
 
 async function init() {
@@ -183,6 +197,20 @@ async function init() {
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'user'`);
     // Migration: encrypted API key storage
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_encrypted TEXT`);
+    // Migration: tracking event log
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tracking_log (
+        id           SERIAL PRIMARY KEY,
+        mat_id       INT NOT NULL,
+        mat_name     VARCHAR(255) NOT NULL,
+        user_id      INT REFERENCES users(id) ON DELETE SET NULL,
+        company_name VARCHAR(255),
+        action       VARCHAR(16) NOT NULL,
+        by_admin     BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_tlog_created_at ON tracking_log(created_at)`);
     console.log('Database schema initialized.');
   } finally {
     client.release();

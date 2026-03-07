@@ -165,27 +165,29 @@ function LoginForm({ onLogin }) {
 // ── Main dashboard ────────────────────────────────────────────────────────────
 
 function Dashboard({ token, onLogout }) {
-  const [users,     setUsers]     = useState([]);
-  const [items,     setItems]     = useState([]);
-  const [rates,     setRates]     = useState([]);
-  const [errors,    setErrors]    = useState([]);
-  const [contracts, setContracts] = useState([]);
-  const [interests, setInterests] = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [err,       setErr]       = useState('');
-  const [tab,       setTab]       = useState('users');
+  const [users,       setUsers]       = useState([]);
+  const [items,       setItems]       = useState([]);
+  const [rates,       setRates]       = useState([]);
+  const [errors,      setErrors]      = useState([]);
+  const [contracts,   setContracts]   = useState([]);
+  const [interests,   setInterests]   = useState([]);
+  const [trackingLog, setTrackingLog] = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [err,         setErr]         = useState('');
+  const [tab,         setTab]         = useState('users');
   const [working,   setWorking]   = useState(null);
   const [userSort,  setUserSort]  = useState({ key: 'last_seen', dir: 'desc' });
 
   const load = useCallback(async () => {
     try {
-      const [u, it, rl, er, co, ci] = await Promise.all([
+      const [u, it, rl, er, co, ci, tl] = await Promise.all([
         adminFetch('/users',         token),
         adminFetch('/tracked-items', token),
         adminFetch('/rate-limits',   token),
         adminFetch('/errors',        token),
         adminFetch('/contracts',     token),
         adminFetch('/interests',     token),
+        adminFetch('/tracking-log',  token),
       ]);
       setUsers(u);
       setItems(it);
@@ -193,6 +195,7 @@ function Dashboard({ token, onLogout }) {
       setErrors(er);
       setContracts(co);
       setInterests(ci);
+      setTrackingLog(tl);
       setErr('');
     } catch (e) {
       if (e.message.includes('Invalid admin token')) {
@@ -431,6 +434,20 @@ function Dashboard({ token, onLogout }) {
     { key: 'created_at',     label: 'When', render: (r) => fmtAgo(r.created_at) },
   ];
 
+  const logCols = [
+    { key: 'created_at',   label: 'When',    render: (r) => fmtDate(r.created_at) },
+    { key: 'action',       label: 'Action',  render: (r) => (
+      <span style={{ color: r.action === 'tracked' ? '#34d399' : '#f87171', fontWeight: 600 }}>{r.action}</span>
+    )},
+    { key: 'mat_name',     label: 'Item' },
+    { key: 'company_name', label: 'By',      render: (r) => (
+      <span>
+        {r.company_name ?? '—'}
+        {r.by_admin && <span style={{ marginLeft: 6, fontSize: 10, color: '#a78bfa', background: '#1e1e3a', borderRadius: 3, padding: '1px 5px' }}>admin</span>}
+      </span>
+    )},
+  ];
+
   const activeContracts = contracts.filter((c) => c.active);
 
   if (loading) return <p style={{ color: '#6b6b8a', padding: 32 }}>Loading…</p>;
@@ -474,6 +491,7 @@ function Dashboard({ token, onLogout }) {
           { key: 'interests', label: `Interests (${interests.length})` },
           { key: 'rates',     label: 'Rate Limits' },
           { key: 'errors',    label: `Errors (${errors.length})` },
+          { key: 'log',       label: `Track Log (${trackingLog.length})` },
         ].map(({ key, label }) => (
           <button key={key} style={tabStyle(key)} onClick={() => setTab(key)}>{label}</button>
         ))}
@@ -481,12 +499,13 @@ function Dashboard({ token, onLogout }) {
 
       {/* Content */}
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '16px 20px' }}>
-        {tab === 'users'     && <Table cols={userCols}     rows={sortedUsers} emptyMsg="No users registered" />}
-        {tab === 'items'     && <Table cols={itemCols}     rows={items}     emptyMsg="No tracked items" />}
-        {tab === 'contracts' && <Table cols={contractCols} rows={contracts} emptyMsg="No listings" />}
-        {tab === 'interests' && <Table cols={interestCols} rows={interests} emptyMsg="No interests recorded" />}
-        {tab === 'rates'     && <Table cols={rateCols}     rows={rates}     emptyMsg="No rate limit data yet" />}
-        {tab === 'errors'    && <Table cols={errorCols}    rows={errors}    emptyMsg="No errors recorded" />}
+        {tab === 'users'     && <Table cols={userCols}     rows={sortedUsers}  emptyMsg="No users registered" />}
+        {tab === 'items'     && <Table cols={itemCols}     rows={items}        emptyMsg="No tracked items" />}
+        {tab === 'contracts' && <Table cols={contractCols} rows={contracts}    emptyMsg="No listings" />}
+        {tab === 'interests' && <Table cols={interestCols} rows={interests}    emptyMsg="No interests recorded" />}
+        {tab === 'rates'     && <Table cols={rateCols}     rows={rates}        emptyMsg="No rate limit data yet" />}
+        {tab === 'errors'    && <Table cols={errorCols}    rows={errors}       emptyMsg="No errors recorded" />}
+        {tab === 'log'       && <Table cols={logCols}      rows={trackingLog}  emptyMsg="No tracking events yet" />}
       </div>
     </div>
   );

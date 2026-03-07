@@ -162,18 +162,42 @@ router.post('/untrack/:matId', requireAdmin, async (req, res, next) => {
     const r = await pool.query(
       `UPDATE tracked_items SET active = FALSE
        WHERE mat_id = $1 AND active = TRUE
-       RETURNING owner_user_id`,
+       RETURNING owner_user_id, mat_name`,
       [matId]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Item not found or already inactive' });
-    const ownerId = r.rows[0].owner_user_id;
+    const { owner_user_id: ownerId, mat_name: matName } = r.rows[0];
     if (ownerId) {
       await pool.query(
         `UPDATE users SET credits_used = GREATEST(0, credits_used - 1) WHERE id = $1`,
         [ownerId]
       );
     }
+    // Log the event and notify all admin users (fire-and-forget)
+    pool.query(
+      `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action, by_admin)
+       VALUES($1, $2, $3, 'Admin', 'untracked', TRUE)`,
+      [matId, matName, ownerId ?? null]
+    ).catch(() => {});
+    pool.query(
+      `INSERT INTO notifications(user_id, type, mat_name, from_company)
+       SELECT id, 'untracked', $1, 'Admin' FROM users WHERE role = 'admin'`,
+      [matName]
+    ).catch(() => {});
     res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// GET /api/admin/tracking-log
+router.get('/tracking-log', requireAdmin, async (req, res, next) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, mat_id, mat_name, company_name, action, by_admin, created_at
+       FROM tracking_log
+       ORDER BY created_at DESC
+       LIMIT 200`
+    );
+    res.json(r.rows);
   } catch (err) { next(err); }
 });
 

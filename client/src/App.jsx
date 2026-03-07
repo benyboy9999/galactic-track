@@ -374,10 +374,20 @@ function NotificationBell() {
                   style={{ flex: 1, cursor: n.contract_id ? 'pointer' : 'default' }}
                 >
                   <div style={{ fontSize: 13, color: '#c8c8e8', lineHeight: 1.4 }}>
-                    <span style={{ color: '#a78bfa', fontWeight: 600 }}>{n.from_company}</span>
-                    {' is interested in your '}
-                    <span style={{ color: '#e0e0ff', fontWeight: 600 }}>{n.mat_name}</span>
-                    {' listing'}
+                    {n.type === 'untracked' ? (
+                      <>
+                        <span style={{ color: '#f87171', fontWeight: 600 }}>{n.mat_name}</span>
+                        {' was untracked'}
+                        {n.from_company ? <> {' by '}<span style={{ color: '#a78bfa', fontWeight: 600 }}>{n.from_company}</span></> : ''}
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ color: '#a78bfa', fontWeight: 600 }}>{n.from_company}</span>
+                        {' is interested in your '}
+                        <span style={{ color: '#e0e0ff', fontWeight: 600 }}>{n.mat_name}</span>
+                        {' listing'}
+                      </>
+                    )}
                   </div>
                   <div style={{ fontSize: 11, color: '#3a3a55', marginTop: 3 }}>{fmtNotifAgo(n.created_at)}</div>
                 </div>
