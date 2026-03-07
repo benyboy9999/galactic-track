@@ -15,6 +15,7 @@
 
 import pool from '../database/db.js';
 import { gtFetch } from './gtApi.js';
+import { decryptApiKey, hashApiKey } from '../utils/apiKeyCrypto.js';
 
 // ── Game price increment lookup ────────────────────────────────────────────────
 function gameIncrement(priceCents) {
@@ -41,14 +42,17 @@ const recentErrors = []; // rolling last-50 errors for admin panel
 
 async function loadTrackedItems() {
   const r = await pool.query(
-    `SELECT ti.mat_id  AS "matId",
-            ti.mat_name AS "matName",
-            u.api_key   AS "apiKey"
+    `SELECT ti.mat_id          AS "matId",
+            ti.mat_name        AS "matName",
+            u.api_key_encrypted AS "apiKeyEnc"
      FROM tracked_items ti
      LEFT JOIN users u ON u.id = ti.owner_user_id AND u.revoked = FALSE
      WHERE ti.active = TRUE`
   );
-  return r.rows; // apiKey may be null for unclaimed items → skip
+  return r.rows.map((row) => ({
+    ...row,
+    apiKey: row.apiKeyEnc ? decryptApiKey(row.apiKeyEnc) : null,
+  }));
 }
 
 // ── API fetch ──────────────────────────────────────────────────────────────────
@@ -290,7 +294,7 @@ async function pollAll() {
       if (err.status === 401 || err.status === 403) {
         // Key revoked in-game — mark user as revoked
         try {
-          await pool.query(`UPDATE users SET revoked = TRUE WHERE api_key = $1`, [item.apiKey]);
+          await pool.query(`UPDATE users SET revoked = TRUE WHERE api_key = $1`, [hashApiKey(item.apiKey)]);
           console.warn(`[tracker] API key revoked for ${item.matName} owner — stopping their polls`);
         } catch { /* ignore */ }
       } else if (err.rateLimited) {

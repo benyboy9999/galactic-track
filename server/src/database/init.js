@@ -181,6 +181,8 @@ async function init() {
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS max_listings INT NOT NULL DEFAULT 10`);
     // Migration: user role (admin/user)
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'user'`);
+    // Migration: encrypted API key storage
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_encrypted TEXT`);
     console.log('Database schema initialized.');
   } finally {
     client.release();

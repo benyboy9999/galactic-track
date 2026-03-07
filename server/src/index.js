@@ -13,6 +13,7 @@ import itemsRoutes from './routes/items.js';
 import adminRoutes from './routes/admin.js';
 import contractsRoutes from './routes/contracts.js';
 import { getRateLimitStatus, getCompanyDetail } from './services/gtApi.js';
+import { decryptApiKey } from './utils/apiKeyCrypto.js';
 import { startTracker } from './services/tracker.js';
 import pool from './database/db.js';
 
@@ -52,7 +53,7 @@ app.get('*', (_req, res) => res.sendFile(join(publicDir, 'index.html')));
 async function backfillCompanyLogos() {
   try {
     const r = await pool.query(
-      `SELECT DISTINCT u.id, u.company_id, u.api_key
+      `SELECT DISTINCT u.id, u.company_id, u.api_key_encrypted
        FROM users u
        JOIN contracts c ON c.owner_user_id = u.id AND c.active = TRUE
        WHERE u.company_logo IS NULL AND u.company_id IS NOT NULL AND u.company_id != ''`
@@ -61,7 +62,7 @@ async function backfillCompanyLogos() {
     console.log(`Backfilling logos for ${r.rows.length} company/companies…`);
     for (const user of r.rows) {
       try {
-        const detail = await getCompanyDetail(user.company_id, user.api_key);
+        const detail = await getCompanyDetail(user.company_id, decryptApiKey(user.api_key_encrypted));
         await pool.query(
           `UPDATE users SET company_logo = $1, company_tag = $2 WHERE id = $3`,
           [detail.ic ?? null, detail.gTag ?? '', user.id]
@@ -88,6 +89,21 @@ async function expireContracts() {
   }
 }
 
+async function cleanupOldOrders() {
+  try {
+    const r = await pool.query(
+      `DELETE FROM tracker_orders
+       WHERE snapshot_id IN (
+         SELECT id FROM tracker_snapshots
+         WHERE recorded_at < NOW() - INTERVAL '48 hours'
+       )`
+    );
+    if (r.rowCount > 0) console.log(`Cleaned up ${r.rowCount} old tracker order row(s)`);
+  } catch (e) {
+    console.error('tracker_orders cleanup error:', e.message);
+  }
+}
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`GT-Tracker server running on http://0.0.0.0:${PORT}`);
   if (process.env.TRACKER_ENABLED !== 'false') {
@@ -98,6 +114,9 @@ app.listen(PORT, '0.0.0.0', () => {
   // Expire stale contracts on startup and every 6 hours
   expireContracts();
   setInterval(expireContracts, 6 * 60 * 60 * 1000);
+  // Prune raw orderbook data older than 48h (snapshots are kept forever)
+  cleanupOldOrders();
+  setInterval(cleanupOldOrders, 6 * 60 * 60 * 1000);
   // Backfill logos for users with active contracts who don't have one yet
   backfillCompanyLogos();
 });

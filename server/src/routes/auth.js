@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import pool from '../database/db.js';
 import { getCompanyInfo, getCompanyDetail } from '../services/gtApi.js';
 import { requireAuth } from '../middleware/auth.js';
+import { hashApiKey, encryptApiKey } from '../utils/apiKeyCrypto.js';
 
 const router = Router();
 
@@ -30,14 +31,15 @@ router.post('/login', async (req, res, next) => {
 
     // Upsert user — preserve existing session_token on re-login
     const upsert = await pool.query(
-      `INSERT INTO users(api_key, session_token, company_id, company_name, last_seen)
-       VALUES($1, $2, $3, $4, NOW())
+      `INSERT INTO users(api_key, api_key_encrypted, session_token, company_id, company_name, last_seen)
+       VALUES($1, $2, $3, $4, $5, NOW())
        ON CONFLICT(api_key) DO UPDATE
-         SET company_name = EXCLUDED.company_name,
-             last_seen    = NOW(),
-             revoked      = FALSE
+         SET api_key_encrypted = EXCLUDED.api_key_encrypted,
+             company_name      = EXCLUDED.company_name,
+             last_seen         = NOW(),
+             revoked           = FALSE
        RETURNING id, session_token, credits_used, credits_total, revoked`,
-      [apiKey.trim(), randomUUID(), companyId, companyName]
+      [hashApiKey(apiKey.trim()), encryptApiKey(apiKey.trim()), randomUUID(), companyId, companyName]
     );
     const user = upsert.rows[0];
 
@@ -143,12 +145,12 @@ router.post('/dev-login', async (req, res, next) => {
   }
   try {
     const upsert = await pool.query(
-      `INSERT INTO users(api_key, session_token, company_id, company_name, last_seen)
-       VALUES($1, $2, $3, $4, NOW())
+      `INSERT INTO users(api_key, api_key_encrypted, session_token, company_id, company_name, last_seen)
+       VALUES($1, $2, $3, $4, $5, NOW())
        ON CONFLICT(api_key) DO UPDATE
          SET last_seen = NOW(), revoked = FALSE
        RETURNING id, session_token, credits_used, credits_total`,
-      ['dev-local', randomUUID(), '0', 'Dev User']
+      [hashApiKey('dev-local'), encryptApiKey('dev-local'), randomUUID(), '0', 'Dev User']
     );
     const user = upsert.rows[0];
     res.json({

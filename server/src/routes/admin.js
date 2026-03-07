@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import pool from '../database/db.js';
 import { getRateLimitStatusAll } from '../services/gtApi.js';
 import { getRecentErrors } from '../services/tracker.js';
+import { hashApiKey } from '../utils/apiKeyCrypto.js';
 
 const router = Router();
 
@@ -125,17 +126,17 @@ router.get('/rate-limits', requireAdmin, async (req, res, next) => {
     const statuses = getRateLimitStatusAll();
     if (!statuses.length) return res.json([]);
 
-    // Enrich with company names from DB
-    const keys = statuses.map((s) => s.apiKey);
+    // Enrich with company names from DB (api_key column now stores HMAC hashes)
+    const hashedKeys = statuses.map((s) => hashApiKey(s.apiKey));
     const r = await pool.query(
       `SELECT api_key, company_name FROM users WHERE api_key = ANY($1)`,
-      [keys]
+      [hashedKeys]
     );
     const nameMap = new Map(r.rows.map((row) => [row.api_key, row.company_name]));
 
     res.json(statuses.map(({ apiKey, ...rest }) => ({
       ...rest,
-      companyName: nameMap.get(apiKey) ?? 'Unknown',
+      companyName: nameMap.get(hashApiKey(apiKey)) ?? 'Unknown',
     })));
   } catch (err) { next(err); }
 });
