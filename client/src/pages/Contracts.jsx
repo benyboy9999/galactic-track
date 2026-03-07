@@ -167,9 +167,13 @@ function MyListingCard({ contract, deleting, actioning, onCancel, onEdit, onBump
   );
 }
 
+// Module-level timestamp so feedback is debounced across all cards
+let lastFeedbackAt = 0;
+
 function ContractCard({ contract, isOwn }) {
-  const [interested, setInterested] = useState(contract.i_am_interested ?? false);
-  const [loading,    setLoading]    = useState(false);
+  const [interested,   setInterested]   = useState(contract.i_am_interested ?? false);
+  const [loading,      setLoading]      = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
 
   async function toggleInterest() {
     if (loading) return;
@@ -181,6 +185,12 @@ function ContractCard({ contract, isOwn }) {
       } else {
         await api.markInterest(contract.id);
         setInterested(true);
+        const now = Date.now();
+        if (now - lastFeedbackAt > 10_000) {
+          lastFeedbackAt = now;
+          setShowFeedback(true);
+          setTimeout(() => setShowFeedback(false), 6_000);
+        }
       }
     } catch { /* ignore */ } finally {
       setLoading(false);
@@ -225,20 +235,27 @@ function ContractCard({ contract, isOwn }) {
 
       {/* Interest button — hidden on own listings */}
       {!isOwn && (
-        <button
-          onClick={toggleInterest}
-          disabled={loading}
-          style={{
-            background: interested ? '#1a1040' : 'none',
-            border: `1px solid ${interested ? '#6d28d9' : '#2e2e5a'}`,
-            borderRadius: 4, padding: '4px 0',
-            color: interested ? '#a78bfa' : '#4a4a7a',
-            fontSize: 11, cursor: loading ? 'not-allowed' : 'pointer',
-            opacity: loading ? 0.5 : 1, width: '100%',
-          }}
-        >
-          {loading ? '…' : interested ? '★ Interested' : '☆ Mark as interested'}
-        </button>
+        <>
+          <button
+            onClick={toggleInterest}
+            disabled={loading}
+            style={{
+              background: interested ? '#1a1040' : 'none',
+              border: `1px solid ${interested ? '#6d28d9' : '#2e2e5a'}`,
+              borderRadius: 4, padding: '4px 0',
+              color: interested ? '#a78bfa' : '#4a4a7a',
+              fontSize: 11, cursor: loading ? 'not-allowed' : 'pointer',
+              opacity: loading ? 0.5 : 1, width: '100%',
+            }}
+          >
+            {loading ? '…' : interested ? '★ Interested' : '☆ Mark as interested'}
+          </button>
+          {showFeedback && (
+            <div style={{ fontSize: 11, color: '#6b9e6b', background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: 4, padding: '5px 8px', lineHeight: 1.4 }}>
+              {contract.company_name} has been notified — reach out to them in-game to negotiate!
+            </div>
+          )}
+        </>
       )}
     </div>
   );

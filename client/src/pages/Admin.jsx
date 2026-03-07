@@ -170,6 +170,7 @@ function Dashboard({ token, onLogout }) {
   const [rates,     setRates]     = useState([]);
   const [errors,    setErrors]    = useState([]);
   const [contracts, setContracts] = useState([]);
+  const [interests, setInterests] = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [err,       setErr]       = useState('');
   const [tab,       setTab]       = useState('users');
@@ -177,18 +178,20 @@ function Dashboard({ token, onLogout }) {
 
   const load = useCallback(async () => {
     try {
-      const [u, it, rl, er, co] = await Promise.all([
+      const [u, it, rl, er, co, ci] = await Promise.all([
         adminFetch('/users',         token),
         adminFetch('/tracked-items', token),
         adminFetch('/rate-limits',   token),
         adminFetch('/errors',        token),
         adminFetch('/contracts',     token),
+        adminFetch('/interests',     token),
       ]);
       setUsers(u);
       setItems(it);
       setRates(rl);
       setErrors(er);
       setContracts(co);
+      setInterests(ci);
       setErr('');
     } catch (e) {
       if (e.message.includes('Invalid admin token')) {
@@ -341,6 +344,17 @@ function Dashboard({ token, onLogout }) {
     )},
   ];
 
+  const interestCols = [
+    { key: 'from_company',   label: 'Interested party' },
+    { key: 'owner_company',  label: 'Listing owner' },
+    { key: 'mat_name',       label: 'Item' },
+    { key: 'contract_type',  label: 'Type', render: (r) => (
+      <span style={{ color: r.contract_type === 'buy' ? '#34d399' : '#f87171' }}>{r.contract_type}</span>
+    )},
+    { key: 'planet',         label: 'Location' },
+    { key: 'created_at',     label: 'When', render: (r) => fmtAgo(r.created_at) },
+  ];
+
   const activeContracts = contracts.filter((c) => c.active);
 
   if (loading) return <p style={{ color: '#6b6b8a', padding: 32 }}>Loading…</p>;
@@ -378,6 +392,7 @@ function Dashboard({ token, onLogout }) {
           { key: 'users',     label: `Users (${users.length})` },
           { key: 'items',     label: `Items (${items.length})` },
           { key: 'contracts', label: `Listings (${activeContracts.length})` },
+          { key: 'interests', label: `Interests (${interests.length})` },
           { key: 'rates',     label: 'Rate Limits' },
           { key: 'errors',    label: `Errors (${errors.length})` },
         ].map(({ key, label }) => (
@@ -390,6 +405,7 @@ function Dashboard({ token, onLogout }) {
         {tab === 'users'     && <Table cols={userCols}     rows={users}     emptyMsg="No users registered" />}
         {tab === 'items'     && <Table cols={itemCols}     rows={items}     emptyMsg="No tracked items" />}
         {tab === 'contracts' && <Table cols={contractCols} rows={contracts} emptyMsg="No listings" />}
+        {tab === 'interests' && <Table cols={interestCols} rows={interests} emptyMsg="No interests recorded" />}
         {tab === 'rates'     && <Table cols={rateCols}     rows={rates}     emptyMsg="No rate limit data yet" />}
         {tab === 'errors'    && <Table cols={errorCols}    rows={errors}    emptyMsg="No errors recorded" />}
       </div>

@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../api';
 import { useAuth } from './AuthContext';
+import { playNotificationChime } from '../utils/notifSound';
 
 const NotificationsContext = createContext({ unread: 0, notifications: [], markRead: () => {}, refresh: () => {} });
 
@@ -12,9 +13,13 @@ export function NotificationsProvider({ children }) {
   const [notifications, setNotifications] = useState([]);
   const intervalRef = useRef(null);
 
+  const prevUnreadRef = useRef(0);
+
   const refresh = useCallback(async () => {
     try {
       const data = await api.notifications();
+      if (data.unread > prevUnreadRef.current) playNotificationChime();
+      prevUnreadRef.current = data.unread;
       setUnread(data.unread);
       setNotifications(data.items);
     } catch { /* ignore */ }

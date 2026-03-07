@@ -2,6 +2,9 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation, Link } from 'react
 import { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NotificationsProvider, useNotifications } from './context/NotificationsContext';
+import { playNotificationChime } from './utils/notifSound';
+
+const IS_DEV = import.meta.env.DEV;
 import ItemDetail from './pages/ItemDetail';
 import ItemGrid from './pages/ItemGrid';
 import Login from './pages/Login';
@@ -58,6 +61,20 @@ function SettingsModal({ onClose }) {
   const [revoking,   setRevoking]   = useState(false);
   const [err,        setErr]        = useState('');
   const [confirm,    setConfirm]    = useState(null); // { title, body, action, danger }
+  const [soundOn,    setSoundOn]    = useState(() => localStorage.getItem('notifSoundEnabled') !== 'false');
+  const [volume,     setVolume]     = useState(() => parseFloat(localStorage.getItem('notifVolume') ?? '0.4'));
+
+  function toggleSound() {
+    const next = !soundOn;
+    setSoundOn(next);
+    localStorage.setItem('notifSoundEnabled', String(next));
+  }
+
+  function handleVolume(e) {
+    const v = parseFloat(e.target.value);
+    setVolume(v);
+    localStorage.setItem('notifVolume', String(v));
+  }
 
   const trackedItems = user?.trackedItems ?? [];
 
@@ -157,6 +174,51 @@ function SettingsModal({ onClose }) {
             </div>
           )}
           {err && <p style={{ color: '#f87171', fontSize: 12, marginTop: 8 }}>{err}</p>}
+        </div>
+
+        {/* Notification sound */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+            Notification sound
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: '#c0c0d8' }}>Play sound on new notification</span>
+            <button
+              onClick={toggleSound}
+              style={{
+                background: soundOn ? '#1e3a2a' : '#1e1e3a',
+                border: `1px solid ${soundOn ? '#065f46' : '#2e2e5a'}`,
+                borderRadius: 12, padding: '3px 10px',
+                color: soundOn ? '#34d399' : '#6b6b8a',
+                fontSize: 11, cursor: 'pointer',
+              }}
+            >{soundOn ? 'On' : 'Off'}</button>
+          </div>
+          {soundOn && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 11, color: '#6b6b8a', minWidth: 44 }}>Volume</span>
+              <input
+                type="range" min="0.05" max="1" step="0.05"
+                value={volume} onChange={handleVolume}
+                style={{ flex: 1, accentColor: '#a78bfa' }}
+              />
+              <span style={{ fontSize: 11, color: '#6b6b8a', minWidth: 28, textAlign: 'right' }}>
+                {Math.round(volume * 100)}%
+              </span>
+            </div>
+          )}
+          {IS_DEV && (
+            <button
+              onClick={playNotificationChime}
+              style={{
+                marginTop: 8, width: '100%', background: 'none',
+                border: '1px dashed #2e2e5a', borderRadius: 5, padding: '5px 0',
+                color: '#3a3a55', fontSize: 11, cursor: 'pointer',
+              }}
+            >
+              Test sound
+            </button>
+          )}
         </div>
 
         {/* Actions */}

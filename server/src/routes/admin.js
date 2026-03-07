@@ -160,6 +160,22 @@ router.get('/contracts', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/admin/interests
+router.get('/interests', requireAdmin, async (req, res, next) => {
+  try {
+    const r = await pool.query(
+      `SELECT ci.id, ci.company_name AS from_company, ci.created_at,
+              c.mat_name, c.type AS contract_type, c.planet,
+              c.company_name AS owner_company
+       FROM contract_interests ci
+       JOIN contracts c ON c.id = ci.contract_id
+       ORDER BY ci.created_at DESC
+       LIMIT 200`
+    );
+    res.json(r.rows);
+  } catch (err) { next(err); }
+});
+
 // DELETE /api/admin/contracts/:id  (force-remove)
 router.delete('/contracts/:id', requireAdmin, async (req, res, next) => {
   try {
