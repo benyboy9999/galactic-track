@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -7,6 +7,52 @@ import Spinner from '../components/Spinner';
 import { toIconId } from '../utils/materialIcon';
 
 const SPRITE_URL = '/api/gamedata/sprite';
+
+// ── Company logo ─────────────────────────────────────────────────────────────
+
+const LOGO_PALETTE = [
+  '#db1a1a', '#c34b22', '#f68055', '#f2740d', '#f2ad0d',
+  '#e4e40c', '#99da0b', '#0ac20a', '#10c16e', '#0bd0d0',
+  '#93ceec', '#0da6f2', '#256af4', '#734dff', '#b399e6',
+  '#9933ff', '#dd3cdd', '#eb477e', '#f0a8c0', '#cccccc',
+];
+
+function decodeCompanyLogo(ic) {
+  try {
+    const normalized = ic.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = normalized.length % 4;
+    const padded = padding === 0 ? normalized : normalized + '='.repeat(4 - padding);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    if (bytes.length !== 8) return null;
+    const pixels = Array.from({ length: 7 }, (_, r) =>
+      Array.from({ length: 7 }, (_, c) => {
+        const i = r * 7 + c;
+        return ((bytes[Math.floor(i / 8)] >> (i % 8)) & 1) === 1;
+      })
+    );
+    const colorCode = bytes[6] & 0x3f;
+    const swatchIndex = Math.max(0, Math.min(LOGO_PALETTE.length - 1, colorCode >> 1));
+    return { pixels, color: LOGO_PALETTE[swatchIndex] };
+  } catch { return null; }
+}
+
+function CompanyLogo({ ic, size = 40 }) {
+  const logo = useMemo(() => ic ? decodeCompanyLogo(ic) : null, [ic]);
+  if (!logo) return null;
+  const px = size / 7;
+  return (
+    <svg width={size} height={size} style={{ flexShrink: 0 }}>
+      <rect width={size} height={size} fill="#0a0a18" rx={4} />
+      {logo.pixels.map((row, r) =>
+        row.map((on, c) =>
+          on ? <rect key={`${r}-${c}`} x={c * px} y={r * px} width={px} height={px} fill={logo.color} /> : null
+        )
+      )}
+    </svg>
+  );
+}
 
 // ── Formatters ───────────────────────────────────────────────────────────────
 
@@ -507,9 +553,7 @@ export default function Company() {
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          {data?.companyLogo && (
-            <img src={data.companyLogo} alt="" style={{ width: 40, height: 40, borderRadius: 6, objectFit: 'cover', border: '1px solid #2e2e5a' }} />
-          )}
+          <CompanyLogo ic={data?.companyLogo} size={40} />
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#e0e0f0' }}>{displayName}</h1>

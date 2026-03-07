@@ -337,8 +337,12 @@ router.get('/summary', requireAuth, async (req, res, next) => {
         [companyId]
       );
       companyName = nameRow.rows[0]?.company_name ?? String(companyId);
-      companyLogo = null;
-      companyTag  = '';
+      const userRow = await pool.query(
+        `SELECT company_logo, company_tag FROM users WHERE company_id = $1 LIMIT 1`,
+        [String(companyId)]
+      );
+      companyLogo = userRow.rows[0]?.company_logo ?? null;
+      companyTag  = userRow.rows[0]?.company_tag  ?? '';
     }
 
     res.json({
