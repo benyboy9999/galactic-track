@@ -123,7 +123,7 @@ router.get('/tracked-items', requireAdmin, async (req, res, next) => {
 // GET /api/admin/rate-limits
 router.get('/rate-limits', requireAdmin, async (req, res, next) => {
   try {
-    const statuses = getRateLimitStatusAll();
+    const statuses = getRateLimitStatusAll().filter((s) => s.apiKey);
     if (!statuses.length) return res.json([]);
 
     // Enrich with company names from DB (api_key column now stores HMAC hashes)
