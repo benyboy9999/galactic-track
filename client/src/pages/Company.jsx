@@ -5,6 +5,7 @@ import {
 import { api } from '../api';
 import Spinner from '../components/Spinner';
 import { toIconId } from '../utils/materialIcon';
+import { toSlug } from '../utils/slug';
 
 const SPRITE_URL = '/api/gamedata/sprite';
 
@@ -460,10 +461,10 @@ function ItemsTable({ items, labelHours }) {
               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
             >
               <td style={{ padding: '10px 14px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <a href={item.matName ? `/${toSlug(item.matName)}` : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit' }}>
                   <MatIcon name={item.matName} size={16} />
                   <span style={{ color: '#e0e0f0', fontWeight: 500 }}>{item.matName ?? `Item #${item.matId}`}</span>
-                </div>
+                </a>
               </td>
               <td style={{ padding: '10px 14px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                 {item.rank != null
