@@ -167,15 +167,49 @@ router.post('/:id/interest', requireAuth, async (req, res, next) => {
   try {
     const contractId = Number(req.params.id);
     const c = await pool.query(
-      `SELECT owner_user_id FROM contracts WHERE id = $1 AND active = TRUE`,
+      `SELECT owner_user_id, mat_name FROM contracts WHERE id = $1 AND active = TRUE`,
       [contractId]
     );
     if (!c.rows.length) return res.status(404).json({ error: 'Contract not found' });
     if (c.rows[0].owner_user_id === req.user.id) return res.status(400).json({ error: 'Cannot mark interest in your own listing' });
-    await pool.query(
+    const result = await pool.query(
       `INSERT INTO contract_interests (contract_id, user_id, company_name)
-       VALUES ($1, $2, $3) ON CONFLICT (contract_id, user_id) DO NOTHING`,
+       VALUES ($1, $2, $3) ON CONFLICT (contract_id, user_id) DO NOTHING
+       RETURNING id`,
       [contractId, req.user.id, req.user.company_name]
+    );
+    // Only notify if this is a new interest (not a duplicate)
+    if (result.rows.length) {
+      pool.query(
+        `INSERT INTO notifications (user_id, type, contract_id, from_company, mat_name)
+         VALUES ($1, 'interest', $2, $3, $4)`,
+        [c.rows[0].owner_user_id, contractId, req.user.company_name, c.rows[0].mat_name]
+      ).catch(() => {});
+    }
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// GET /api/notifications
+router.get('/notifications', requireAuth, async (req, res, next) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, type, contract_id, from_company, mat_name, read, created_at
+       FROM notifications WHERE user_id = $1
+       ORDER BY created_at DESC LIMIT 50`,
+      [req.user.id]
+    );
+    const unread = r.rows.filter((n) => !n.read).length;
+    res.json({ unread, items: r.rows });
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/notifications/read  (mark all as read)
+router.patch('/notifications/read', requireAuth, async (req, res, next) => {
+  try {
+    await pool.query(
+      `UPDATE notifications SET read = TRUE WHERE user_id = $1 AND read = FALSE`,
+      [req.user.id]
     );
     res.json({ ok: true });
   } catch (err) { next(err); }

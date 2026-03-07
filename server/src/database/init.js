@@ -147,6 +147,20 @@ const schema = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_cint_contract_id ON contract_interests(contract_id);
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id           SERIAL PRIMARY KEY,
+    user_id      INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type         VARCHAR(32) NOT NULL DEFAULT 'interest',
+    contract_id  INT REFERENCES contracts(id) ON DELETE SET NULL,
+    from_company VARCHAR(255),
+    mat_name     VARCHAR(255),
+    read         BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_notif_user_id ON notifications(user_id);
+  CREATE INDEX IF NOT EXISTS idx_notif_read    ON notifications(user_id, read);
 `;
 
 async function init() {

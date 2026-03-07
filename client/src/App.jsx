@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation, Link } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { NotificationsProvider, useNotifications } from './context/NotificationsContext';
 import ItemDetail from './pages/ItemDetail';
 import ItemGrid from './pages/ItemGrid';
 import Login from './pages/Login';
@@ -222,6 +223,95 @@ function SettingsModal({ onClose }) {
   );
 }
 
+// ── Notification bell ─────────────────────────────────────────────────────────
+
+function fmtNotifAgo(iso) {
+  const sec = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (sec < 120)   return `${Math.floor(sec)}s ago`;
+  if (sec < 3600)  return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function NotificationBell() {
+  const { unread, notifications, markRead } = useNotifications();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  function toggle() {
+    if (!open) markRead();
+    setOpen((v) => !v);
+  }
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={toggle}
+        title="Notifications"
+        style={{
+          background: 'none', border: '1px solid #2e2e5a', borderRadius: 6,
+          padding: '4px 8px', color: unread > 0 ? '#e0e0ff' : '#6b6b8a',
+          fontSize: 15, cursor: 'pointer', lineHeight: 1,
+          display: 'flex', alignItems: 'center', position: 'relative',
+        }}
+      >
+        🔔
+        {unread > 0 && (
+          <span style={{
+            position: 'absolute', top: -4, right: -4,
+            background: '#ef4444', color: '#fff', fontSize: 9, fontWeight: 700,
+            borderRadius: 10, minWidth: 16, height: 16,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '0 3px', lineHeight: 1,
+          }}>{unread > 99 ? '99+' : unread}</span>
+        )}
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 8px)', right: 0,
+          background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 10,
+          minWidth: 300, maxWidth: 360, maxHeight: 420, overflowY: 'auto',
+          zIndex: 1000, boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+        }}>
+          <div style={{ padding: '12px 16px 8px', borderBottom: '1px solid #1e1e3a' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#9090b0', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Notifications
+            </span>
+          </div>
+          {notifications.length === 0 ? (
+            <div style={{ padding: '20px 16px', fontSize: 13, color: '#3a3a55', textAlign: 'center' }}>
+              No notifications
+            </div>
+          ) : (
+            notifications.map((n) => (
+              <div key={n.id} style={{
+                padding: '10px 16px', borderBottom: '1px solid #13132a',
+                background: n.read ? 'transparent' : '#0d0d2e',
+              }}>
+                <div style={{ fontSize: 13, color: '#c8c8e8', lineHeight: 1.4 }}>
+                  <span style={{ color: '#a78bfa', fontWeight: 600 }}>{n.from_company}</span>
+                  {' is interested in your '}
+                  <span style={{ color: '#e0e0ff', fontWeight: 600 }}>{n.mat_name}</span>
+                  {' listing'}
+                </div>
+                <div style={{ fontSize: 11, color: '#3a3a55', marginTop: 3 }}>{fmtNotifAgo(n.created_at)}</div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Nav ───────────────────────────────────────────────────────────────────────
 
 function Nav() {
@@ -254,10 +344,11 @@ function Nav() {
           </div>
         </div>
 
-        {/* Right: company name + settings */}
+        {/* Right: company name + notifications + settings */}
         {user && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 12, color: '#6b6b8a', whiteSpace: 'nowrap' }}>{user.companyName}</span>
+            <NotificationBell />
             <button
               onClick={() => setSettingsOpen(true)}
               title="Settings"
@@ -294,6 +385,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
+        <NotificationsProvider>
         <BrowserRouter>
           <Nav />
           <main>
@@ -308,6 +400,7 @@ export default function App() {
             </ErrorBoundary>
           </main>
         </BrowserRouter>
+        </NotificationsProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

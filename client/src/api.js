@@ -96,6 +96,10 @@ export const api = {
   markInterest:    (id)      => post(`/contracts/${id}/interest`, {}, true),
   removeInterest:  (id)      => del(`/contracts/${id}/interest`, true),
 
+  // ── Notifications ──────────────────────────────────────────────────────────
+  notifications:           () => get('/contracts/notifications', true),
+  markNotificationsRead:   () => patch('/contracts/notifications/read', {}, true),
+
   // ── Tracker ────────────────────────────────────────────────────────────────
   trackerStatus:         () => get('/tracker/status'),
   trackerSnapshots:      (matId, limit = 120) => get(`/tracker/snapshots/${matId}?limit=${limit}`),

@@ -637,6 +637,86 @@ function EditModal({ contract, onClose, onSaved, items, planets }) {
   );
 }
 
+// ── Manage Listings Modal ─────────────────────────────────────────────────────
+
+function ManageListingsModal({ listings, deleting, actioning, onCancel, onBump, onEdit, onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000, padding: '20px 16px',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 12,
+          width: '100%', maxWidth: 680, maxHeight: '80vh',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid #1e1e3a' }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: '#e0e0ff' }}>
+            Manage Listings
+            <span style={{ fontSize: 11, color: '#4c1d95', marginLeft: 8 }}>({listings.length} / 10)</span>
+          </span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#6b6b8a', cursor: 'pointer', fontSize: 16, padding: 0, lineHeight: 1 }}>✕</button>
+        </div>
+
+        {/* Listings */}
+        <div style={{ overflowY: 'auto', padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {listings.length === 0 ? (
+            <p style={{ color: '#3a3a55', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>No active listings.</p>
+          ) : listings.map((c) => {
+            const isCancelling = deleting === c.id;
+            const busy = isCancelling || !!actioning;
+            const interests = c.interests ?? [];
+            return (
+              <div key={c.id} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                background: '#13132a', border: '1px solid #1e1e3a', borderRadius: 8,
+                padding: '8px 12px',
+              }}>
+                <svg width="18" height="18" style={{ flexShrink: 0 }}>
+                  <use href={`${SPRITE_URL}#${toIconId(c.mat_name)}`} width="18" height="18" />
+                </svg>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#e0e0ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.mat_name}</span>
+                    <TypeBadge type={c.type} />
+                  </div>
+                  <div style={{ fontSize: 11, color: '#6b6b8a', marginTop: 1 }}>
+                    {c.planet} · {Number(c.max_daily_qty).toLocaleString()}/day
+                    {interests.length > 0 && (
+                      <span style={{ color: '#a78bfa', marginLeft: 6 }}>· {interests.length} interested</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+                  <BumpButton contract={c} actioning={actioning} onBump={onBump} />
+                  <button
+                    onClick={() => { onEdit(c); onClose(); }}
+                    disabled={busy}
+                    style={{ background: 'none', border: '1px solid #1e2e4a', borderRadius: 4, padding: '3px 8px', color: '#60a5fa', fontSize: 11, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}
+                  >Edit</button>
+                  <button
+                    onClick={() => !busy && onCancel(c.id)}
+                    disabled={busy}
+                    style={{ background: 'none', border: '1px solid #2e1a1a', borderRadius: 4, padding: '3px 8px', color: '#7f1d1d', fontSize: 11, cursor: busy ? 'not-allowed' : 'pointer', opacity: isCancelling ? 0.5 : 1 }}
+                  >{isCancelling ? '…' : 'Remove'}</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Contracts() {
   const { user } = useAuth();
 
@@ -645,14 +725,16 @@ export default function Contracts() {
   const [planets,      setPlanets]      = useState(['Exchange Station']);
   const [loading,      setLoading]      = useState(true);
   const [err,          setErr]          = useState('');
-  const [typeFilter,   setTypeFilter]   = useState('all');
-  const [itemSearch,   setItemSearch]   = useState('');
-  const [planetFilter, setPlanetFilter] = useState('');
+  const [typeFilter,      setTypeFilter]      = useState('all');
+  const [itemSearch,      setItemSearch]      = useState('');
+  const [planetFilter,    setPlanetFilter]    = useState('');
+  const [pillItem,        setPillItem]        = useState('');
+  const [pillPlanet,      setPillPlanet]      = useState('');
   const [modalOpen,    setModalOpen]    = useState(false);
-  const [deleting,       setDeleting]       = useState(null);
-  const [actioning,      setActioning]      = useState(null); // { id, type: 'fulfill'|'bump' }
-  const [editingContract,   setEditingContract]   = useState(null);
-  const [myListingsOpen,    setMyListingsOpen]    = useState(true);
+  const [deleting,        setDeleting]        = useState(null);
+  const [actioning,       setActioning]       = useState(null); // { id, type: 'fulfill'|'bump' }
+  const [editingContract, setEditingContract] = useState(null);
+  const [manageOpen,      setManageOpen]      = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -680,14 +762,15 @@ export default function Contracts() {
   useEffect(() => { load(); }, [load]);
 
   const filtered = useMemo(() => {
-    const q = itemSearch.trim().toLowerCase();
+    const q = (itemSearch || pillItem).trim().toLowerCase();
+    const pf = planetFilter || pillPlanet;
     return contracts.filter((c) => {
       if (typeFilter !== 'all' && c.type !== typeFilter) return false;
       if (q && c.mat_name.toLowerCase() !== q) return false;
-      if (planetFilter && !c.planet.toLowerCase().includes(planetFilter.toLowerCase())) return false;
+      if (pf && !c.planet.toLowerCase().includes(pf.toLowerCase())) return false;
       return true;
     });
-  }, [contracts, typeFilter, itemSearch, planetFilter]);
+  }, [contracts, typeFilter, itemSearch, pillItem, planetFilter, pillPlanet]);
 
 
   const myListings    = useMemo(() => contracts.filter((c) => c.owner_user_id === user?.id), [contracts, user]);
@@ -751,16 +834,30 @@ export default function Contracts() {
           </p>
         </div>
         {user && (
-          <button
-            onClick={() => setModalOpen(true)}
-            style={{
-              flexShrink: 0, background: '#1e1440', border: '1px solid #4c1d95',
-              borderRadius: 6, padding: '8px 16px', color: '#a78bfa',
-              fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
-            }}
-          >
-            + Post listing
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+            {myListings.length > 0 && (
+              <button
+                onClick={() => setManageOpen(true)}
+                style={{
+                  background: 'none', border: '1px solid #2e2e5a',
+                  borderRadius: 6, padding: '8px 16px', color: '#a78bfa',
+                  fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
+                }}
+              >
+                Manage listings ({myListings.length})
+              </button>
+            )}
+            <button
+              onClick={() => setModalOpen(true)}
+              style={{
+                background: '#1e1440', border: '1px solid #4c1d95',
+                borderRadius: 6, padding: '8px 16px', color: '#a78bfa',
+                fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
+              }}
+            >
+              + Post listing
+            </button>
+          </div>
         )}
       </div>
 
@@ -805,34 +902,47 @@ export default function Contracts() {
 
       {err && <p style={{ color: '#f87171', fontSize: 13, marginBottom: 16 }}>{err}</p>}
 
-      {/* Your Listings */}
-      {!loading && myListings.length > 0 && (
-        <div style={{ marginBottom: 32 }}>
-          <button
-            onClick={() => setMyListingsOpen((o) => !o)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 8, marginBottom: myListingsOpen ? 12 : 0,
-              background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-            }}
-          >
-            <span style={{ fontSize: 10, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 1 }}>Your listings</span>
-            <span style={{ fontSize: 10, color: '#4c1d95' }}>({myListings.length} / 10)</span>
-            <span style={{ fontSize: 10, color: '#3a3a55', marginLeft: 2 }}>{myListingsOpen ? '▼' : '▲'}</span>
-          </button>
-          {myListingsOpen && (
-            <div style={gridStyle}>
-              {myListings.map((c) => (
-                <MyListingCard
-                  key={c.id} contract={c}
-                  deleting={deleting} actioning={actioning}
-                  onCancel={handleDelete} onFulfill={handleFulfill} onBump={handleBump} onEdit={handleEdit}
-                />
-              ))}
-            </div>
-          )}
-          <div style={{ height: 1, background: '#1e1e3a', marginTop: 28 }} />
-        </div>
-      )}
+      {/* Filter suggestion pills */}
+      {!loading && (() => {
+        const others = contracts.filter((c) => c.owner_user_id !== user?.id);
+        const itemCounts = {};
+        const planetCounts = {};
+        for (const c of others) {
+          itemCounts[c.mat_name] = (itemCounts[c.mat_name] ?? 0) + 1;
+          for (const p of c.planet.split(',').map((s) => s.trim()).filter(Boolean)) {
+            planetCounts[p] = (planetCounts[p] ?? 0) + 1;
+          }
+        }
+        const topItems   = Object.entries(itemCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([n]) => n);
+        const topPlanets = Object.entries(planetCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([n]) => n);
+        const pillStyle = (active) => ({
+          background: active ? '#1e1440' : 'none',
+          border: `1px solid ${active ? '#7c3aed' : '#2e2e5a'}`,
+          borderRadius: 20, padding: '3px 10px',
+          color: active ? '#a78bfa' : '#6b6b8a',
+          fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap',
+        });
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+            {topItems.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
+                <span style={{ fontSize: 10, color: '#3a3a55', textTransform: 'uppercase', letterSpacing: 1, marginRight: 2 }}>Items</span>
+                {topItems.map((name) => (
+                  <button key={name} onClick={() => setPillItem(pillItem === name ? '' : name)} style={pillStyle(pillItem === name)}>{name}</button>
+                ))}
+              </div>
+            )}
+            {topPlanets.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
+                <span style={{ fontSize: 10, color: '#3a3a55', textTransform: 'uppercase', letterSpacing: 1, marginRight: 2 }}>Planets</span>
+                {topPlanets.map((name) => (
+                  <button key={name} onClick={() => setPillPlanet(pillPlanet === name ? '' : name)} style={pillStyle(pillPlanet === name)}>{name}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         <span style={{ fontSize: 10, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: 1 }}>Recent listings</span>
@@ -851,6 +961,18 @@ export default function Contracts() {
             <ContractCard key={c.id} contract={c} isOwn={c.owner_user_id === user?.id} />
           ))}
         </div>
+      )}
+
+      {manageOpen && (
+        <ManageListingsModal
+          listings={myListings}
+          deleting={deleting}
+          actioning={actioning}
+          onCancel={handleDelete}
+          onBump={handleBump}
+          onEdit={handleEdit}
+          onClose={() => setManageOpen(false)}
+        />
       )}
 
       {modalOpen && (
