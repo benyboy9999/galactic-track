@@ -28,19 +28,37 @@ router.post('/login', async (req, res, next) => {
 
     const companyId   = String(company.id ?? company.companyId ?? '');
     const companyName = company.name ?? company.companyName ?? '';
+    const isRealCompany = companyId && companyId !== '0';
 
-    // Upsert user — preserve existing session_token on re-login
-    const upsert = await pool.query(
-      `INSERT INTO users(api_key, api_key_encrypted, session_token, company_id, company_name, last_seen)
-       VALUES($1, $2, $3, $4, $5, NOW())
-       ON CONFLICT(api_key) DO UPDATE
-         SET api_key_encrypted = EXCLUDED.api_key_encrypted,
-             company_name      = EXCLUDED.company_name,
-             last_seen         = NOW(),
-             revoked           = FALSE
-       RETURNING id, session_token, credits_used, credits_total, revoked`,
-      [hashApiKey(apiKey.trim()), encryptApiKey(apiKey.trim()), randomUUID(), companyId, companyName]
-    );
+    let upsert;
+
+    // Step A: for real companies, try to find and update the existing account by company_id.
+    // This handles API key rotation — same company logs in with a new key and keeps their account.
+    if (isRealCompany) {
+      upsert = await pool.query(
+        `UPDATE users
+         SET api_key = $1, api_key_encrypted = $2, company_name = $3, last_seen = NOW(), revoked = FALSE
+         WHERE company_id = $4
+         RETURNING id, session_token, credits_used, credits_total, revoked, role`,
+        [hashApiKey(apiKey.trim()), encryptApiKey(apiKey.trim()), companyName, companyId]
+      );
+    }
+
+    // Step B: no existing account for this company — insert new, or re-login with same key
+    if (!upsert?.rows.length) {
+      upsert = await pool.query(
+        `INSERT INTO users(api_key, api_key_encrypted, session_token, company_id, company_name, last_seen)
+         VALUES($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT(api_key) DO UPDATE
+           SET api_key_encrypted = EXCLUDED.api_key_encrypted,
+               company_name      = EXCLUDED.company_name,
+               last_seen         = NOW(),
+               revoked           = FALSE
+         RETURNING id, session_token, credits_used, credits_total, revoked, role`,
+        [hashApiKey(apiKey.trim()), encryptApiKey(apiKey.trim()), randomUUID(), companyId, companyName]
+      );
+    }
+
     const user = upsert.rows[0];
 
     // Auto-assign unclaimed items (legacy seed) up to credit limit
@@ -80,6 +98,7 @@ router.post('/login', async (req, res, next) => {
       creditsUsed:  user.credits_used,
       creditsTotal: user.credits_total,
       id:           user.id,
+      role:         user.role ?? 'user',
     });
   } catch (err) {
     next(err);

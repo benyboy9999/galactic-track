@@ -112,6 +112,9 @@ const schema = `
 
   CREATE INDEX IF NOT EXISTS idx_users_session_token ON users(session_token);
   CREATE INDEX IF NOT EXISTS idx_users_api_key       ON users(api_key);
+  CREATE UNIQUE INDEX IF NOT EXISTS users_company_id_unique
+    ON users(company_id)
+    WHERE company_id IS NOT NULL AND company_id != '' AND company_id != '0';
 
   CREATE TABLE IF NOT EXISTS tracked_items (
     mat_id        INT PRIMARY KEY,
