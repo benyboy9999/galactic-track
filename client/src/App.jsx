@@ -13,6 +13,7 @@ import Contracts from './pages/Contracts';
 import Company from './pages/Company';
 import DevCompanySearch from './components/DevCompanySearch';
 import ErrorBoundary from './components/ErrorBoundary';
+import KeyInfoModal from './components/KeyInfoModal';
 import { api } from './api';
 
 // ── Poll countdown ────────────────────────────────────────────────────────────
@@ -66,6 +67,7 @@ function SettingsModal({ onClose }) {
   const [soundOn,      setSoundOn]      = useState(() => localStorage.getItem('notifSoundEnabled') !== 'false');
   const [volume,       setVolume]       = useState(() => parseFloat(localStorage.getItem('notifVolume') ?? '0.4'));
   const [devSwitching,  setDevSwitching]  = useState(false);
+  const [showKeyInfo,  setShowKeyInfo]  = useState(false);
 
   function toggleSound() {
     const next = !soundOn;
@@ -255,6 +257,15 @@ function SettingsModal({ onClose }) {
         {/* Actions */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #1e1e3a', paddingTop: 16 }}>
           <button
+            onClick={() => setShowKeyInfo(true)}
+            style={{
+              background: 'none', border: '1px solid #2e2e5a', borderRadius: 6,
+              padding: '7px 12px', color: '#6b6b8a', fontSize: 12, cursor: 'pointer', textAlign: 'left',
+            }}
+          >
+            How is my key used &amp; stored?
+          </button>
+          <button
             onClick={logout}
             style={{
               background: 'none', border: '1px solid #2e2e5a', borderRadius: 6,
@@ -276,6 +287,8 @@ function SettingsModal({ onClose }) {
           </button>
         </div>
       </div>
+
+      {showKeyInfo && <KeyInfoModal onClose={() => setShowKeyInfo(false)} />}
 
       {/* In-app confirm dialog */}
       {confirm && (
