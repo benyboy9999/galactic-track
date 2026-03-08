@@ -1,7 +1,8 @@
 Developing
 1. Open Tunnel to live server for DB
     ssh -L 5432:localhost:5432 root@galactic-track.com -N
-2. cd server && npm run dev && cd ../client && npm run dev
+2. cd server && npm run dev
+3. cd client && npm run dev
 
 Pushing Changes
 0. git checkout main

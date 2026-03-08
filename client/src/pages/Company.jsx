@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -281,6 +282,21 @@ function ChartTooltip({ active, payload, hours }) {
   );
 }
 
+// ── Bucket fill ──────────────────────────────────────────────────────────────
+
+function fillBuckets(data, chartRes, hours = 24) {
+  const nowSecs   = Math.floor(Date.now() / 1000);
+  const startSecs = Math.floor((nowSecs - hours * 3600) / chartRes) * chartRes;
+  const dataMap   = new Map(
+    data.map((d) => [Math.floor(new Date(d.recorded_at).getTime() / 1000 / chartRes) * chartRes, d])
+  );
+  const result = [];
+  for (let t = startSecs; t <= nowSecs; t += chartRes) {
+    result.push(dataMap.get(t) ?? { recorded_at: new Date(t * 1000).toISOString(), qty_sold: 0, qty_listed: 0 });
+  }
+  return result;
+}
+
 // ── Activity chart ───────────────────────────────────────────────────────────
 
 function ActivityChart({ viewId, companyName }) {
@@ -292,7 +308,7 @@ function ActivityChart({ viewId, companyName }) {
   useEffect(() => {
     let cancelled = false;
     api.companyTimeline(24, viewId, chartRes)
-      .then((rows) => { if (!cancelled) setTimeline(rows); })
+      .then((rows) => { if (!cancelled) setTimeline(fillBuckets(rows, chartRes)); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [viewId, chartRes]);
@@ -508,6 +524,7 @@ function ItemsTable({ items, labelHours }) {
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function Company() {
+  const [searchParams] = useSearchParams();
   const [hours,   setHours]   = useState(24);
   const [data,     setData]     = useState(null);
   const [events,   setEvents]   = useState([]);
@@ -515,6 +532,16 @@ export default function Company() {
   const [err,      setErr]      = useState('');
   const [viewId,   setViewId]   = useState(null);
   const [viewName, setViewName] = useState(null);
+
+  // Resolve company name from URL param on mount
+  useEffect(() => {
+    const nameParam = searchParams.get('company');
+    if (!nameParam) return;
+    api.companySearch(nameParam).then((results) => {
+      const match = results.find((r) => r.company_name === nameParam);
+      if (match) { setViewId(match.company_id); setViewName(match.company_name); }
+    }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load summary (table)
   useEffect(() => {

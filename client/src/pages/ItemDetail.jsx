@@ -395,6 +395,7 @@ function groupActivity(data, groupBy) {
 }
 
 function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount, intervalMs = 60_000 }) {
+  const navigate = useNavigate();
   const [snapshots,       setSnapshots]       = useState([]);
   const [activity,        setActivity]        = useState([]);
   const [companyActivity, setCompanyActivity] = useState(null);
@@ -414,9 +415,6 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount, intervalM
   const [awardsHours,       setAwardsHours]       = useState(24);
   const [awardsData,        setAwardsData]        = useState(null);
   const [awardsLoading,     setAwardsLoading]     = useState(false);
-  const [companyModal,      setCompanyModal]      = useState(null);
-  const [companyEvents,     setCompanyEvents]     = useState([]);
-  const [companyEventsLoad, setCompanyEventsLoad] = useState(false);
   const activeBarIndex = useRef(null);
   const hasData = snapshots.length > 0;
 
@@ -569,18 +567,8 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
     if (!awardsData) loadAwards(awardsHours);
   }
 
-  async function openCompany(row) {
-    setCompanyModal(row);
-    setCompanyEventsLoad(true);
-    setCompanyEvents([]);
-    try {
-      const data = await api.trackerCompanyEvents(item.matId, row.company_name, hours);
-      setCompanyEvents(data);
-    } catch {
-      setCompanyEvents([]);
-    } finally {
-      setCompanyEventsLoad(false);
-    }
+  function openCompany(row) {
+    navigate('/company?company=' + encodeURIComponent(row.company_name));
   }
 
   async function handleBarClick(row) {
@@ -613,13 +601,21 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
     <div>
       {refreshing && <div style={{ color: '#3a3a55', fontSize: 11, marginBottom: 6 }}>refreshing…</div>}
 
-      {isNew && (
+      {isNew ? (
         <div style={{
           marginBottom: 10, padding: '7px 12px',
           background: '#1e1440', border: '1px solid #4c1d95', borderRadius: 6,
           color: '#a78bfa', fontSize: 12,
         }}>
           This item was recently added — data will improve over time.
+        </div>
+      ) : (
+        <div style={{
+          marginBottom: 10, padding: '7px 12px',
+          background: '#1e1440', border: '1px solid #4c1d95', borderRadius: 6,
+          color: '#a78bfa', fontSize: 12,
+        }}>
+          Data is not reliably accurate. All data is inferred and likely to contain errors.
         </div>
       )}
 
@@ -946,28 +942,6 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
         <CompanyActivity data={companyActivity} hours={hours} onAwards={openAwards} myCompany={myCompany} onCompanyClick={openCompany} />
       </div>
 
-      {/* Company events modal */}
-      {companyModal && (
-        <Modal title={companyModal.company_name} onClose={() => setCompanyModal(null)}>
-          {companyEventsLoad ? <Spinner /> : companyEvents.length === 0 ? (
-            <div style={{ color: '#3a3a55', fontSize: 12 }}>No events in this period.</div>
-          ) : (
-            <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
-              {companyEvents.map((e, i) => {
-                const { text, color } = EVENT_LABEL[e.event_type] ?? { text: e.event_type, color: '#6b6b8a' };
-                return (
-                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 12 }}>
-                    <span style={{ color: '#3a3a55', minWidth: 110, fontSize: 10, flexShrink: 0 }}>{fmtDateTime(e.recorded_at)}</span>
-                    <span style={{ color, minWidth: 70, flexShrink: 0 }}>{text}</span>
-                    <span style={{ color: '#e0e0f0', fontVariantNumeric: 'tabular-nums' }}>{qty(Number(e.qty))}</span>
-                    <span style={{ color: '#6b6b8a', fontVariantNumeric: 'tabular-nums' }}>@ {usd(e.unit_price)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Modal>
-      )}
     </div>
   );
 }
