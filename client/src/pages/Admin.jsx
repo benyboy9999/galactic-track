@@ -448,7 +448,12 @@ function Dashboard({ token, onLogout }) {
         {r.from_company ?? '—'}
       </div>
     )},
-    { key: 'owner_company',  label: 'Listing owner' },
+    { key: 'owner_company',  label: 'Listing owner', render: (r) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <OnlineDot lastSeen={lastSeenByName.get(r.owner_company)} />
+        {r.owner_company ?? '—'}
+      </div>
+    )},
     { key: 'mat_name',       label: 'Item' },
     { key: 'contract_type',  label: 'Type', render: (r) => (
       <span style={{ color: r.contract_type === 'buy' ? '#34d399' : '#f87171' }}>{r.contract_type}</span>
