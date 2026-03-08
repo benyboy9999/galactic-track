@@ -10,7 +10,7 @@
  *
  * Rate budget: 5 units per item per poll.
  * Revoke detection: 401/403 from GT API marks the owner as revoked.
- * Retention: tracker_orders older than 48h are pruned each cycle.
+ * Retention: tracker_orders pruned to the 2 most recent snapshots per item (hourly via index.js).
  */
 
 import pool from '../database/db.js';
@@ -96,11 +96,12 @@ async function saveSnapshot(client, matData, apiQtySold, apiQtySoldDate) {
   );
   const snapId = snapRes.rows[0].id;
 
-  for (const o of orders) {
+  if (orders.length > 0) {
+    const vals   = orders.map((_, i) => `($${i*6+1},$${i*6+2},$${i*6+3},$${i*6+4},$${i*6+5},$${i*6+6})`);
+    const params = orders.flatMap((o) => [snapId, o.id, o.cId, o.cName, o.unitPrice, o.qty]);
     await client.query(
-      `INSERT INTO tracker_orders(snapshot_id, order_id, company_id, company_name, unit_price, qty)
-       VALUES($1, $2, $3, $4, $5, $6)`,
-      [snapId, o.id, o.cId, o.cName, o.unitPrice, o.qty]
+      `INSERT INTO tracker_orders(snapshot_id,order_id,company_id,company_name,unit_price,qty) VALUES ${vals.join(',')}`,
+      params
     );
   }
 
@@ -254,26 +255,6 @@ async function pollItem(item) {
   }
 }
 
-// ── Order retention ────────────────────────────────────────────────────────────
-// Keep tracker_orders for the last 48h only — older entries are not needed for
-// diffing and would grow the DB unboundedly.
-
-async function pruneOldOrders() {
-  try {
-    const r = await pool.query(
-      `DELETE FROM tracker_orders
-       WHERE snapshot_id IN (
-         SELECT id FROM tracker_snapshots
-         WHERE recorded_at < NOW() - INTERVAL '48 hours'
-       )`
-    );
-    if (r.rowCount > 0) {
-      console.log(`[tracker] pruned ${r.rowCount} old order rows`);
-    }
-  } catch (err) {
-    console.error('[tracker] order pruning failed:', err.message);
-  }
-}
 
 // ── Poll cycle ─────────────────────────────────────────────────────────────────
 
@@ -308,8 +289,6 @@ async function pollAll() {
     }
   }
 
-  // Prune old order data to keep storage flat
-  await pruneOldOrders();
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────

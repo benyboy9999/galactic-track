@@ -90,18 +90,33 @@ async function expireContracts() {
   }
 }
 
-async function cleanupOldOrders() {
+async function pruneAll() {
   try {
-    const r = await pool.query(
+    // tracker_orders: keep only the 2 most recent snapshots per item — everything older is never read
+    const ord = await pool.query(
       `DELETE FROM tracker_orders
-       WHERE snapshot_id IN (
-         SELECT id FROM tracker_snapshots
-         WHERE recorded_at < NOW() - INTERVAL '48 hours'
+       WHERE snapshot_id NOT IN (
+         SELECT id FROM (
+           SELECT id, ROW_NUMBER() OVER (PARTITION BY mat_id ORDER BY recorded_at DESC) AS rn
+           FROM tracker_snapshots
+         ) ranked WHERE rn <= 2
        )`
     );
-    if (r.rowCount > 0) console.log(`Cleaned up ${r.rowCount} old tracker order row(s)`);
+    if (ord.rowCount > 0) console.log(`Pruned ${ord.rowCount} old tracker_orders row(s)`);
+
+    // tracker_snapshots: keep 30 days
+    const snp = await pool.query(
+      `DELETE FROM tracker_snapshots WHERE recorded_at < NOW() - INTERVAL '30 days'`
+    );
+    if (snp.rowCount > 0) console.log(`Pruned ${snp.rowCount} old tracker_snapshots row(s)`);
+
+    // tracker_events: keep 30 days
+    const evt = await pool.query(
+      `DELETE FROM tracker_events WHERE recorded_at < NOW() - INTERVAL '30 days'`
+    );
+    if (evt.rowCount > 0) console.log(`Pruned ${evt.rowCount} old tracker_events row(s)`);
   } catch (e) {
-    console.error('tracker_orders cleanup error:', e.message);
+    console.error('pruneAll error:', e.message);
   }
 }
 
@@ -115,9 +130,9 @@ app.listen(PORT, '0.0.0.0', () => {
   // Expire stale contracts on startup and every 6 hours
   expireContracts();
   setInterval(expireContracts, 6 * 60 * 60 * 1000);
-  // Prune raw orderbook data older than 48h (snapshots are kept forever)
-  cleanupOldOrders();
-  setInterval(cleanupOldOrders, 6 * 60 * 60 * 1000);
+  // Prune tracker tables: orders (keep 2 per item), snapshots + events (keep 30 days)
+  pruneAll();
+  setInterval(pruneAll, 60 * 60 * 1000);
   // Backfill logos for users with active contracts who don't have one yet
   backfillCompanyLogos();
 });
