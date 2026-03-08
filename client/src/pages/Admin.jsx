@@ -37,6 +37,14 @@ function fmtAgo(iso) {
   return `${Math.floor(sec / 86400)}d ago`;
 }
 
+function OnlineDot({ lastSeen }) {
+  if (!lastSeen) return <span title="Last seen: unknown" style={{ color: '#3a3a55', fontSize: 10 }}>●</span>;
+  const ageSec = (Date.now() - new Date(lastSeen).getTime()) / 1000;
+  const color  = ageSec < 300 ? '#10b981' : ageSec < 86400 ? '#fbbf24' : '#f87171';
+  const label  = ageSec < 300 ? `Online · last seen ${fmtAgo(lastSeen)}` : `Last seen ${fmtAgo(lastSeen)}`;
+  return <span title={label} style={{ color, fontSize: 10, flexShrink: 0 }}>●</span>;
+}
+
 // ── Section wrapper ───────────────────────────────────────────────────────────
 
 function Section({ title, children, action }) {
@@ -319,8 +327,18 @@ function Dashboard({ token, onLogout }) {
     });
   }, [users, userSort]);
 
+  const lastSeenByName = useMemo(
+    () => new Map(users.map((u) => [u.company_name, u.last_seen])),
+    [users]
+  );
+
   const userCols = [
-    { key: 'company_name', label: sortHeader('company_name', 'Company') },
+    { key: 'company_name', label: sortHeader('company_name', 'Company'), render: (r) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <OnlineDot lastSeen={r.last_seen} />
+        {r.company_name ?? '—'}
+      </div>
+    )},
     { key: 'credits_used', label: 'Credits', render: (r) => (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontVariantNumeric: 'tabular-nums' }}>{r.credits_used}/{r.credits_total ?? 3}</span>
@@ -424,7 +442,12 @@ function Dashboard({ token, onLogout }) {
   ];
 
   const interestCols = [
-    { key: 'from_company',   label: 'Interested party' },
+    { key: 'from_company',   label: 'Interested party', render: (r) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <OnlineDot lastSeen={lastSeenByName.get(r.from_company)} />
+        {r.from_company ?? '—'}
+      </div>
+    )},
     { key: 'owner_company',  label: 'Listing owner' },
     { key: 'mat_name',       label: 'Item' },
     { key: 'contract_type',  label: 'Type', render: (r) => (
