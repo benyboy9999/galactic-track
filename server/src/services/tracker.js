@@ -273,9 +273,39 @@ async function pollAll() {
       await pollItem(item);
     } catch (err) {
       if (err.status === 401 || err.status === 403) {
-        // Key revoked in-game — mark user as revoked
+        // Key revoked in-game — mark user as revoked and disable their tracked items
         try {
-          await pool.query(`UPDATE users SET revoked = TRUE WHERE api_key = $1`, [hashApiKey(item.apiKey)]);
+          const revoked = await pool.query(
+            `UPDATE users SET revoked = TRUE WHERE api_key = $1 RETURNING id, company_name`,
+            [hashApiKey(item.apiKey)]
+          );
+          if (revoked.rows.length > 0) {
+            const { id: userId, company_name: companyName } = revoked.rows[0];
+            const items = await pool.query(
+              `UPDATE tracked_items SET active = FALSE
+               WHERE owner_user_id = $1 AND active = TRUE
+               RETURNING mat_id, mat_name`,
+              [userId]
+            );
+            if (items.rows.length > 0) {
+              await pool.query(
+                `UPDATE users SET credits_used = GREATEST(0, credits_used - $1) WHERE id = $2`,
+                [items.rows.length, userId]
+              );
+              for (const { mat_id, mat_name } of items.rows) {
+                pool.query(
+                  `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action, by_admin)
+                   VALUES($1, $2, $3, $4, 'untracked', FALSE)`,
+                  [mat_id, mat_name, userId, companyName]
+                ).catch(() => {});
+                pool.query(
+                  `INSERT INTO notifications(user_id, type, mat_name, from_company)
+                   SELECT id, 'untracked', $1, $2 FROM users WHERE role = 'admin'`,
+                  [mat_name, companyName]
+                ).catch(() => {});
+              }
+            }
+          }
           console.warn(`[tracker] API key revoked for ${item.matName} owner — stopping their polls`);
         } catch { /* ignore */ }
       } else if (err.rateLimited) {
