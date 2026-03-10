@@ -144,10 +144,24 @@ router.post('/logout', requireAuth, async (req, res, next) => {
 // Revokes the user's account — releases their tracked items and deletes the record.
 router.delete('/account', requireAuth, async (req, res, next) => {
   try {
-    await pool.query(
-      `UPDATE tracked_items SET active = FALSE, owner_user_id = NULL WHERE owner_user_id = $1`,
+    const items = await pool.query(
+      `UPDATE tracked_items SET active = FALSE, owner_user_id = NULL
+       WHERE owner_user_id = $1 AND active = TRUE
+       RETURNING mat_id, mat_name`,
       [req.user.id]
     );
+    for (const { mat_id, mat_name } of items.rows) {
+      pool.query(
+        `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action, by_admin)
+         VALUES($1, $2, $3, $4, 'untracked', FALSE)`,
+        [mat_id, mat_name, req.user.id, req.user.company_name]
+      ).catch(() => {});
+      pool.query(
+        `INSERT INTO notifications(user_id, type, mat_name, from_company)
+         SELECT id, 'untracked', $1, $2 FROM users WHERE role = 'admin'`,
+        [mat_name, req.user.company_name]
+      ).catch(() => {});
+    }
     await pool.query(`DELETE FROM users WHERE id = $1`, [req.user.id]);
     res.json({ ok: true });
   } catch (err) {

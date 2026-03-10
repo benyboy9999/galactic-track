@@ -114,6 +114,7 @@ router.get('/tracked-items', requireAdmin, async (req, res, next) => {
                ORDER BY recorded_at DESC LIMIT 1) AS last_snapshot_at
        FROM tracked_items ti
        LEFT JOIN users u ON u.id = ti.owner_user_id
+       WHERE ti.active = TRUE
        ORDER BY ti.mat_name ASC`
     );
     res.json(r.rows);
@@ -149,7 +150,36 @@ router.get('/errors', requireAdmin, (req, res) => {
 // POST /api/admin/revoke/:userId
 router.post('/revoke/:userId', requireAdmin, async (req, res, next) => {
   try {
-    await pool.query(`UPDATE users SET revoked = TRUE WHERE id = $1`, [req.params.userId]);
+    const userId = Number(req.params.userId);
+
+    // Disable all active tracked items owned by this user
+    const items = await pool.query(
+      `UPDATE tracked_items SET active = FALSE
+       WHERE owner_user_id = $1 AND active = TRUE
+       RETURNING mat_id, mat_name`,
+      [userId]
+    );
+
+    if (items.rows.length > 0) {
+      await pool.query(
+        `UPDATE users SET credits_used = GREATEST(0, credits_used - $1) WHERE id = $2`,
+        [items.rows.length, userId]
+      );
+      for (const { mat_id, mat_name } of items.rows) {
+        pool.query(
+          `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action, by_admin)
+           VALUES($1, $2, $3, 'Admin', 'untracked', TRUE)`,
+          [mat_id, mat_name, userId]
+        ).catch(() => {});
+        pool.query(
+          `INSERT INTO notifications(user_id, type, mat_name, from_company)
+           SELECT id, 'untracked', $1, 'Admin' FROM users WHERE role = 'admin'`,
+          [mat_name]
+        ).catch(() => {});
+      }
+    }
+
+    await pool.query(`UPDATE users SET revoked = TRUE WHERE id = $1`, [userId]);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
