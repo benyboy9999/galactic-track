@@ -103,13 +103,13 @@ export const api = {
   dismissNotification:     (id) => del(`/contracts/notifications/${id}`, true),
 
   // ── Company ────────────────────────────────────────────────────────────────
-  companySummary:  (hours = 24, companyId = null) =>
-    get(`/company/summary?hours=${hours}${companyId ? `&companyId=${companyId}` : ''}`, true),
+  companySummary:  (hours = 24, companyId = null, date = null) =>
+    get(`/company/summary?hours=${hours}${companyId ? `&companyId=${companyId}` : ''}${date ? `&date=${date}` : ''}`, true),
   companySearch:   (q = '') => get(`/company/search?q=${encodeURIComponent(q)}`, true),
   companyEvents:   (companyId = null, limit = 20, from = null, to = null) =>
     get(`/company/events?limit=${limit}${companyId ? `&companyId=${companyId}` : ''}${from ? `&from=${encodeURIComponent(from)}` : ''}${to ? `&to=${encodeURIComponent(to)}` : ''}`, true),
-  companyTimeline: (hours = 24, companyId = null, bucketSecs = null) =>
-    get(`/company/timeline?hours=${hours}${companyId ? `&companyId=${companyId}` : ''}${bucketSecs ? `&bucketSecs=${bucketSecs}` : ''}`, true),
+  companyTimeline: (hours = 24, companyId = null, bucketSecs = null, date = null) =>
+    get(`/company/timeline?hours=${hours}${companyId ? `&companyId=${companyId}` : ''}${bucketSecs ? `&bucketSecs=${bucketSecs}` : ''}${date ? `&date=${date}` : ''}`, true),
 
   // ── Tracker ────────────────────────────────────────────────────────────────
   trackerStatus:         () => get('/tracker/status'),
@@ -117,7 +117,7 @@ export const api = {
   trackerOrders:         (matId) => get(`/tracker/orders/${matId}`),
   trackerActivity:       (matId, hours = 24) => get(`/tracker/activity/${matId}?hours=${hours}`),
   trackerMarketshare:    (matId, hours = 24) => get(`/tracker/marketshare/${matId}?hours=${hours}`),
-  trackerCompanyActivity:(matId, hours = 24) => get(`/tracker/company-activity/${matId}?hours=${hours}`),
+  trackerCompanyActivity:(matId, hours = 24, date = null) => get(`/tracker/company-activity/${matId}?hours=${hours}${date ? `&date=${date}` : ''}`),
   trackerRecent:         (matId, limit = 10) => get(`/tracker/recent/${matId}?limit=${limit}`),
   trackerEvents:         (matId, from, to)   => get(`/tracker/events/${matId}?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   trackerPatterns:       (matId) => get(`/tracker/patterns/${matId}`),

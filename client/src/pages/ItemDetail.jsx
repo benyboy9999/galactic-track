@@ -27,11 +27,7 @@ function gameIncrement(priceCents) {
 }
 
 const HOURS_OPTIONS = [
-  { hours: 1,   label: '1h'  },
-  { hours: 4,   label: '4h'  },
-  { hours: 8,   label: '8h'  },
   { hours: 24,  label: '24h' },
-  { hours: 72,  label: '3d'  },
   { hours: 168, label: '7d'  },
   { hours: 720, label: '30d' },
 ];
@@ -57,6 +53,10 @@ const fmtTime = (iso) => {
   if (!iso) return '';
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
+const fmtDate = (iso) => {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
+};
 const fmtDateTime = (iso) => {
   if (!iso) return '';
   const d = new Date(iso);
@@ -65,26 +65,42 @@ const fmtDateTime = (iso) => {
   return `${date} · ${time}`;
 };
 
+const fmtDayNav = (dateStr) => {
+  if (!dateStr) return 'Today';
+  const today = new Date().toISOString().slice(0, 10);
+  if (dateStr === today) return 'Today';
+  return new Date(dateStr + 'T00:00:00Z').toLocaleDateString('en-GB', {
+    weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC',
+  });
+};
+
+function shiftDay(dateStr, delta) {
+  const base = dateStr ?? new Date().toISOString().slice(0, 10);
+  const d = new Date(base + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
 // ── Tooltips ───────────────────────────────────────────────────────────────────
 
-function PriceTooltip({ active, payload }) {
+function PriceTooltip({ active, payload, showDate }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
   return (
     <div style={{ background: '#13132a', border: '1px solid #1e1e3a', padding: '8px 12px', fontSize: 12, borderRadius: 6 }}>
-      <div style={{ color: '#6b6b8a', marginBottom: 4 }}>{fmtTime(d.recorded_at)}</div>
+      <div style={{ color: '#6b6b8a', marginBottom: 4 }}>{showDate ? fmtDateTime(d.recorded_at) : fmtTime(d.recorded_at)}</div>
       <div>Price: <strong>{usd(d.current_price)}</strong></div>
       <div>Supply: <strong>{qty(d.total_qty_available)}</strong></div>
     </div>
   );
 }
 
-function ActivityTooltip({ active, payload }) {
+function ActivityTooltip({ active, payload, showDate }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
   return (
     <div style={{ background: '#13132a', border: '1px solid #1e1e3a', padding: '8px 12px', fontSize: 12, borderRadius: 6 }}>
-      <div style={{ color: '#6b6b8a', marginBottom: 4 }}>{fmtTime(d.recorded_at)}</div>
+      <div style={{ color: '#6b6b8a', marginBottom: 4 }}>{showDate ? fmtDate(d.recorded_at) : fmtTime(d.recorded_at)}</div>
       {Number(d.qty_sold_since_prev) > 0 && <div>Sold: <strong style={{ color: '#f87171' }}>{qty(d.qty_sold_since_prev)}</strong></div>}
       {Number(d.qty_listed_since_prev) > 0 && <div>Listed: <strong style={{ color: '#34d399' }}>{qty(d.qty_listed_since_prev)}</strong></div>}
       {Number(d.flash_qty) > 0 && <div>Flash: <strong style={{ color: '#6b6b8a' }}>{qty(d.flash_qty)}</strong></div>}
@@ -186,7 +202,7 @@ const ACTIVITY_COLS = [
   { key: 'share_delta',    label: 'Growth'     },
 ];
 
-function CompanyActivity({ data, hours, onAwards, myCompany, onCompanyClick }) {
+function CompanyActivity({ data, hours, dayDate, onAwards, myCompany, onCompanyClick }) {
   const [sort,       setSort]       = useState({ key: 'sales_pct', dir: 1 });
   const [hoveredRow, setHoveredRow] = useState(null);
   const [showAll,    setShowAll]    = useState(false);
@@ -295,8 +311,8 @@ function CompanyActivity({ data, hours, onAwards, myCompany, onCompanyClick }) {
                 <td style={{ textAlign: 'right', color: '#34d399', fontVariantNumeric: 'tabular-nums', paddingBottom: 2 }}>
                   {row.qty_placed > 0 ? `+${qty(row.qty_placed)}` : '—'}
                 </td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', paddingBottom: 2 }}>
-                  {qty(row.current_listed)}
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', paddingBottom: 2, color: '#3a3a55' }}>
+                  {dayDate ? '—' : <span style={{ color: row.current_listed > 0 ? '#e0e0f0' : '#3a3a55' }}>{qty(row.current_listed)}</span>}
                 </td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', paddingBottom: 2,
                   color: row.share_delta === null ? '#3a3a55' : row.share_delta > 0 ? '#34d399' : row.share_delta < 0 ? '#f87171' : '#6b6b8a' }}>
@@ -327,7 +343,7 @@ function CompanyActivity({ data, hours, onAwards, myCompany, onCompanyClick }) {
 
 // ── Modal ──────────────────────────────────────────────────────────────────────
 
-function Modal({ title, onClose, children }) {
+function Modal({ title, onClose, children, maxWidth = 640 }) {
   return (
     <div
       onClick={onClose}
@@ -341,7 +357,7 @@ function Modal({ title, onClose, children }) {
         onClick={(e) => e.stopPropagation()}
         style={{
           background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 10,
-          padding: '16px 20px', minWidth: 420, maxWidth: 640, maxHeight: '80vh',
+          padding: '16px 20px', minWidth: 420, maxWidth: maxWidth, maxHeight: '80vh',
           display: 'flex', flexDirection: 'column',
         }}
       >
@@ -394,7 +410,7 @@ function groupActivity(data, groupBy) {
   return [...buckets.values()];
 }
 
-function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount, intervalMs = 60_000 }) {
+function ItemPanel({ item, hours, dayDate, refreshTick, myCompany, onPollCount, intervalMs = 60_000 }) {
   const navigate = useNavigate();
   const [snapshots,       setSnapshots]       = useState([]);
   const [activity,        setActivity]        = useState([]);
@@ -405,8 +421,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount, intervalM
   const [loading,         setLoading]         = useState(true);
   const [refreshing,      setRefreshing]      = useState(false);
   const [error,           setError]           = useState(null);
-  const [priceGroup,      setPriceGroup]      = useState('15m');
-  const [activityGroup,   setActivityGroup]   = useState('hour');
+  // Auto-derived: 15m for 24h/daily views, 1h for 7d/30d rolling
   const [paxThreshold,    setPaxThreshold]    = useState(0.1);
   const [barDetail,       setBarDetail]       = useState(null);
   const [patterns,        setPatterns]        = useState(null);
@@ -420,11 +435,12 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount, intervalM
 
   const load = useCallback(async () => {
     if (hasData) setRefreshing(true); else setLoading(true);
+    const fetchHours = dayDate ? 720 : hours;
     try {
       const [snaps, act, compAct, recent, orderData] = await Promise.all([
-        api.trackerSnapshots(item.matId, Math.ceil(hours * 61)),
-        api.trackerActivity(item.matId, hours),
-        api.trackerCompanyActivity(item.matId, hours),
+        api.trackerSnapshots(item.matId, Math.ceil(fetchHours * 61)),
+        api.trackerActivity(item.matId, fetchHours),
+        api.trackerCompanyActivity(item.matId, dayDate ? 720 : hours, dayDate),
         api.trackerRecent(item.matId, 10),
         api.trackerOrders(item.matId),
       ]);
@@ -440,7 +456,7 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount, intervalM
       setLoading(false);
       setRefreshing(false);
     }
-  }, [item.matId, hours, refreshTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [item.matId, hours, dayDate, refreshTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { load(); }, [load]);
 
@@ -454,21 +470,34 @@ function ItemPanel({ item, hours, refreshTick, myCompany, onPollCount, intervalM
   if (loading) return <div style={{ padding: 32 }}><Spinner /></div>;
   if (error)   return <div style={{ padding: 16, color: '#f87171', fontSize: 13 }}>{error}</div>;
 
-  const latest = snapshots[snapshots.length - 1];
-  const cutoff = Date.now() - hours * 3_600_000;
-  const chartSnaps = snapshots.filter((s) => new Date(s.recorded_at).getTime() >= cutoff);
+  // Live values only meaningful in rolling mode (not for a past day)
+  const liveLatest = snapshots[snapshots.length - 1];
+  const cutoff     = Date.now() - hours * 3_600_000;
 
+  // Auto-select grouping: 15m for 24h/daily views, 1h for 7d/30d
+  const priceGroup = (dayDate || hours <= 24) ? '15m' : 'hour';
+
+  // chartSnaps: day-filtered in daily mode, rolling-window-filtered in rolling mode
+  const chartSnaps = dayDate
+    ? snapshots.filter((s) => s.recorded_at.startsWith(dayDate))
+    : snapshots.filter((s) => new Date(s.recorded_at).getTime() >= cutoff);
+
+  // Price/supply change only for rolling mode (live stats, meaningless for past days)
   const oldest = chartSnaps[0];
-  const priceChange = latest && oldest && oldest.current_price > 0
-    ? ((latest.current_price - oldest.current_price) / oldest.current_price * 100).toFixed(1)
+  const priceChange = !dayDate && liveLatest && oldest && oldest.current_price > 0
+    ? ((liveLatest.current_price - oldest.current_price) / oldest.current_price * 100).toFixed(1)
     : null;
-  const supplyChange = latest && oldest
-    ? Number(latest.total_qty_available) - Number(oldest.total_qty_available)
+  const supplyChange = !dayDate && liveLatest && oldest
+    ? Number(liveLatest.total_qty_available) - Number(oldest.total_qty_available)
     : null;
 
-  const totalSold   = activity.reduce((s, r) => s + Number(r.qty_sold_since_prev), 0);
-  const totalListed = activity.reduce((s, r) => s + Number(r.qty_listed_since_prev), 0);
-const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length) : 0;
+  // displayAct: filtered to selected day in daily mode, full window in rolling mode
+  const displayAct  = dayDate
+    ? activity.filter((a) => a.recorded_at.startsWith(dayDate))
+    : activity;
+  const totalSold   = displayAct.reduce((s, r) => s + Number(r.qty_sold_since_prev), 0);
+  const totalListed = displayAct.reduce((s, r) => s + Number(r.qty_listed_since_prev), 0);
+  const avgSold     = displayAct.length > 0 ? Math.round(totalSold / displayAct.length) : 0;
 
   const compRows       = (companyActivity?.rows || []).filter((r) => r.company_name !== 'Federal Reserve');
   const compTotalSold  = compRows.reduce((s, r) => s + Number(r.qty_sold), 0);
@@ -481,7 +510,7 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
     setPaxThreshold(next);
   };
 
-  const qspHourlyRate = avgSold * 60;
+  const qspHourlyRate = !dayDate ? avgSold * 60 : 0; // QSP is live — not meaningful for past days
   let quickSellPrice = null;
   if (qspHourlyRate > 0 && orders.length > 0) {
     const priceMap = new Map();
@@ -512,12 +541,14 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
 
   const statsRows = [
     {
-      label: 'Price', value: latest ? usd(latest.current_price) : '—',
+      label: 'Price',
+      value: dayDate ? '—' : (liveLatest ? usd(liveLatest.current_price) : '—'),
       delta: priceChange !== null ? `${priceChange > 0 ? '+' : ''}${priceChange}%` : null,
       deltaColor: priceChange > 0 ? '#34d399' : priceChange < 0 ? '#f87171' : undefined,
     },
     {
-      label: 'Supply', value: latest ? qty(latest.total_qty_available) : '—',
+      label: 'Supply',
+      value: dayDate ? '—' : (liveLatest ? qty(liveLatest.total_qty_available) : '—'),
       delta: supplyChange !== null ? `${supplyChange >= 0 ? '+' : ''}${qty(supplyChange)}` : null,
       deltaColor: supplyChange < 0 ? '#f87171' : '#34d399',
     },
@@ -532,9 +563,9 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
     { label: 'Sold/hr avg', value: qty(avgSold * 60), color: item.color },
     {
       label: 'Quick Sell Price',
-      value: quickSellPrice !== null ? usd(quickSellPrice) : '—',
+      value: dayDate ? '—' : (quickSellPrice !== null ? usd(quickSellPrice) : '—'),
       color: '#e0e0f0',
-      delta: qspArrow ? qspArrow.text : null,
+      delta: dayDate ? null : (qspArrow ? qspArrow.text : null),
       deltaColor: qspArrow?.color,
     },
   ];
@@ -575,10 +606,9 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
     if (!row?.recorded_at) return;
     const from = new Date(row.recorded_at);
     const to   = new Date(from);
-    if      (activityGroup === '1m')   to.setSeconds(to.getSeconds() + 60);
-    else if (activityGroup === '15m')  to.setMinutes(to.getMinutes() + 15);
-    else if (activityGroup === 'hour') to.setHours(to.getHours() + 1);
-    else                               to.setDate(to.getDate() + 1);
+    const actGroup = (dayDate || hours <= 24) ? 'hour' : 'day';
+    if (actGroup === 'day') to.setDate(to.getDate() + 1);
+    else                    to.setHours(to.getHours() + 1);
 
     if (barDetail?.from === from.toISOString()) { setBarDetail(null); return; }
 
@@ -728,32 +758,25 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
         {/* Column 2: charts stacked */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 10px 4px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <SectionLabel>Price · last snapshot {fmtTime(latest?.recorded_at)}</SectionLabel>
-              <div style={{ display: 'flex', gap: 2 }}>
-                {[['1m','1m'],['15m','15m'],['1h','hour']].map(([label, val]) => (
-                  <button key={val} onClick={() => setPriceGroup(val)} style={{
-                    padding: '1px 6px', fontSize: 10, borderRadius: 3, cursor: 'pointer', border: 'none',
-                    background: priceGroup === val ? '#3b3b6a' : 'transparent',
-                    color: priceGroup === val ? '#e0e0f0' : '#6b6b8a',
-                  }}>{label}</button>
-                ))}
-              </div>
+            <div style={{ marginBottom: 10 }}>
+              <SectionLabel>Price · last snapshot {fmtTime(liveLatest?.recorded_at)}</SectionLabel>
             </div>
             {chartSnaps.length > 1 ? (
               <div style={{ flex: 1, minHeight: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={groupSnapshots(chartSnaps, priceGroup)}>
                     <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
-                    <XAxis dataKey="recorded_at" tickFormatter={fmtTime} tick={{ fontSize: 10, fill: '#6b6b8a' }}
-                      interval={priceGroup === '1m' ? 59 : priceGroup === '15m' ? 3 : 0} />
+                    <XAxis dataKey="recorded_at"
+                      tickFormatter={hours > 24 && !dayDate ? fmtDate : fmtTime}
+                      tick={{ fontSize: 10, fill: '#6b6b8a' }}
+                      interval="preserveStartEnd" />
                     <YAxis yAxisId="price" tickFormatter={(v) => usd(v)} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={58}
                       domain={[
                         (min) => Math.round(min * 0.95),
                         (max) => Math.round(max * 1.05),
                       ]} />
                     <YAxis yAxisId="supply" orientation="right" tickFormatter={qty} tick={{ fontSize: 10, fill: '#3a3a55' }} width={44} />
-                    <Tooltip content={<PriceTooltip />} cursor={{ stroke: 'rgba(59, 59, 106, 0.8)', strokeWidth: 1, fill: 'rgba(59, 59, 106, 0.15)' }} />
+                    <Tooltip content={<PriceTooltip showDate={hours > 24 && !dayDate} />} cursor={{ stroke: 'rgba(59, 59, 106, 0.8)', strokeWidth: 1, fill: 'rgba(59, 59, 106, 0.15)' }} />
                     <Line yAxisId="price"  type="monotone" dataKey="current_price"       stroke={item.color} dot={false} strokeWidth={2} />
                     <Line yAxisId="supply" type="monotone" dataKey="total_qty_available" stroke="#3a3a55"    dot={false} strokeWidth={1} strokeDasharray="4 2" />
                   </LineChart>
@@ -764,52 +787,49 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
             )}
           </div>
           <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 10px 4px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
-                Sold vs listed · per {activityGroup}
-              </div>
-              <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                {['1m', '15m', 'hour', 'day'].map((g) => (
-                  <button key={g} onClick={() => setActivityGroup(g)} style={{
-                    padding: '1px 6px', fontSize: 10, borderRadius: 3, cursor: 'pointer', border: 'none',
-                    background: activityGroup === g ? '#3b3b6a' : 'transparent',
-                    color: activityGroup === g ? '#e0e0f0' : '#6b6b8a',
-                  }}>{g}</button>
-                ))}
-                <div style={{ width: 1, height: 10, background: '#1e1e3a', margin: '0 4px' }} />
-                <button onClick={openPatterns} style={{
-                  padding: '1px 6px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
-                  border: '1px solid #1e1e3a', background: 'transparent', color: '#6b6b8a',
-                }}>Patterns</button>
-              </div>
-            </div>
             {(() => {
-              const grouped = groupActivity(activity, activityGroup);
-              const tickFmt = activityGroup === 'day'
+              const actGroup = (dayDate || hours <= 24) ? 'hour' : 'day';
+              const grouped  = groupActivity(displayAct, actGroup);
+              const tickFmt     = actGroup === 'day'
                 ? (iso) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
                 : fmtTime;
-              return grouped.some((a) => Number(a.qty_sold_since_prev) > 0 || Number(a.qty_listed_since_prev) > 0) ? (
-                <div style={{ flex: 1, minHeight: 0 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={grouped}
-                      style={{ cursor: 'pointer' }}
-                      onMouseMove={(s) => { activeBarIndex.current = s?.activeTooltipIndex ?? null; }}
-                      onMouseLeave={() => { activeBarIndex.current = null; }}
-                      onClick={() => { if (activeBarIndex.current != null) handleBarClick(grouped[activeBarIndex.current]); }}
-                    >
-                      <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
-                      <XAxis dataKey="recorded_at" tickFormatter={tickFmt} tick={{ fontSize: 10, fill: '#6b6b8a' }}
-                        interval={activityGroup === '1m' ? 59 : activityGroup === '15m' ? 3 : 0} />
-                      <YAxis tickFormatter={qty} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={44} />
-                      <Tooltip content={<ActivityTooltip />} cursor={{ fill: 'rgba(59, 59, 106, 0.35)' }} />
-                      <Bar dataKey="qty_listed_since_prev" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
-                      <Bar dataKey="qty_sold_since_prev"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : (
-                <div style={{ color: '#3a3a55', fontSize: 12, padding: 20 }}>Need ≥2 snapshots with activity.</div>
+              const hasActivity = grouped.some((a) => Number(a.qty_sold_since_prev) > 0 || Number(a.qty_listed_since_prev) > 0);
+              return (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+                      {dayDate ? `Sold vs listed · ${new Date(dayDate + 'T00:00:00Z').toLocaleDateString([], { day: 'numeric', month: 'short' })}` : `Sold vs listed · last ${hours <= 24 ? '24h' : hours <= 168 ? '7d' : '30d'}`}
+                    </div>
+                    <button onClick={openPatterns} style={{
+                      padding: '1px 6px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+                      border: '1px solid #1e1e3a', background: 'transparent', color: '#6b6b8a',
+                    }}>Patterns</button>
+                  </div>
+                  {dayDate && !hasActivity ? (
+                    <div style={{ color: '#3a3a55', fontSize: 12, padding: 20 }}>No data for this date — try a wider rolling window first.</div>
+                  ) : hasActivity ? (
+                    <div style={{ flex: 1, minHeight: 0 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={grouped}
+                          style={{ cursor: 'pointer' }}
+                          onMouseMove={(s) => { activeBarIndex.current = s?.activeTooltipIndex ?? null; }}
+                          onMouseLeave={() => { activeBarIndex.current = null; }}
+                          onClick={() => { if (activeBarIndex.current != null) handleBarClick(grouped[activeBarIndex.current]); }}
+                        >
+                          <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
+                          <XAxis dataKey="recorded_at" tickFormatter={tickFmt} tick={{ fontSize: 10, fill: '#6b6b8a' }} interval="preserveStartEnd" />
+                          <YAxis tickFormatter={qty} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={44} />
+                          <Tooltip content={<ActivityTooltip showDate={actGroup === 'day'} />} cursor={{ fill: 'rgba(59, 59, 106, 0.35)' }} />
+                          <Bar dataKey="qty_listed_since_prev" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
+                          <Bar dataKey="qty_sold_since_prev"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div style={{ color: '#3a3a55', fontSize: 12, padding: 20 }}>Need ≥2 snapshots with activity.</div>
+                  )}
+                </>
               );
             })()}
           </div>
@@ -824,7 +844,8 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
           ) : patterns.byHour.length === 0 ? (
             <div style={{ color: '#3a3a55', fontSize: 12 }}>No data yet — patterns will populate as snapshots accumulate.</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <span style={{ fontSize: 11, color: '#6b6b8a' }}>Total event counts · all tracked history</span>
               <div>
                 <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>By hour of day</div>
                 <div style={{ height: 160 }}>
@@ -863,7 +884,7 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
       {/* Bar drill-down modal */}
       {barDetail && (
         <Modal
-          title={`Transactions · ${new Date(barDetail.from).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${activityGroup !== '1m' ? ` – ${new Date(barDetail.to).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''} · ${item.matName}`}
+          title={`Transactions · ${new Date(barDetail.from).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – ${new Date(barDetail.to).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${item.matName}`}
           onClose={() => setBarDetail(null)}
         >
           {barDetail.loading ? (
@@ -939,7 +960,7 @@ const avgSold     = activity.length > 0 ? Math.round(totalSold / activity.length
 
       {/* Company activity */}
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '12px 14px' }}>
-        <CompanyActivity data={companyActivity} hours={hours} onAwards={openAwards} myCompany={myCompany} onCompanyClick={openCompany} />
+        <CompanyActivity data={companyActivity} hours={hours} dayDate={dayDate} onAwards={openAwards} myCompany={myCompany} onCompanyClick={openCompany} />
       </div>
 
     </div>
@@ -956,7 +977,9 @@ export default function ItemDetail() {
 
   const [item,        setItem]        = useState(null);
   const [itemLoading, setItemLoading] = useState(true);
-  const [hours,       setHours]       = useState(24);
+  const [hours,    setHours]    = useState(24);
+  const [viewMode, setViewMode] = useState('rolling'); // 'rolling' | 'daily'
+  const [dayDate,  setDayDate]  = useState(null);      // 'YYYY-MM-DD' or null
   const [status,      setStatus]      = useState(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [pollsInWindow, setPollsInWindow] = useState(null);
@@ -1029,6 +1052,60 @@ export default function ItemDetail() {
 
         <div style={{ flex: 1 }} />
 
+        {/* Unified time controls (only when tracked) */}
+        {item.tracked && (
+          <>
+            {/* Rolling / Daily pill toggle */}
+            <div style={{ display: 'flex', background: '#13132a', border: '1px solid #1e1e3a', borderRadius: 6, padding: 2 }}>
+              {[['rolling', 'Live'], ['daily', 'Historical']].map(([mode, label]) => (
+                <button key={mode} onClick={() => {
+                  setViewMode(mode);
+                  if (mode === 'daily') setDayDate((d) => d ?? new Date().toISOString().slice(0, 10));
+                  if (mode === 'rolling') setDayDate(null);
+                }} style={{
+                  padding: '3px 10px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 11,
+                  background: viewMode === mode ? '#1e1440' : 'transparent',
+                  color: viewMode === mode ? '#a78bfa' : '#6b6b8a',
+                  fontWeight: viewMode === mode ? 600 : 400,
+                }}>{label}</button>
+              ))}
+            </div>
+            {/* Period buttons or date navigation */}
+            {viewMode === 'rolling' ? (
+              <div style={{ display: 'flex', gap: 4 }}>
+                {HOURS_OPTIONS.map((o) => (
+                  <button key={o.hours} onClick={() => setHours(o.hours)} style={{
+                    background: hours === o.hours ? '#1e1440' : 'none',
+                    border: `1px solid ${hours === o.hours ? '#4c1d95' : '#2e2e5a'}`,
+                    borderRadius: 6, padding: '4px 10px',
+                    color: hours === o.hours ? '#a78bfa' : '#6b6b8a',
+                    fontSize: 11, fontWeight: hours === o.hours ? 600 : 400, cursor: 'pointer',
+                  }}>{o.label}</button>
+                ))}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <button onClick={() => setDayDate((d) => shiftDay(d, -1))} style={{
+                  padding: '4px 10px', borderRadius: 5, border: '1px solid #2e2e5a', background: 'none',
+                  color: '#6b6b8a', cursor: 'pointer', fontSize: 14, lineHeight: 1,
+                }}>‹</button>
+                <span style={{ color: '#e0e0f0', fontSize: 12, minWidth: 100, textAlign: 'center' }}>
+                  {fmtDayNav(dayDate)}
+                </span>
+                <button
+                  onClick={() => { const next = shiftDay(dayDate, 1); if (next <= new Date().toISOString().slice(0, 10)) setDayDate(next); }}
+                  disabled={!dayDate || dayDate >= new Date().toISOString().slice(0, 10)}
+                  style={{
+                    padding: '4px 10px', borderRadius: 5, border: '1px solid #2e2e5a', background: 'none',
+                    color: (!dayDate || dayDate >= new Date().toISOString().slice(0, 10)) ? '#3a3a55' : '#6b6b8a',
+                    cursor: (!dayDate || dayDate >= new Date().toISOString().slice(0, 10)) ? 'default' : 'pointer',
+                    fontSize: 14, lineHeight: 1,
+                  }}>›</button>
+              </div>
+            )}
+          </>
+        )}
+
         {/* Poll status */}
         {status && item.tracked && (() => {
           const expected = status.intervalMs
@@ -1049,15 +1126,6 @@ export default function ItemDetail() {
             </span>
           );
         })()}
-
-        {/* Time filters — only when tracking active */}
-        {item.tracked && HOURS_OPTIONS.map(({ hours: h, label }) => (
-          <button key={h} onClick={() => setHours(h)} style={{
-            padding: '3px 8px', fontSize: 11, borderRadius: 4, cursor: 'pointer', border: 'none',
-            background: hours === h ? '#3b3b6a' : 'transparent',
-            color: hours === h ? '#e0e0f0' : '#6b6b8a',
-          }}>{label}</button>
-        ))}
 
         {item.tracked && (
           <button
@@ -1115,6 +1183,7 @@ export default function ItemDetail() {
           key={`${item.matId}-${hours}`}
           item={panelItem}
           hours={hours}
+          dayDate={dayDate}
           refreshTick={refreshTick}
           myCompany={myCompany}
           onPollCount={setPollsInWindow}

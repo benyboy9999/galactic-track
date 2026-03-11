@@ -41,6 +41,16 @@ router.get('/timeline', requireAuth, async (req, res, next) => {
       : hours <= 168 ?  14400   // 4 hours
       :                 86400;  // 1 day
 
+    // Optional specific calendar day (YYYY-MM-DD); overrides rolling window
+    const dateParam = req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date : null;
+    const whereTime = dateParam
+      ? `te.recorded_at >= $2::date AND te.recorded_at < $2::date + INTERVAL '1 day'`
+      : `te.recorded_at > NOW() - ($2 || ' hours')::interval`;
+    const queryParams = dateParam
+      ? [companyId, dateParam, bucketSecs]
+      : [companyId, hours, bucketSecs];
+
     const r = await pool.query(
       `SELECT
          to_timestamp(floor(extract(epoch from recorded_at) / $3) * $3) AS bucket,
@@ -51,10 +61,10 @@ router.get('/timeline', requireAuth, async (req, res, next) => {
        FROM tracker_events te
        JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
        WHERE te.company_id = $1
-         AND te.recorded_at > NOW() - ($2 || ' hours')::interval
+         AND ${whereTime}
        GROUP BY bucket
        ORDER BY bucket ASC`,
-      [companyId, hours, bucketSecs]
+      queryParams
     );
 
     res.json(r.rows.map((row) => ({
@@ -106,11 +116,13 @@ router.get('/events', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/company/summary?hours=24&companyId=
+// GET /api/company/summary?hours=24&companyId=[&date=YYYY-MM-DD]
 // Returns company activity with rank, marketshare, growth per tracked item.
 router.get('/summary', requireAuth, async (req, res, next) => {
   try {
-    const hours = Math.min(Number(req.query.hours) || 24, 720);
+    const hours     = Math.min(Number(req.query.hours) || 24, 720);
+    const dateParam = req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date : null;
 
     const isDevOrAdmin = req.user.role === 'admin' || req.user.company_id === '0';
     const companyId = isDevOrAdmin && req.query.companyId
@@ -130,83 +142,153 @@ router.get('/summary', requireAuth, async (req, res, next) => {
     }
 
     // ── CTE: company stats + market stats + ranks ───────────────────────────
-    const evtRes = await pool.query(
-      `WITH this_co AS (
-         SELECT
-           te.mat_id,
-           MIN(ti.mat_name)                                                          AS mat_name,
-           SUM(CASE WHEN event_type IN ('new_listing','restocked')
-                    THEN qty_change    ELSE 0 END)::bigint                           AS qty_placed,
-           SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
-                    THEN ABS(qty_change) ELSE 0 END)::bigint                         AS qty_sold,
-           SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
-                    THEN ABS(qty_change) * unit_price ELSE 0 END)::bigint            AS revenue,
-           SUM(CASE WHEN event_type = 'cancelled'
-                    THEN ABS(qty_change) ELSE 0 END)::bigint                         AS qty_cancelled
-         FROM tracker_events te
-         JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
-         WHERE te.company_id = $1
-           AND te.recorded_at > NOW() - ($2 || ' hours')::interval
-         GROUP BY te.mat_id
-       ),
-       prev_co AS (
-         SELECT
-           te.mat_id,
-           SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
-                    THEN ABS(qty_change) ELSE 0 END)::bigint AS prev_qty_sold
-         FROM tracker_events te
-         JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
-         WHERE te.company_id = $1
-           AND te.recorded_at > NOW() - ($2::int * 2 || ' hours')::interval
-           AND te.recorded_at <= NOW() - ($2 || ' hours')::interval
-         GROUP BY te.mat_id
-       ),
-       all_sales AS (
-         SELECT
-           te.mat_id,
-           SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
-                    THEN ABS(qty_change) ELSE 0 END)::bigint AS total_sold,
-           SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
-                         AND te.recorded_at > NOW() - ($2::int * 2 || ' hours')::interval
-                         AND te.recorded_at <= NOW() - ($2 || ' hours')::interval
-                    THEN ABS(qty_change) ELSE 0 END)::bigint AS prev_total_sold
-         FROM tracker_events te
-         JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
-         WHERE te.recorded_at > NOW() - ($2::int * 2 || ' hours')::interval
-         GROUP BY te.mat_id
-       ),
-       company_ranks AS (
-         SELECT
-           te.mat_id,
-           te.company_id,
-           RANK() OVER (
-             PARTITION BY te.mat_id
-             ORDER BY SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
-                               THEN ABS(qty_change) ELSE 0 END) DESC
-           ) AS rank
-         FROM tracker_events te
-         JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
-         WHERE te.recorded_at > NOW() - ($2 || ' hours')::interval
-         GROUP BY te.mat_id, te.company_id
-       )
-       SELECT
-         tc.mat_id,
-         tc.mat_name,
-         tc.qty_placed,
-         tc.qty_sold,
-         tc.revenue,
-         tc.qty_cancelled,
-         COALESCE(pc.prev_qty_sold, 0)   AS prev_qty_sold,
-         COALESCE(als.total_sold, 1)     AS total_sold,
-         COALESCE(als.prev_total_sold,0) AS prev_total_sold,
-         COALESCE(cr.rank, 0)            AS rank
-       FROM this_co tc
-       LEFT JOIN prev_co pc  ON pc.mat_id  = tc.mat_id
-       LEFT JOIN all_sales als ON als.mat_id = tc.mat_id
-       LEFT JOIN company_ranks cr ON cr.mat_id = tc.mat_id AND cr.company_id = $1
-       ORDER BY tc.qty_sold DESC`,
-      [companyId, hours]
-    );
+    // Two variants: rolling (hours-based) or daily (date-based)
+    let evtSql, evtParams;
+    if (dateParam) {
+      evtSql = `
+        WITH this_co AS (
+          SELECT
+            te.mat_id,
+            MIN(ti.mat_name)                                                          AS mat_name,
+            SUM(CASE WHEN event_type IN ('new_listing','restocked')
+                     THEN qty_change    ELSE 0 END)::bigint                           AS qty_placed,
+            SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                     THEN ABS(qty_change) ELSE 0 END)::bigint                         AS qty_sold,
+            SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                     THEN ABS(qty_change) * unit_price ELSE 0 END)::bigint            AS revenue,
+            SUM(CASE WHEN event_type = 'cancelled'
+                     THEN ABS(qty_change) ELSE 0 END)::bigint                         AS qty_cancelled
+          FROM tracker_events te
+          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
+          WHERE te.company_id = $1
+            AND te.recorded_at >= $2::date AND te.recorded_at < $2::date + INTERVAL '1 day'
+          GROUP BY te.mat_id
+        ),
+        prev_co AS (
+          SELECT
+            te.mat_id,
+            SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                     THEN ABS(qty_change) ELSE 0 END)::bigint AS prev_qty_sold
+          FROM tracker_events te
+          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
+          WHERE te.company_id = $1
+            AND te.recorded_at >= $2::date - INTERVAL '1 day' AND te.recorded_at < $2::date
+          GROUP BY te.mat_id
+        ),
+        all_sales AS (
+          SELECT
+            te.mat_id,
+            SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                          AND te.recorded_at >= $2::date AND te.recorded_at < $2::date + INTERVAL '1 day'
+                     THEN ABS(qty_change) ELSE 0 END)::bigint AS total_sold,
+            SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                          AND te.recorded_at >= $2::date - INTERVAL '1 day' AND te.recorded_at < $2::date
+                     THEN ABS(qty_change) ELSE 0 END)::bigint AS prev_total_sold
+          FROM tracker_events te
+          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
+          WHERE te.recorded_at >= $2::date - INTERVAL '1 day' AND te.recorded_at < $2::date + INTERVAL '1 day'
+          GROUP BY te.mat_id
+        ),
+        company_ranks AS (
+          SELECT
+            te.mat_id,
+            te.company_id,
+            RANK() OVER (
+              PARTITION BY te.mat_id
+              ORDER BY SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                                THEN ABS(qty_change) ELSE 0 END) DESC
+            ) AS rank
+          FROM tracker_events te
+          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
+          WHERE te.recorded_at >= $2::date AND te.recorded_at < $2::date + INTERVAL '1 day'
+          GROUP BY te.mat_id, te.company_id
+        )
+        SELECT
+          tc.mat_id, tc.mat_name, tc.qty_placed, tc.qty_sold, tc.revenue, tc.qty_cancelled,
+          COALESCE(pc.prev_qty_sold, 0)   AS prev_qty_sold,
+          COALESCE(als.total_sold, 1)     AS total_sold,
+          COALESCE(als.prev_total_sold,0) AS prev_total_sold,
+          COALESCE(cr.rank, 0)            AS rank
+        FROM this_co tc
+        LEFT JOIN prev_co pc        ON pc.mat_id  = tc.mat_id
+        LEFT JOIN all_sales als     ON als.mat_id = tc.mat_id
+        LEFT JOIN company_ranks cr  ON cr.mat_id  = tc.mat_id AND cr.company_id = $1
+        ORDER BY tc.qty_sold DESC`;
+      evtParams = [companyId, dateParam];
+    } else {
+      evtSql = `
+        WITH this_co AS (
+          SELECT
+            te.mat_id,
+            MIN(ti.mat_name)                                                          AS mat_name,
+            SUM(CASE WHEN event_type IN ('new_listing','restocked')
+                     THEN qty_change    ELSE 0 END)::bigint                           AS qty_placed,
+            SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                     THEN ABS(qty_change) ELSE 0 END)::bigint                         AS qty_sold,
+            SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                     THEN ABS(qty_change) * unit_price ELSE 0 END)::bigint            AS revenue,
+            SUM(CASE WHEN event_type = 'cancelled'
+                     THEN ABS(qty_change) ELSE 0 END)::bigint                         AS qty_cancelled
+          FROM tracker_events te
+          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
+          WHERE te.company_id = $1
+            AND te.recorded_at > NOW() - ($2 || ' hours')::interval
+          GROUP BY te.mat_id
+        ),
+        prev_co AS (
+          SELECT
+            te.mat_id,
+            SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                     THEN ABS(qty_change) ELSE 0 END)::bigint AS prev_qty_sold
+          FROM tracker_events te
+          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
+          WHERE te.company_id = $1
+            AND te.recorded_at > NOW() - ($2::int * 2 || ' hours')::interval
+            AND te.recorded_at <= NOW() - ($2 || ' hours')::interval
+          GROUP BY te.mat_id
+        ),
+        all_sales AS (
+          SELECT
+            te.mat_id,
+            SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                     THEN ABS(qty_change) ELSE 0 END)::bigint AS total_sold,
+            SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                          AND te.recorded_at > NOW() - ($2::int * 2 || ' hours')::interval
+                          AND te.recorded_at <= NOW() - ($2 || ' hours')::interval
+                     THEN ABS(qty_change) ELSE 0 END)::bigint AS prev_total_sold
+          FROM tracker_events te
+          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
+          WHERE te.recorded_at > NOW() - ($2::int * 2 || ' hours')::interval
+          GROUP BY te.mat_id
+        ),
+        company_ranks AS (
+          SELECT
+            te.mat_id,
+            te.company_id,
+            RANK() OVER (
+              PARTITION BY te.mat_id
+              ORDER BY SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                                THEN ABS(qty_change) ELSE 0 END) DESC
+            ) AS rank
+          FROM tracker_events te
+          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
+          WHERE te.recorded_at > NOW() - ($2 || ' hours')::interval
+          GROUP BY te.mat_id, te.company_id
+        )
+        SELECT
+          tc.mat_id, tc.mat_name, tc.qty_placed, tc.qty_sold, tc.revenue, tc.qty_cancelled,
+          COALESCE(pc.prev_qty_sold, 0)   AS prev_qty_sold,
+          COALESCE(als.total_sold, 1)     AS total_sold,
+          COALESCE(als.prev_total_sold,0) AS prev_total_sold,
+          COALESCE(cr.rank, 0)            AS rank
+        FROM this_co tc
+        LEFT JOIN prev_co pc        ON pc.mat_id  = tc.mat_id
+        LEFT JOIN all_sales als     ON als.mat_id = tc.mat_id
+        LEFT JOIN company_ranks cr  ON cr.mat_id  = tc.mat_id AND cr.company_id = $1
+        ORDER BY tc.qty_sold DESC`;
+      evtParams = [companyId, hours];
+    }
+    const evtRes = await pool.query(evtSql, evtParams);
 
     // ── Current open orders (latest snapshot per tracked item) ──────────────
     const listRes = await pool.query(

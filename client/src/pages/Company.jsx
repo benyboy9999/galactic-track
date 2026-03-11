@@ -87,6 +87,22 @@ const fmtDate = (iso) => {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 };
 
+const fmtDayNav = (dateStr) => {
+  if (!dateStr) return 'Today';
+  const today = new Date().toISOString().slice(0, 10);
+  if (dateStr === today) return 'Today';
+  return new Date(dateStr + 'T00:00:00Z').toLocaleDateString('en-GB', {
+    weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC',
+  });
+};
+
+function shiftDay(dateStr, delta) {
+  const base = dateStr ?? new Date().toISOString().slice(0, 10);
+  const d = new Date(base + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
 // ── Time range options ───────────────────────────────────────────────────────
 
 const TABLE_HOURS_OPTIONS = [
@@ -95,10 +111,14 @@ const TABLE_HOURS_OPTIONS = [
   { hours: 720, label: '30d' },
 ];
 
-const CHART_RES_OPTIONS = [
-  { secs: 900,  label: '15m' },
-  { secs: 3600, label: '1h'  },
-];
+
+function fmtBucket(iso, bucketSecs) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return bucketSecs >= 86400
+    ? d.toLocaleDateString([], { weekday: 'short', day: 'numeric' })
+    : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 // ── Event labels ─────────────────────────────────────────────────────────────
 
@@ -269,10 +289,10 @@ function CompanySearchBar({ onSelect }) {
 
 // ── Chart tooltip ────────────────────────────────────────────────────────────
 
-function ChartTooltip({ active, payload, hours }) {
+function ChartTooltip({ active, payload, bucketSecs }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
-  const fmt = hours > 24 ? fmtDate : fmtTime;
+  const fmt = bucketSecs >= 86400 ? fmtDate : fmtTime;
   return (
     <div style={{ background: '#13132a', border: '1px solid #1e1e3a', padding: '8px 12px', fontSize: 12, borderRadius: 6 }}>
       <div style={{ color: '#6b6b8a', marginBottom: 4 }}>{fmt(d.recorded_at)}</div>
@@ -284,39 +304,48 @@ function ChartTooltip({ active, payload, hours }) {
 
 // ── Bucket fill ──────────────────────────────────────────────────────────────
 
-function fillBuckets(data, chartRes, hours = 24) {
-  const nowSecs   = Math.floor(Date.now() / 1000);
-  const startSecs = Math.floor((nowSecs - hours * 3600) / chartRes) * chartRes;
-  const dataMap   = new Map(
+function fillBuckets(data, chartRes, hours = 24, date = null) {
+  const dataMap = new Map(
     data.map((d) => [Math.floor(new Date(d.recorded_at).getTime() / 1000 / chartRes) * chartRes, d])
   );
   const result = [];
-  for (let t = startSecs; t <= nowSecs; t += chartRes) {
-    result.push(dataMap.get(t) ?? { recorded_at: new Date(t * 1000).toISOString(), qty_sold: 0, qty_listed: 0 });
+  if (date) {
+    const startSecs = Math.floor(new Date(date + 'T00:00:00Z').getTime() / 1000);
+    for (let t = startSecs; t < startSecs + 86400; t += chartRes) {
+      result.push(dataMap.get(t) ?? { recorded_at: new Date(t * 1000).toISOString(), qty_sold: 0, qty_listed: 0 });
+    }
+  } else {
+    const nowSecs   = Math.floor(Date.now() / 1000);
+    const startSecs = Math.floor((nowSecs - hours * 3600) / chartRes) * chartRes;
+    for (let t = startSecs; t <= nowSecs; t += chartRes) {
+      result.push(dataMap.get(t) ?? { recorded_at: new Date(t * 1000).toISOString(), qty_sold: 0, qty_listed: 0 });
+    }
   }
   return result;
 }
 
 // ── Activity chart ───────────────────────────────────────────────────────────
 
-function ActivityChart({ viewId, companyName }) {
-  const [chartRes,  setChartRes]  = useState(3600);
+function ActivityChart({ viewId, companyName, hours, dayDate }) {
   const [timeline,  setTimeline]  = useState([]);
   const [barDetail, setBarDetail] = useState(null); // { from, to, events, loading }
   const activeBarIndex = useRef(null);
 
+  const effectiveBucketSecs = dayDate || hours <= 24 ? 3600 : 86400;
+
   useEffect(() => {
     let cancelled = false;
-    api.companyTimeline(24, viewId, chartRes)
-      .then((rows) => { if (!cancelled) setTimeline(fillBuckets(rows, chartRes)); })
+    setTimeline([]);
+    api.companyTimeline(hours, viewId, effectiveBucketSecs, dayDate)
+      .then((rows) => { if (!cancelled) setTimeline(fillBuckets(rows, effectiveBucketSecs, hours, dayDate)); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [viewId, chartRes]);
+  }, [viewId, hours, effectiveBucketSecs, dayDate]);
 
   const handleBarClick = useCallback(async (row) => {
     if (!row?.recorded_at) return;
     const from = new Date(row.recorded_at);
-    const to   = new Date(from.getTime() + chartRes * 1000);
+    const to   = new Date(from.getTime() + effectiveBucketSecs * 1000);
 
     // Toggle off if same bar clicked again
     if (barDetail?.from === from.toISOString()) { setBarDetail(null); return; }
@@ -328,31 +357,28 @@ function ActivityChart({ viewId, companyName }) {
     } catch {
       setBarDetail((d) => d ? { ...d, events: [], loading: false } : null);
     }
-  }, [viewId, chartRes, barDetail]);
+  }, [viewId, effectiveBucketSecs, barDetail]);
 
   const hasData = timeline.some((b) => b.qty_sold > 0 || b.qty_listed > 0);
 
   const modalTitle = barDetail
-    ? `Activity · ${fmtTime(barDetail.from)} – ${fmtTime(barDetail.to)}`
+    ? effectiveBucketSecs >= 86400
+      ? `Activity · ${fmtDate(barDetail.from)}`
+      : `Activity · ${fmtTime(barDetail.from)} – ${fmtTime(barDetail.to)}`
     : '';
 
   return (
     <>
       <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '12px 14px', height: '100%', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <SectionLabel>Sold vs listed — last 24h</SectionLabel>
-          <div style={{ display: 'flex', gap: 2 }}>
-            {CHART_RES_OPTIONS.map((o) => (
-              <button key={o.secs} onClick={() => { setChartRes(o.secs); setBarDetail(null); }} style={{
-                padding: '1px 6px', fontSize: 10, borderRadius: 3, cursor: 'pointer', border: 'none',
-                background: chartRes === o.secs ? '#3b3b6a' : 'transparent',
-                color: chartRes === o.secs ? '#e0e0f0' : '#6b6b8a',
-              }}>{o.label}</button>
-            ))}
-          </div>
+          <SectionLabel>
+            {dayDate
+              ? `Sold vs listed — ${new Date(dayDate + 'T00:00:00Z').toLocaleDateString([], { day: 'numeric', month: 'short' })}`
+              : `Sold vs listed — last ${hours <= 24 ? '24h' : hours <= 168 ? '7d' : '30d'}`}
+          </SectionLabel>
         </div>
         {!hasData ? (
-          <div style={{ color: '#3a3a55', fontSize: 12 }}>No activity in the last 24h.</div>
+          <div style={{ color: '#3a3a55', fontSize: 12 }}>No activity in this period.</div>
         ) : (
           <div style={{ height: 200 }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -365,9 +391,9 @@ function ActivityChart({ viewId, companyName }) {
                 onClick={() => { if (activeBarIndex.current != null) handleBarClick(timeline[activeBarIndex.current]); }}
               >
                 <CartesianGrid stroke="#1e1e3a" strokeDasharray="3 3" />
-                <XAxis dataKey="recorded_at" tickFormatter={fmtTime} tick={{ fontSize: 10, fill: '#6b6b8a' }} interval="preserveStartEnd" />
+                <XAxis dataKey="recorded_at" tickFormatter={(iso) => fmtBucket(iso, effectiveBucketSecs)} tick={{ fontSize: 10, fill: '#6b6b8a' }} interval="preserveStartEnd" />
                 <YAxis tickFormatter={qty} tick={{ fontSize: 10, fill: '#6b6b8a' }} width={44} />
-                <Tooltip content={<ChartTooltip hours={24} />} cursor={{ fill: 'rgba(59,59,106,0.35)' }} />
+                <Tooltip content={<ChartTooltip bucketSecs={effectiveBucketSecs} />} cursor={{ fill: 'rgba(59,59,106,0.35)' }} />
                 <Bar dataKey="qty_listed" name="Listed" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} />
                 <Bar dataKey="qty_sold"   name="Sold"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} />
               </BarChart>
@@ -448,13 +474,13 @@ function GrowthBadge({ delta }) {
   );
 }
 
-function ItemsTable({ items, labelHours }) {
+function ItemsTable({ items, labelHours, isDailyMode }) {
   const headers = ['Item', 'Rank', 'Sales %', 'Sold', 'Revenue', 'Avg Price', 'Placed', 'Supply Now', 'Growth'];
 
   return (
     <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, overflow: 'hidden' }}>
       <div style={{ padding: '10px 14px 4px', borderBottom: '1px solid #1e1e3a' }}>
-        <SectionLabel>Items — last {labelHours}</SectionLabel>
+        <SectionLabel>Items — {isDailyMode ? labelHours : `last ${labelHours}`}</SectionLabel>
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
@@ -507,8 +533,8 @@ function ItemsTable({ items, labelHours }) {
               <td style={{ padding: '10px 14px', textAlign: 'right', color: item.qtyPlaced > 0 ? '#e0e0f0' : '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>
                 {qty(item.qtyPlaced)}
               </td>
-              <td style={{ padding: '10px 14px', textAlign: 'right', color: item.currentListed > 0 ? '#60a5fa' : '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>
-                {qty(item.currentListed)}
+              <td style={{ padding: '10px 14px', textAlign: 'right', color: '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>
+                {isDailyMode ? '—' : <span style={{ color: item.currentListed > 0 ? '#60a5fa' : '#3a3a55' }}>{qty(item.currentListed)}</span>}
               </td>
               <td style={{ padding: '10px 14px', textAlign: 'right' }}>
                 <GrowthBadge delta={item.shareDelta} />
@@ -525,7 +551,9 @@ function ItemsTable({ items, labelHours }) {
 
 export default function Company() {
   const [searchParams] = useSearchParams();
-  const [hours,   setHours]   = useState(24);
+  const [hours,    setHours]    = useState(24);
+  const [viewMode, setViewMode] = useState('rolling'); // 'rolling' | 'daily'
+  const [dayDate,  setDayDate]  = useState(null);      // 'YYYY-MM-DD' or null
   const [data,     setData]     = useState(null);
   const [events,   setEvents]   = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -548,11 +576,11 @@ export default function Company() {
     let cancelled = false;
     setLoading(true);
     setErr('');
-    api.companySummary(hours, viewId)
+    api.companySummary(hours, viewId, dayDate)
       .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
       .catch((e) => { if (!cancelled) { setErr(e.message); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [hours, viewId]);
+  }, [hours, viewId, dayDate]);
 
   // Load activity feed (always latest 20, not time-range dependent)
   useEffect(() => {
@@ -569,7 +597,9 @@ export default function Company() {
   }
 
   const displayName = data?.companyName ?? viewName ?? 'Company';
-  const labelHours  = TABLE_HOURS_OPTIONS.find((o) => o.hours === hours)?.label ?? `${hours}h`;
+  const labelHours  = dayDate
+    ? fmtDayNav(dayDate)
+    : (TABLE_HOURS_OPTIONS.find((o) => o.hours === hours)?.label ?? `${hours}h`);
 
   return (
     <div>
@@ -595,25 +625,56 @@ export default function Company() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <CompanySearchBar onSelect={handleCompanySelect} />
-          <div style={{ display: 'flex', gap: 4 }}>
-            {TABLE_HOURS_OPTIONS.map((o) => (
-              <button
-                key={o.hours}
-                onClick={() => setHours(o.hours)}
-                style={{
+          {/* Live / Historical pill toggle */}
+          <div style={{ display: 'flex', background: '#13132a', border: '1px solid #1e1e3a', borderRadius: 6, padding: 2 }}>
+            {[['rolling', 'Live'], ['daily', 'Historical']].map(([mode, label]) => (
+              <button key={mode} onClick={() => {
+                setViewMode(mode);
+                if (mode === 'daily') { setDayDate((d) => d ?? new Date().toISOString().slice(0, 10)); }
+                if (mode === 'rolling') setDayDate(null);
+              }} style={{
+                padding: '3px 10px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 11,
+                background: viewMode === mode ? '#1e1440' : 'transparent',
+                color: viewMode === mode ? '#a78bfa' : '#6b6b8a',
+                fontWeight: viewMode === mode ? 600 : 400,
+              }}>{label}</button>
+            ))}
+          </div>
+          {/* Period buttons (rolling) or date nav (daily) */}
+          {viewMode === 'rolling' ? (
+            <div style={{ display: 'flex', gap: 4 }}>
+              {TABLE_HOURS_OPTIONS.map((o) => (
+                <button key={o.hours} onClick={() => setHours(o.hours)} style={{
                   background: hours === o.hours ? '#1e1440' : 'none',
                   border: `1px solid ${hours === o.hours ? '#4c1d95' : '#2e2e5a'}`,
                   borderRadius: 6, padding: '5px 11px',
                   color: hours === o.hours ? '#a78bfa' : '#6b6b8a',
                   fontSize: 12, fontWeight: hours === o.hours ? 600 : 400, cursor: 'pointer',
-                }}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
+                }}>{o.label}</button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button onClick={() => setDayDate((d) => shiftDay(d, -1))} style={{
+                padding: '4px 10px', borderRadius: 5, border: '1px solid #2e2e5a', background: 'none',
+                color: '#6b6b8a', cursor: 'pointer', fontSize: 14, lineHeight: 1,
+              }}>‹</button>
+              <span style={{ color: '#e0e0f0', fontSize: 12, minWidth: 100, textAlign: 'center' }}>
+                {fmtDayNav(dayDate)}
+              </span>
+              <button
+                onClick={() => { const next = shiftDay(dayDate, 1); if (next <= new Date().toISOString().slice(0, 10)) setDayDate(next); }}
+                disabled={!dayDate || dayDate >= new Date().toISOString().slice(0, 10)}
+                style={{
+                  padding: '4px 10px', borderRadius: 5, border: '1px solid #2e2e5a', background: 'none',
+                  color: (!dayDate || dayDate >= new Date().toISOString().slice(0, 10)) ? '#3a3a55' : '#6b6b8a',
+                  cursor: (!dayDate || dayDate >= new Date().toISOString().slice(0, 10)) ? 'default' : 'pointer',
+                  fontSize: 14, lineHeight: 1,
+                }}>›</button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -628,12 +689,12 @@ export default function Company() {
           {/* Top row: activity feed left, chart right */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, alignItems: 'stretch' }}>
             <ActivityFeed events={events} companyName={displayName} />
-            <ActivityChart viewId={viewId} companyName={displayName} />
+            <ActivityChart viewId={viewId} companyName={displayName} hours={hours} dayDate={dayDate} />
           </div>
 
           {/* Full-width items table */}
           {data?.items?.length > 0 ? (
-            <ItemsTable items={data.items} labelHours={labelHours} />
+            <ItemsTable items={data.items} labelHours={labelHours} isDailyMode={!!dayDate} />
           ) : (
             <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '40px 20px', textAlign: 'center', color: '#3a3a55', fontSize: 13 }}>
               No item activity found in the last {labelHours}

@@ -152,12 +152,23 @@ router.get('/marketshare/:matId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/tracker/company-activity/:matId?hours=24
+// GET /api/tracker/company-activity/:matId?hours=24[&date=YYYY-MM-DD]
 // Per-company: qty placed vs qty sold vs qty cancelled, plus current listing
 router.get('/company-activity/:matId', async (req, res, next) => {
   try {
     const { matId } = req.params;
-    const hours = Math.min(Number(req.query.hours) || 24, 720);
+    const hours     = Math.min(Number(req.query.hours) || 24, 720);
+    const dateParam = req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date : null;
+
+    const whereTime     = dateParam
+      ? `recorded_at >= $2::date AND recorded_at < $2::date + INTERVAL '1 day'`
+      : `recorded_at > NOW() - ($2 || ' hours')::interval`;
+    const wherePrevTime = dateParam
+      ? `recorded_at >= $2::date - INTERVAL '1 day' AND recorded_at < $2::date`
+      : `recorded_at > NOW() - ($3 || ' hours')::interval AND recorded_at <= NOW() - ($2 || ' hours')::interval`;
+    const timeParam  = dateParam ?? String(hours);
+    const prevParams = dateParam ? [matId, dateParam] : [matId, hours, hours * 2];
 
     // Event aggregates
     const evtRes = await pool.query(
@@ -174,12 +185,12 @@ router.get('/company-activity/:matId', async (req, res, next) => {
                   THEN ABS(qty_change) ELSE 0 END)::bigint                   AS qty_cancelled
        FROM tracker_events
        WHERE mat_id = $1
-         AND recorded_at > NOW() - ($2 || ' hours')::interval
+         AND ${whereTime}
        GROUP BY company_id, company_name`,
-      [matId, hours]
+      [matId, timeParam]
     );
 
-    // Previous period (same width, shifted back) for share delta
+    // Previous period for share delta (previous day in daily mode, doubled window in rolling mode)
     const prevEvtRes = await pool.query(
       `SELECT
          company_id,
@@ -187,10 +198,9 @@ router.get('/company-activity/:matId', async (req, res, next) => {
                   THEN ABS(qty_change) ELSE 0 END)::bigint AS qty_sold
        FROM tracker_events
        WHERE mat_id = $1
-         AND recorded_at > NOW() - ($3 || ' hours')::interval
-         AND recorded_at <= NOW() - ($2 || ' hours')::interval
+         AND ${wherePrevTime}
        GROUP BY company_id`,
-      [matId, hours, hours * 2]
+      prevParams
     );
     const prevQtySoldMap = new Map(prevEvtRes.rows.map((r) => [r.company_id, Number(r.qty_sold)]));
 
