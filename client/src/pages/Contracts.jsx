@@ -465,7 +465,7 @@ function PostModal({ onClose, onPosted, items, planets, listingCount }) {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ background: '#0d0d22', border: '1px solid #2e2e5a', borderRadius: 10, padding: '28px 28px', width: 380 }}
+        style={{ background: '#0d0d22', border: '1px solid #2e2e5a', borderRadius: 10, padding: '28px 20px', width: 'min(380px, 95vw)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
           <div>
@@ -869,7 +869,7 @@ export default function Contracts() {
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px 20px' }}>
 
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 20, color: '#e0e0ff' }}>Contract Marketplace</h1>
           <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6b6b8a' }}>
