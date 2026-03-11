@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
 const BASE = '/api/admin';
 
@@ -145,7 +146,7 @@ function LoginForm({ onLogin }) {
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
-      <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: 32, width: 320 }}>
+      <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: 32, width: 'min(320px, 95vw)' }}>
         <h1 style={{ margin: '0 0 24px', fontSize: 18, color: '#e0e0ff' }}>Admin Access</h1>
         <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <input
@@ -173,6 +174,7 @@ function LoginForm({ onLogin }) {
 // ── Main dashboard ────────────────────────────────────────────────────────────
 
 function Dashboard({ token, onLogout }) {
+  const isMobile = useMediaQuery(639);
   const [users,       setUsers]       = useState([]);
   const [items,       setItems]       = useState([]);
   const [rates,       setRates]       = useState([]);
@@ -481,7 +483,7 @@ function Dashboard({ token, onLogout }) {
   if (loading) return <p style={{ color: '#6b6b8a', padding: 32 }}>Loading…</p>;
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto' }}>
+    <div style={{ padding: isMobile ? '16px 12px' : '24px 32px', maxWidth: 1100, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 28 }}>
         <h1 style={{ margin: 0, fontSize: 20, color: '#e0e0ff' }}>Admin Dashboard</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -511,7 +513,8 @@ function Dashboard({ token, onLogout }) {
       </div>
 
       {/* Tab bar */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 6, padding: 4, width: 'fit-content' }}>
+      <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 4, background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 6, padding: 4, width: 'fit-content' }}>
         {[
           { key: 'users',     label: `Users (${users.length})` },
           { key: 'items',     label: `Items (${items.length})` },
@@ -523,6 +526,7 @@ function Dashboard({ token, onLogout }) {
         ].map(({ key, label }) => (
           <button key={key} style={tabStyle(key)} onClick={() => setTab(key)}>{label}</button>
         ))}
+      </div>
       </div>
 
       {/* Content */}

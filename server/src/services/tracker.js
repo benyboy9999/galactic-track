@@ -293,16 +293,16 @@ async function pollAll() {
                 [items.rows.length, userId]
               );
               for (const { mat_id, mat_name } of items.rows) {
-                pool.query(
+                await pool.query(
                   `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action, by_admin)
                    VALUES($1, $2, $3, $4, 'untracked', FALSE)`,
                   [mat_id, mat_name, userId, companyName]
-                ).catch(() => {});
+                ).catch(e => console.error('[tracker] tracking_log insert failed:', e.message));
                 pool.query(
                   `INSERT INTO notifications(user_id, type, mat_name, from_company)
                    SELECT id, 'untracked', $1, $2 FROM users WHERE role = 'admin'`,
                   [mat_name, companyName]
-                ).catch(() => {});
+                ).catch(e => console.error('[tracker] notification insert failed:', e.message));
               }
             }
           }

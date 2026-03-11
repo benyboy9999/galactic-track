@@ -151,16 +151,16 @@ router.delete('/account', requireAuth, async (req, res, next) => {
       [req.user.id]
     );
     for (const { mat_id, mat_name } of items.rows) {
-      pool.query(
+      await pool.query(
         `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action, by_admin)
          VALUES($1, $2, $3, $4, 'untracked', FALSE)`,
         [mat_id, mat_name, req.user.id, req.user.company_name]
-      ).catch(() => {});
+      ).catch(e => console.error('[auth] tracking_log insert failed:', e.message));
       pool.query(
         `INSERT INTO notifications(user_id, type, mat_name, from_company)
          SELECT id, 'untracked', $1, $2 FROM users WHERE role = 'admin'`,
         [mat_name, req.user.company_name]
-      ).catch(() => {});
+      ).catch(e => console.error('[auth] notification insert failed:', e.message));
     }
     await pool.query(`DELETE FROM users WHERE id = $1`, [req.user.id]);
     res.json({ ok: true });

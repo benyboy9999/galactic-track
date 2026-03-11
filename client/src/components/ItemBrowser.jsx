@@ -84,7 +84,7 @@ export default function ItemBrowser({ onClose, onTrackedChange }) {
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ background: '#0d0d22', border: '1px solid #2e2e5a', borderRadius: 10, width: 560, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ background: '#0d0d22', border: '1px solid #2e2e5a', borderRadius: 10, width: 'min(560px, 95vw)', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
 
         {/* Header */}
         <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid #1e1e3a', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>

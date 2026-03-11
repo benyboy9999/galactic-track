@@ -166,16 +166,16 @@ router.post('/revoke/:userId', requireAdmin, async (req, res, next) => {
         [items.rows.length, userId]
       );
       for (const { mat_id, mat_name } of items.rows) {
-        pool.query(
+        await pool.query(
           `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action, by_admin)
            VALUES($1, $2, $3, 'Admin', 'untracked', TRUE)`,
           [mat_id, mat_name, userId]
-        ).catch(() => {});
+        ).catch(e => console.error('[admin] tracking_log insert failed:', e.message));
         pool.query(
           `INSERT INTO notifications(user_id, type, mat_name, from_company)
            SELECT id, 'untracked', $1, 'Admin' FROM users WHERE role = 'admin'`,
           [mat_name]
-        ).catch(() => {});
+        ).catch(e => console.error('[admin] notification insert failed:', e.message));
       }
     }
 
@@ -203,17 +203,17 @@ router.post('/untrack/:matId', requireAdmin, async (req, res, next) => {
         [ownerId]
       );
     }
-    // Log the event and notify all admin users (fire-and-forget)
-    pool.query(
+    // Log the event and notify all admin users
+    await pool.query(
       `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action, by_admin)
        VALUES($1, $2, $3, 'Admin', 'untracked', TRUE)`,
       [matId, matName, ownerId ?? null]
-    ).catch(() => {});
+    ).catch(e => console.error('[admin] tracking_log insert failed:', e.message));
     pool.query(
       `INSERT INTO notifications(user_id, type, mat_name, from_company)
        SELECT id, 'untracked', $1, 'Admin' FROM users WHERE role = 'admin'`,
       [matName]
-    ).catch(() => {});
+    ).catch(e => console.error('[admin] notification insert failed:', e.message));
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

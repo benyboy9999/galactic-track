@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -482,6 +483,7 @@ function ItemsTable({ items, labelHours, isDailyMode }) {
       <div style={{ padding: '10px 14px 4px', borderBottom: '1px solid #1e1e3a' }}>
         <SectionLabel>Items — {isDailyMode ? labelHours : `last ${labelHours}`}</SectionLabel>
       </div>
+      <div className="scroll-x">
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
           <tr style={{ borderBottom: '1px solid #1e1e3a' }}>
@@ -543,6 +545,7 @@ function ItemsTable({ items, labelHours, isDailyMode }) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -550,6 +553,7 @@ function ItemsTable({ items, labelHours, isDailyMode }) {
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function Company() {
+  const isMobile = useMediaQuery(639);
   const [searchParams] = useSearchParams();
   const [hours,    setHours]    = useState(24);
   const [viewMode, setViewMode] = useState('rolling'); // 'rolling' | 'daily'
@@ -687,7 +691,7 @@ export default function Company() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {/* Top row: activity feed left, chart right */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, alignItems: 'stretch' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 2fr', gap: 10, alignItems: 'stretch' }}>
             <ActivityFeed events={events} companyName={displayName} />
             <ActivityChart viewId={viewId} companyName={displayName} hours={hours} dayDate={dayDate} />
           </div>

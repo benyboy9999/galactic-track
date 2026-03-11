@@ -149,17 +149,17 @@ router.delete('/track/:matId', requireAuth, async (req, res, next) => {
       [req.user.id]
     );
 
-    // Log the event and notify all admin users (fire-and-forget)
-    pool.query(
+    // Log the event and notify all admin users
+    await pool.query(
       `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action)
        VALUES($1, $2, $3, $4, 'untracked')`,
       [matId, matName, req.user.id, req.user.company_name]
-    ).catch(() => {});
+    ).catch(e => console.error('[items] tracking_log insert failed:', e.message));
     pool.query(
       `INSERT INTO notifications(user_id, type, mat_name, from_company)
        SELECT id, 'untracked', $1, $2 FROM users WHERE role = 'admin'`,
       [matName, req.user.company_name]
-    ).catch(() => {});
+    ).catch(e => console.error('[items] notification insert failed:', e.message));
 
     res.json({ ok: true, creditsUsed: Math.max(0, req.user.credits_used - 1), creditsTotal: req.user.credits_total });
   } catch (err) {

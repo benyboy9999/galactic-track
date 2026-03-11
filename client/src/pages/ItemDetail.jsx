@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { fromSlug } from '../utils/slug';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar,
@@ -264,13 +265,14 @@ function CompanyActivity({ data, hours, dayDate, onAwards, myCompany, onCompanyC
           }}>Awards</button>
         )}
       </div>
+      <div className="scroll-x">
       <table style={{ fontSize: 12, width: '100%' }}>
         <thead>
           <tr>
-            <th style={{ textAlign: 'left', color: '#3a3a55', width: 24 }}>#</th>
-            <th style={{ textAlign: 'left', color: '#6b6b8a' }}>Company</th>
+            <th style={{ textAlign: 'left', color: '#3a3a55', width: 24, whiteSpace: 'nowrap' }}>#</th>
+            <th style={{ textAlign: 'left', color: '#6b6b8a', whiteSpace: 'nowrap' }}>Company</th>
             {ACTIVITY_COLS.map(({ key, label }) => (
-              <th key={key} style={thStyle(key)} onClick={() => toggleSort(key)}>
+              <th key={key} style={{ ...thStyle(key), whiteSpace: 'nowrap' }} onClick={() => toggleSort(key)}>
                 {label}{sort.key === key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}
               </th>
             ))}
@@ -323,6 +325,7 @@ function CompanyActivity({ data, hours, dayDate, onAwards, myCompany, onCompanyC
           })}
         </tbody>
       </table>
+      </div>
       {!showAll && sorted.length > PAGE && (
         <button
           onClick={() => setShowAll(true)}
@@ -411,6 +414,7 @@ function groupActivity(data, groupBy) {
 }
 
 function ItemPanel({ item, hours, dayDate, refreshTick, myCompany, onPollCount, intervalMs = 60_000 }) {
+  const isMobile = useMediaQuery(639);
   const navigate = useNavigate();
   const [snapshots,       setSnapshots]       = useState([]);
   const [activity,        setActivity]        = useState([]);
@@ -649,7 +653,7 @@ function ItemPanel({ item, hours, dayDate, refreshTick, myCompany, onPollCount, 
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, marginBottom: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 2fr', gap: 10, marginBottom: 10 }}>
 
         {/* Column 1: stats + recent activity */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -757,7 +761,7 @@ function ItemPanel({ item, hours, dayDate, refreshTick, myCompany, onPollCount, 
 
         {/* Column 2: charts stacked */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 10px 4px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 10px 4px', flex: 1, display: 'flex', flexDirection: 'column', minHeight: isMobile ? 220 : 0 }}>
             <div style={{ marginBottom: 10 }}>
               <SectionLabel>Price · last snapshot {fmtTime(liveLatest?.recorded_at)}</SectionLabel>
             </div>
@@ -786,7 +790,7 @@ function ItemPanel({ item, hours, dayDate, refreshTick, myCompany, onPollCount, 
               <div style={{ color: '#3a3a55', fontSize: 12, padding: 20 }}>Collecting data…</div>
             )}
           </div>
-          <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 10px 4px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, padding: '10px 10px 4px', flex: 1, display: 'flex', flexDirection: 'column', minHeight: isMobile ? 220 : 0 }}>
             {(() => {
               const actGroup = (dayDate || hours <= 24) ? 'hour' : 'day';
               const grouped  = groupActivity(displayAct, actGroup);
