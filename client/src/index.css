@@ -212,6 +212,76 @@ td {
   font-weight: 700;
 }
 
+/* Horizontally scrollable table container */
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Mobile nav */
+.nav-hamburger { display: none; }
+
+/* Mobile */
+@media (max-width: 639px) {
+  main {
+    padding: 0.75rem 0.75rem;
+  }
+  table {
+    font-size: 12px;
+  }
+  .stats-row {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+  .stat-card {
+    padding: 0.75rem;
+  }
+  nav {
+    position: relative;
+  }
+  .nav-links {
+    display: none;
+  }
+  .nav-hamburger {
+    display: flex;
+    align-items: center;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 0.25rem;
+    line-height: 1;
+  }
+  .nav-mobile-menu {
+    position: absolute;
+    top: 42px;
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    z-index: 9;
+  }
+  .nav-mobile-menu a {
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .nav-mobile-menu a:last-child {
+    border-bottom: none;
+  }
+  .nav-mobile-menu a.active,
+  .nav-mobile-menu a:hover {
+    color: var(--text);
+  }
+}
+
 /* Tooltip */
 .tooltip-box {
   background: #1a1a30;

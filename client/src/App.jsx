@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NotificationsProvider, useNotifications } from './context/NotificationsContext';
 import { playNotificationChime } from './utils/notifSound';
+import { useMediaQuery } from './hooks/useMediaQuery';
 
 const IS_DEV = import.meta.env.DEV;
 import ItemDetail from './pages/ItemDetail';
@@ -154,7 +155,7 @@ function SettingsModal({ onClose }) {
         onClick={(e) => e.stopPropagation()}
         style={{
           background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 10,
-          padding: '16px 20px', minWidth: 280,
+          padding: '16px 20px', width: 'min(320px, calc(100vw - 32px))',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -459,9 +460,19 @@ function Nav() {
   const { user } = useAuth();
   const location  = useLocation();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const isMobile = useMediaQuery(639);
 
-  const navLink = (to, label) => {
+  // Close mobile menu on navigation
+  useEffect(() => { setMenuOpen(false); }, [location.pathname]);
+
+  const navLink = (to, label, mobile = false) => {
     const active = location.pathname === to || (to !== '/' && location.pathname.startsWith(to));
+    if (mobile) {
+      return (
+        <Link key={to} to={to} className={active ? 'active' : ''}>{label}</Link>
+      );
+    }
     return (
       <Link to={to} style={{
         textDecoration: 'none', fontSize: 13, fontWeight: 500,
@@ -473,24 +484,39 @@ function Nav() {
     );
   };
 
+  const navLinks = [
+    ['/', 'Tracker'],
+    ['/company', 'Company'],
+    ['/contracts', 'Marketplace'],
+    ...(user?.role === 'admin' ? [['/admin', 'Admin']] : []),
+  ];
+
   return (
     <>
       <nav style={{ justifyContent: 'space-between' }}>
         {/* Left: brand + links */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
           <Link to="/" style={{ textDecoration: 'none' }}><div className="nav-brand">Galactic Track</div></Link>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 20, height: 42 }}>
-            {navLink('/', 'Tracker')}
-            {navLink('/company', 'Company')}
-            {navLink('/contracts', 'Marketplace')}
-            {user?.role === 'admin' && navLink('/admin', 'Admin')}
-          </div>
+          {!isMobile && (
+            <div className="nav-links" style={{ display: 'flex', alignItems: 'center', gap: 20, height: 42 }}>
+              {navLinks.map(([to, label]) => navLink(to, label))}
+            </div>
+          )}
+          {isMobile && (
+            <button
+              className="nav-hamburger"
+              onClick={() => setMenuOpen((o) => !o)}
+              aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+            >
+              {menuOpen ? '✕' : '☰'}
+            </button>
+          )}
         </div>
 
         {/* Right: company name + notifications + settings */}
         {user && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 12, color: '#6b6b8a', whiteSpace: 'nowrap' }}>{user.companyName}</span>
+            <span style={{ fontSize: 12, color: '#6b6b8a', whiteSpace: 'nowrap', maxWidth: isMobile ? 80 : 'none', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.companyName}</span>
             <NotificationBell />
             <button
               onClick={() => setSettingsOpen(true)}
@@ -506,6 +532,11 @@ function Nav() {
           </div>
         )}
       </nav>
+      {isMobile && menuOpen && (
+        <div className="nav-mobile-menu">
+          {navLinks.map(([to, label]) => navLink(to, label, true))}
+        </div>
+      )}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </>
   );

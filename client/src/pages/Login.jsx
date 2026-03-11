@@ -63,7 +63,7 @@ export default function Login() {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '70vh' }}>
-        <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 12, padding: '36px 40px', width: 380 }}>
+        <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 12, padding: '36px 40px', width: 'min(380px, 95vw)' }}>
 
           {/* Logo + brand */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 28 }}>
