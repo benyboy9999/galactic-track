@@ -257,19 +257,25 @@ router.get('/company-activity/:matId', async (req, res, next) => {
 });
 
 // GET /api/tracker/patterns/:matId
-// Cumulative activity grouped by hour-of-day and day-of-week (all history)
+// Average activity per occurrence grouped by hour-of-day and day-of-week
 router.get('/patterns/:matId', async (req, res, next) => {
   try {
     const { matId } = req.params;
 
-    const [hourRes, dowRes] = await Promise.all([
+    const [hourRes, dowRes, dayCountRes] = await Promise.all([
       pool.query(
-        `SELECT
+        `WITH day_count AS (
+           SELECT COUNT(DISTINCT DATE(recorded_at)) AS n
+           FROM tracker_events WHERE mat_id = $1
+         )
+         SELECT
            EXTRACT(HOUR FROM recorded_at)::int AS bucket,
-           SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
-                    THEN ABS(qty_change) ELSE 0 END)::bigint AS qty_sold,
-           SUM(CASE WHEN event_type IN ('new_listing','restocked')
-                    THEN qty_change ELSE 0 END)::bigint      AS qty_listed
+           ROUND(SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                          THEN ABS(qty_change) ELSE 0 END)::numeric
+                 / NULLIF((SELECT n FROM day_count), 0))::bigint AS avg_qty_sold,
+           ROUND(SUM(CASE WHEN event_type IN ('new_listing','restocked')
+                          THEN qty_change ELSE 0 END)::numeric
+                 / NULLIF((SELECT n FROM day_count), 0))::bigint AS avg_qty_listed
          FROM tracker_events
          WHERE mat_id = $1
          GROUP BY bucket ORDER BY bucket`,
@@ -278,34 +284,42 @@ router.get('/patterns/:matId', async (req, res, next) => {
       pool.query(
         `SELECT
            EXTRACT(DOW FROM recorded_at)::int AS bucket,
-           SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
-                    THEN ABS(qty_change) ELSE 0 END)::bigint AS qty_sold,
-           SUM(CASE WHEN event_type IN ('new_listing','restocked')
-                    THEN qty_change ELSE 0 END)::bigint      AS qty_listed
+           ROUND(SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                          THEN ABS(qty_change) ELSE 0 END)::numeric
+                 / NULLIF(COUNT(DISTINCT DATE(recorded_at)), 0))::bigint AS avg_qty_sold,
+           ROUND(SUM(CASE WHEN event_type IN ('new_listing','restocked')
+                          THEN qty_change ELSE 0 END)::numeric
+                 / NULLIF(COUNT(DISTINCT DATE(recorded_at)), 0))::bigint AS avg_qty_listed
          FROM tracker_events
          WHERE mat_id = $1
          GROUP BY bucket ORDER BY bucket`,
         [matId]
       ),
+      pool.query(
+        `SELECT COUNT(DISTINCT DATE(recorded_at)) AS n FROM tracker_events WHERE mat_id = $1`,
+        [matId]
+      ),
     ]);
+
+    const daysTracked = Number(dayCountRes.rows[0]?.n ?? 0);
 
     // Fill gaps so charts always show all 24 hours / 7 days
     const hourMap = new Map(hourRes.rows.map((r) => [r.bucket, r]));
     const byHour  = Array.from({ length: 24 }, (_, h) => ({
-      label:      `${String(h).padStart(2, '0')}:00`,
-      qty_sold:   Number(hourMap.get(h)?.qty_sold   ?? 0),
-      qty_listed: Number(hourMap.get(h)?.qty_listed ?? 0),
+      label:          `${String(h).padStart(2, '0')}:00`,
+      avg_qty_sold:   Number(hourMap.get(h)?.avg_qty_sold   ?? 0),
+      avg_qty_listed: Number(hourMap.get(h)?.avg_qty_listed ?? 0),
     }));
 
     const DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const dowMap = new Map(dowRes.rows.map((r) => [r.bucket, r]));
     const byDow  = Array.from({ length: 7 }, (_, d) => ({
-      label:      DOW_LABELS[d],
-      qty_sold:   Number(dowMap.get(d)?.qty_sold   ?? 0),
-      qty_listed: Number(dowMap.get(d)?.qty_listed ?? 0),
+      label:          DOW_LABELS[d],
+      avg_qty_sold:   Number(dowMap.get(d)?.avg_qty_sold   ?? 0),
+      avg_qty_listed: Number(dowMap.get(d)?.avg_qty_listed ?? 0),
     }));
 
-    res.json({ byHour, byDow });
+    res.json({ byHour, byDow, daysTracked });
   } catch (err) { next(err); }
 });
 

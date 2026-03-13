@@ -842,16 +842,18 @@ function ItemPanel({ item, hours, dayDate, refreshTick, myCompany, onPollCount, 
 
       {/* Patterns modal */}
       {patternsOpen && (
-        <Modal title={`Activity patterns · ${item.matName} · all history`} onClose={() => setPatternsOpen(false)}>
+        <Modal title={`Activity patterns · ${item.matName}`} onClose={() => setPatternsOpen(false)}>
           {!patterns ? (
             <Spinner />
           ) : patterns.byHour.length === 0 ? (
             <div style={{ color: '#3a3a55', fontSize: 12 }}>No data yet — patterns will populate as snapshots accumulate.</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <span style={{ fontSize: 11, color: '#6b6b8a' }}>Total event counts · all tracked history</span>
+              <span style={{ fontSize: 11, color: '#6b6b8a' }}>
+                Average per period · based on {patterns.daysTracked} day{patterns.daysTracked !== 1 ? 's' : ''} of data
+              </span>
               <div>
-                <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>By hour of day</div>
+                <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Avg activity · by hour of day</div>
                 <div style={{ height: 160 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={patterns.byHour} margin={{ top: 0, right: 4, left: 0, bottom: 0 }}>
@@ -859,14 +861,14 @@ function ItemPanel({ item, hours, dayDate, refreshTick, myCompany, onPollCount, 
                       <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#6b6b8a' }} interval={1} />
                       <YAxis tickFormatter={qty} tick={{ fontSize: 9, fill: '#6b6b8a' }} width={40} />
                       <Tooltip cursor={{ fill: 'rgba(59,59,106,0.35)' }} contentStyle={{ background: '#13132a', border: '1px solid #1e1e3a', fontSize: 11 }} />
-                      <Bar dataKey="qty_listed" name="Listed" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
-                      <Bar dataKey="qty_sold"   name="Sold"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
+                      <Bar dataKey="avg_qty_listed" name="Listed" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
+                      <Bar dataKey="avg_qty_sold"   name="Sold"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </div>
               <div>
-                <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>By day of week</div>
+                <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Avg activity · by day of week</div>
                 <div style={{ height: 160 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={patterns.byDow} margin={{ top: 0, right: 4, left: 0, bottom: 0 }}>
@@ -874,8 +876,8 @@ function ItemPanel({ item, hours, dayDate, refreshTick, myCompany, onPollCount, 
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#6b6b8a' }} />
                       <YAxis tickFormatter={qty} tick={{ fontSize: 9, fill: '#6b6b8a' }} width={40} />
                       <Tooltip cursor={{ fill: 'rgba(59,59,106,0.35)' }} contentStyle={{ background: '#13132a', border: '1px solid #1e1e3a', fontSize: 11 }} />
-                      <Bar dataKey="qty_listed" name="Listed" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
-                      <Bar dataKey="qty_sold"   name="Sold"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
+                      <Bar dataKey="avg_qty_listed" name="Listed" fill="#34d399" opacity={0.6} radius={[2, 2, 0, 0]} stackId="a" />
+                      <Bar dataKey="avg_qty_sold"   name="Sold"   fill="#f87171" opacity={0.85} radius={[2, 2, 0, 0]} stackId="b" />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
