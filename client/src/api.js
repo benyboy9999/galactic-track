@@ -120,9 +120,18 @@ export const api = {
   trackerCompanyActivity:(matId, hours = 24, date = null) => get(`/tracker/company-activity/${matId}?hours=${hours}${date ? `&date=${date}` : ''}`),
   trackerRecent:         (matId, limit = 10) => get(`/tracker/recent/${matId}?limit=${limit}`),
   trackerEvents:         (matId, from, to)   => get(`/tracker/events/${matId}?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  trackerSidebar:        ()      => get('/tracker/sidebar'),
   trackerPatterns:       (matId) => get(`/tracker/patterns/${matId}`),
   trackerAwards:         (matId, hours = 24) => get(`/tracker/awards/${matId}?hours=${hours}`),
   trackerPressure:       (matId) => get(`/tracker/pressure/${matId}`),
   trackerLatestBigOrder: (matId) => get(`/tracker/latest-big-order/${matId}`),
   trackerCompanyEvents:  (matId, company, hours = 24) => get(`/tracker/company-events/${matId}?company=${encodeURIComponent(company)}&hours=${hours}`),
+
+  // ── Analytics ──────────────────────────────────────────────────────────────────
+  trackPage: (page) => post('/pageview', { page }, true).catch(() => {}),
+
+  // ── Price Alerts ───────────────────────────────────────────────────────────────
+  getAlerts:    ()               => get('/alerts', true),
+  createAlert:  (matId, targetPrice) => post('/alerts', { matId, targetPrice }, true),
+  deleteAlert:  (id)             => del(`/alerts/${id}`, true),
 };

@@ -991,8 +991,14 @@ export default function ItemDetail() {
   const [pollsInWindow, setPollsInWindow] = useState(null);
   const [tracking,    setTracking]    = useState(false);
   const [trackErr,    setTrackErr]    = useState('');
+  const [alertsOpen,   setAlertsOpen]   = useState(false);
+  const [alerts,       setAlerts]       = useState([]);
+  const [alertPrice,   setAlertPrice]   = useState('');
+  const [alertErr,     setAlertErr]     = useState('');
+  const [alertWorking, setAlertWorking] = useState(false);
   const timerRef       = useRef(null);
   const prevLastPollAt = useRef(null);
+  const alertsRef      = useRef(null);
 
   const loadItem = useCallback(async () => {
     try {
@@ -1022,6 +1028,41 @@ export default function ItemDetail() {
     timerRef.current = setInterval(loadStatus, 5_000);
     return () => clearInterval(timerRef.current);
   }, [loadStatus, item?.tracked]);
+
+  // ── Price alerts ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!alertsOpen) return;
+    function handle(e) { if (alertsRef.current && !alertsRef.current.contains(e.target)) setAlertsOpen(false); }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [alertsOpen]);
+
+  function openAlerts() {
+    setAlertsOpen((v) => !v);
+    if (!alertsOpen && user) api.getAlerts().then(setAlerts).catch(() => {});
+  }
+
+  async function submitAlert(e) {
+    e.preventDefault();
+    setAlertErr('');
+    const targetPrice = Math.round(parseFloat(alertPrice) * 100);
+    if (isNaN(targetPrice) || targetPrice <= 0) { setAlertErr('Enter a valid price'); return; }
+    setAlertWorking(true);
+    try {
+      const created = await api.createAlert(item.matId, targetPrice);
+      setAlerts((prev) => [created, ...prev]);
+      setAlertPrice('');
+    } catch (err) {
+      setAlertErr(err.message);
+    } finally {
+      setAlertWorking(false);
+    }
+  }
+
+  async function deleteAlert(id) {
+    await api.deleteAlert(id).catch(() => {});
+    setAlerts((prev) => prev.filter((a) => a.id !== id));
+  }
 
   async function handleTrack() {
     setTracking(true);
@@ -1140,6 +1181,92 @@ export default function ItemDetail() {
           >
             Refresh
           </button>
+        )}
+
+        {/* Price alerts button + dropdown */}
+        {item.tracked && user && (
+          <div ref={alertsRef} style={{ position: 'relative' }}>
+            {(() => {
+              const itemAlerts = alerts.filter((a) => a.mat_id === item.matId);
+              return (
+                <>
+                  <button
+                    onClick={openAlerts}
+                    style={{
+                      background: alertsOpen ? '#1e1440' : 'none',
+                      border: `1px solid ${alertsOpen ? '#7c3aed' : '#2e2e5a'}`,
+                      borderRadius: 6, padding: '2px 10px',
+                      color: alertsOpen ? '#a78bfa' : '#6b6b8a',
+                      fontSize: 11, cursor: 'pointer',
+                    }}
+                  >
+                    🔔{itemAlerts.length > 0 ? ` (${itemAlerts.length})` : ''}
+                  </button>
+
+                  {alertsOpen && (
+                    <div style={{
+                      position: 'absolute', top: 'calc(100% + 6px)', right: 0,
+                      background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 10,
+                      width: 'min(300px, 90vw)', zIndex: 100, boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                      padding: '14px 16px',
+                    }}>
+                      <div style={{ fontSize: 11, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>
+                        Price Alerts
+                      </div>
+
+                      {itemAlerts.length === 0 ? (
+                        <div style={{ fontSize: 12, color: '#3a3a55', marginBottom: 14 }}>No alerts set for this item.</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+                          {itemAlerts.map((a) => (
+                            <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', background: '#0f0f28', borderRadius: 6 }}>
+                              <span style={{ flex: 1, fontSize: 12, color: '#c0c0d8' }}>{a.mat_name}</span>
+                              <span style={{ fontSize: 11, color: a.direction === 'up' ? '#34d399' : '#f87171', flexShrink: 0 }}>
+                                {a.direction === 'up' ? '↑' : '↓'} ${(a.target_price / 100).toFixed(2)}
+                              </span>
+                              <button
+                                onClick={() => deleteAlert(a.id)}
+                                style={{ background: 'none', border: 'none', color: '#3a3a55', cursor: 'pointer', fontSize: 14, padding: '0 2px', lineHeight: 1 }}
+                                title="Remove alert"
+                              >✕</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <form onSubmit={submitAlert} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ fontSize: 11, color: '#4a4a6a', marginBottom: 2 }}>Notify me when price reaches — direction inferred automatically</div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0.01"
+                            placeholder="Target price ($)"
+                            value={alertPrice}
+                            onChange={(e) => setAlertPrice(e.target.value)}
+                            className="search-input"
+                            style={{ marginBottom: 0, flex: 1, fontSize: 12 }}
+                            required
+                          />
+                          <button
+                            type="submit"
+                            disabled={alertWorking}
+                            style={{
+                              background: '#1e1440', border: '1px solid #7c3aed', borderRadius: 6,
+                              color: '#a78bfa', fontSize: 12, padding: '0 12px', cursor: 'pointer', flexShrink: 0,
+                            }}
+                          >
+                            {alertWorking ? '…' : 'Set'}
+                          </button>
+                        </div>
+                        {alertErr && <div style={{ fontSize: 11, color: '#f87171' }}>{alertErr}</div>}
+                      </form>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
         )}
       </div>
 

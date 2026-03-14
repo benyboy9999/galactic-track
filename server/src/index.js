@@ -13,8 +13,10 @@ import itemsRoutes from './routes/items.js';
 import adminRoutes from './routes/admin.js';
 import contractsRoutes from './routes/contracts.js';
 import companyRoutes from './routes/company.js';
+import alertsRoutes from './routes/alerts.js';
 import { getRateLimitStatus, getCompanyDetail } from './services/gtApi.js';
 import { decryptApiKey } from './utils/apiKeyCrypto.js';
+import { optionalAuth } from './middleware/auth.js';
 import { startTracker } from './services/tracker.js';
 import pool from './database/db.js';
 
@@ -36,9 +38,20 @@ app.use('/api/items', itemsRoutes);
 app.use('/api/admin',     adminRoutes);
 app.use('/api/contracts', contractsRoutes);
 app.use('/api/company',   companyRoutes);
+app.use('/api/alerts',    alertsRoutes);
 
 app.get('/api/health',    (req, res) => res.json({ ok: true }));
 app.get('/api/ratelimit', (req, res) => res.json(getRateLimitStatus()));
+
+// POST /api/pageview — fire-and-forget page analytics
+app.post('/api/pageview', optionalAuth, (req, res) => {
+  const page = String(req.body?.page ?? '').slice(0, 128);
+  if (page) pool.query(
+    `INSERT INTO page_views(page, user_id) VALUES($1, $2)`,
+    [page, req.user?.id ?? null]
+  ).catch(() => {});
+  res.json({ ok: true });
+});
 
 // Error handler
 app.use((err, req, res, _next) => {
@@ -115,6 +128,12 @@ async function pruneAll() {
       `DELETE FROM tracker_events WHERE recorded_at < NOW() - INTERVAL '30 days'`
     );
     if (evt.rowCount > 0) console.log(`Pruned ${evt.rowCount} old tracker_events row(s)`);
+
+    // page_views: keep 90 days
+    const pv = await pool.query(
+      `DELETE FROM page_views WHERE recorded_at < NOW() - INTERVAL '90 days'`
+    );
+    if (pv.rowCount > 0) console.log(`Pruned ${pv.rowCount} old page_views row(s)`);
   } catch (e) {
     console.error('pruneAll error:', e.message);
   }

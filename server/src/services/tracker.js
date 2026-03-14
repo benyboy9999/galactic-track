@@ -253,6 +253,40 @@ async function pollItem(item) {
   } finally {
     client.release();
   }
+
+  // Check price alerts outside the transaction (fire-and-forget)
+  checkPriceAlerts(item.matId, data.currentPrice).catch((e) =>
+    console.error('[tracker] price alert check failed:', e.message)
+  );
+}
+
+async function checkPriceAlerts(matId, currentPrice) {
+  if (!currentPrice || currentPrice <= 0) return;
+
+  const alerts = await pool.query(
+    `SELECT id, user_id, mat_name, target_price, direction FROM price_alerts WHERE mat_id = $1`,
+    [matId]
+  );
+
+  for (const alert of alerts.rows) {
+    const triggered =
+      (alert.direction === 'up'   && currentPrice >= alert.target_price) ||
+      (alert.direction === 'down' && currentPrice <= alert.target_price);
+
+    if (triggered) {
+      const displayPrice = `$${(alert.target_price / 100).toFixed(2)}`;
+      await pool.query(
+        `INSERT INTO notifications(user_id, type, mat_name, from_company)
+         VALUES($1, 'price_alert', $2, $3)`,
+        [alert.user_id, alert.mat_name, displayPrice]
+      ).catch((e) => console.error('[tracker] price alert notification insert failed:', e.message));
+      await pool.query(
+        `DELETE FROM price_alerts WHERE id = $1`,
+        [alert.id]
+      ).catch((e) => console.error('[tracker] price alert delete failed:', e.message));
+      console.log(`[tracker] price alert triggered: ${alert.mat_name} @ ${displayPrice} for user ${alert.user_id}`);
+    }
+  }
 }
 
 

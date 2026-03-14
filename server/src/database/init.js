@@ -178,6 +178,19 @@ const schema = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_tlog_created_at ON tracking_log(created_at);
+
+  -- ── Price alerts ──────────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS price_alerts (
+    id           SERIAL PRIMARY KEY,
+    user_id      INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    mat_id       INT NOT NULL,
+    mat_name     TEXT NOT NULL,
+    target_price INT NOT NULL,
+    direction    VARCHAR(4) NOT NULL CHECK (direction IN ('up','down')),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_price_alerts_mat_id ON price_alerts(mat_id);
 `;
 
 async function init() {
@@ -214,6 +227,19 @@ async function init() {
       )
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_tlog_created_at ON tracking_log(created_at)`);
+    // Migration: price alerts
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS price_alerts (
+        id           SERIAL PRIMARY KEY,
+        user_id      INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mat_id       INT NOT NULL,
+        mat_name     TEXT NOT NULL,
+        target_price INT NOT NULL,
+        direction    TEXT NOT NULL,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_price_alerts_mat_id ON price_alerts(mat_id)`);
     console.log('Database schema initialized.');
   } finally {
     client.release();

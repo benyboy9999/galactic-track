@@ -276,4 +276,49 @@ router.delete('/contracts/:id', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/admin/analytics
+router.get('/analytics', requireAdmin, async (req, res, next) => {
+  try {
+    const [byPage, topItems, daily] = await Promise.all([
+      // Per-page summary: all-time, last 7d, last 24h, unique users
+      pool.query(`
+        SELECT
+          page,
+          COUNT(*)::int                                                          AS total,
+          COUNT(*) FILTER (WHERE recorded_at > NOW() - INTERVAL '7 days')::int  AS last_7d,
+          COUNT(*) FILTER (WHERE recorded_at > NOW() - INTERVAL '1 day')::int   AS last_24h,
+          COUNT(DISTINCT user_id)::int                                           AS unique_users
+        FROM page_views
+        GROUP BY page
+        ORDER BY total DESC
+        LIMIT 50
+      `),
+      // Top individual item pages
+      pool.query(`
+        SELECT
+          page,
+          COUNT(*)::int                                                         AS total,
+          COUNT(*) FILTER (WHERE recorded_at > NOW() - INTERVAL '7 days')::int AS last_7d
+        FROM page_views
+        WHERE page LIKE 'item:%'
+        GROUP BY page
+        ORDER BY total DESC
+        LIMIT 20
+      `),
+      // Daily totals for last 14 days (for a sparkline/trend)
+      pool.query(`
+        SELECT
+          DATE(recorded_at)::text AS day,
+          COUNT(*)::int           AS views,
+          COUNT(DISTINCT user_id)::int AS unique_users
+        FROM page_views
+        WHERE recorded_at > NOW() - INTERVAL '14 days'
+        GROUP BY DATE(recorded_at)
+        ORDER BY day ASC
+      `),
+    ]);
+    res.json({ byPage: byPage.rows, topItems: topItems.rows, daily: daily.rows });
+  } catch (err) { next(err); }
+});
+
 export default router;

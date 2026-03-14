@@ -9,6 +9,54 @@ router.get('/status', (req, res) => {
   res.json(getTrackerStatus());
 });
 
+// GET /api/tracker/sidebar
+// Top price movers today + recently untracked items
+router.get('/sidebar', async (req, res, next) => {
+  try {
+    const [moversRes, untrackedRes] = await Promise.all([
+      pool.query(`
+        WITH first_today AS (
+          SELECT DISTINCT ON (mat_id) mat_id, current_price AS open_price
+          FROM tracker_snapshots
+          WHERE recorded_at >= DATE_TRUNC('day', NOW())
+            AND current_price > 0
+          ORDER BY mat_id, recorded_at ASC
+        ),
+        last_today AS (
+          SELECT DISTINCT ON (mat_id) mat_id, mat_name, current_price AS close_price
+          FROM tracker_snapshots
+          WHERE recorded_at >= DATE_TRUNC('day', NOW())
+            AND current_price > 0
+          ORDER BY mat_id, recorded_at DESC
+        )
+        SELECT l.mat_id, l.mat_name, f.open_price, l.close_price,
+          ROUND(((l.close_price - f.open_price)::numeric / f.open_price) * 100, 1) AS pct_change
+        FROM first_today f
+        JOIN last_today l ON l.mat_id = f.mat_id
+        WHERE f.open_price <> l.close_price
+        ORDER BY ABS((l.close_price - f.open_price)::numeric / f.open_price) DESC
+        LIMIT 10
+      `),
+      pool.query(`
+        WITH latest_event AS (
+          SELECT DISTINCT ON (mat_id) mat_id, mat_name, action, created_at
+          FROM tracking_log
+          ORDER BY mat_id, created_at DESC
+        )
+        SELECT le.mat_id, le.mat_name, le.created_at
+        FROM latest_event le
+        LEFT JOIN tracked_items ti ON ti.mat_id = le.mat_id AND ti.active = TRUE
+        WHERE le.action = 'untracked'
+          AND ti.mat_id IS NULL
+        ORDER BY le.created_at DESC
+        LIMIT 8
+      `),
+    ]);
+
+    res.json({ movers: moversRes.rows, recentlyUntracked: untrackedRes.rows });
+  } catch (err) { next(err); }
+});
+
 // GET /api/tracker/snapshots/:matId?limit=120
 // Price + supply over time for charting
 router.get('/snapshots/:matId', async (req, res, next) => {

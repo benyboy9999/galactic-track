@@ -173,6 +173,106 @@ function LoginForm({ onLogin }) {
 
 // ── Main dashboard ────────────────────────────────────────────────────────────
 
+// ── Analytics tab ────────────────────────────────────────────────────────────
+
+const PAGE_LABELS = {
+  home:      'Home (tracker)',
+  contracts: 'Contracts',
+  company:   'Company',
+  login:     'Login',
+  admin:     'Admin',
+};
+
+function AnalyticsTab({ data }) {
+  if (!data) return <p style={{ color: '#4a4a6a', fontSize: 13, margin: 0 }}>Loading…</p>;
+
+  // Bucket pages: named pages vs item pages
+  const namedPages = data.byPage.filter((r) => !r.page.startsWith('item:'));
+  const itemPages  = data.topItems;
+
+  // Daily sparkline data
+  const maxViews = Math.max(...data.daily.map((d) => d.views), 1);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+
+      {/* Daily activity bar chart */}
+      <div>
+        <div style={{ fontSize: 11, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
+          Daily page views · last 14 days
+        </div>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 60 }}>
+          {data.daily.map((d) => {
+            const pct = (d.views / maxViews) * 100;
+            const label = new Date(d.day + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+            return (
+              <div key={d.day} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }} title={`${label}: ${d.views} views, ${d.unique_users} users`}>
+                <div style={{ width: '100%', height: `${pct}%`, background: '#6366f1', borderRadius: '2px 2px 0 0', minHeight: 2 }} />
+                <div style={{ fontSize: 9, color: '#3a3a55', whiteSpace: 'nowrap' }}>{label.split(' ')[0]}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Named pages summary */}
+      <div>
+        <div style={{ fontSize: 11, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
+          Page views by section
+        </div>
+        <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              {['Page', '24h', '7d', 'All time', 'Unique users'].map((h) => (
+                <th key={h} style={{ textAlign: h === 'Page' ? 'left' : 'right', padding: '4px 10px', color: '#6b6b8a', fontWeight: 500, borderBottom: '1px solid #1e1e3a' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {namedPages.map((r, i) => (
+              <tr key={r.page} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
+                <td style={{ padding: '6px 10px', color: '#e0e0f0', fontWeight: 500 }}>{PAGE_LABELS[r.page] ?? r.page}</td>
+                <td style={{ padding: '6px 10px', textAlign: 'right', color: r.last_24h > 0 ? '#a78bfa' : '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>{r.last_24h}</td>
+                <td style={{ padding: '6px 10px', textAlign: 'right', color: '#c0c0d8', fontVariantNumeric: 'tabular-nums' }}>{r.last_7d}</td>
+                <td style={{ padding: '6px 10px', textAlign: 'right', color: '#c0c0d8', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{r.total}</td>
+                <td style={{ padding: '6px 10px', textAlign: 'right', color: '#6b6b8a', fontVariantNumeric: 'tabular-nums' }}>{r.unique_users}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Top item pages */}
+      {itemPages.length > 0 && (
+        <div>
+          <div style={{ fontSize: 11, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
+            Most viewed items
+          </div>
+          <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                {['#', 'Item', '7d', 'All time'].map((h) => (
+                  <th key={h} style={{ textAlign: h === 'Item' || h === '#' ? 'left' : 'right', padding: '4px 10px', color: '#6b6b8a', fontWeight: 500, borderBottom: '1px solid #1e1e3a' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {itemPages.map((r, i) => (
+                <tr key={r.page} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
+                  <td style={{ padding: '6px 10px', color: '#3a3a55' }}>{i + 1}</td>
+                  <td style={{ padding: '6px 10px', color: '#e0e0f0', fontWeight: 500 }}>{r.page.replace('item:', '')}</td>
+                  <td style={{ padding: '6px 10px', textAlign: 'right', color: '#c0c0d8', fontVariantNumeric: 'tabular-nums' }}>{r.last_7d}</td>
+                  <td style={{ padding: '6px 10px', textAlign: 'right', color: '#c0c0d8', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{r.total}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Dashboard({ token, onLogout }) {
   const isMobile = useMediaQuery(639);
   const [users,       setUsers]       = useState([]);
@@ -182,6 +282,7 @@ function Dashboard({ token, onLogout }) {
   const [contracts,   setContracts]   = useState([]);
   const [interests,   setInterests]   = useState([]);
   const [trackingLog, setTrackingLog] = useState([]);
+  const [analytics,   setAnalytics]   = useState(null);
   const [loading,     setLoading]     = useState(true);
   const [err,         setErr]         = useState('');
   const [tab,         setTab]         = useState('users');
@@ -190,7 +291,7 @@ function Dashboard({ token, onLogout }) {
 
   const load = useCallback(async () => {
     try {
-      const [u, it, rl, er, co, ci, tl] = await Promise.all([
+      const [u, it, rl, er, co, ci, tl, an] = await Promise.all([
         adminFetch('/users',         token),
         adminFetch('/tracked-items', token),
         adminFetch('/rate-limits',   token),
@@ -198,6 +299,7 @@ function Dashboard({ token, onLogout }) {
         adminFetch('/contracts',     token),
         adminFetch('/interests',     token),
         adminFetch('/tracking-log',  token),
+        adminFetch('/analytics',     token),
       ]);
       setUsers(u);
       setItems(it);
@@ -206,6 +308,7 @@ function Dashboard({ token, onLogout }) {
       setContracts(co);
       setInterests(ci);
       setTrackingLog(tl);
+      setAnalytics(an);
       setErr('');
     } catch (e) {
       if (e.message.includes('Invalid admin token')) {
@@ -523,6 +626,7 @@ function Dashboard({ token, onLogout }) {
           { key: 'rates',     label: 'Rate Limits' },
           { key: 'errors',    label: `Errors (${errors.length})` },
           { key: 'log',       label: `Track Log (${trackingLog.length})` },
+          { key: 'analytics', label: 'Analytics' },
         ].map(({ key, label }) => (
           <button key={key} style={tabStyle(key)} onClick={() => setTab(key)}>{label}</button>
         ))}
@@ -538,6 +642,7 @@ function Dashboard({ token, onLogout }) {
         {tab === 'rates'     && <Table cols={rateCols}     rows={rates}        emptyMsg="No rate limit data yet" />}
         {tab === 'errors'    && <Table cols={errorCols}    rows={errors}       emptyMsg="No errors recorded" />}
         {tab === 'log'       && <Table cols={logCols}      rows={trackingLog}  emptyMsg="No tracking events yet" />}
+        {tab === 'analytics' && <AnalyticsTab data={analytics} />}
       </div>
     </div>
   );

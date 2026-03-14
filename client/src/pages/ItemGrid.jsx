@@ -1,37 +1,44 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { toSlug } from '../utils/slug';
 import { toIconId } from '../utils/materialIcon';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
+const spriteUrl = '/api/gamedata/sprite';
+
+function relTime(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60_000);
+  const h = Math.floor(diff / 3_600_000);
+  if (m < 60) return `${m}m ago`;
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
 
 export default function ItemGrid() {
-  const navigate = useNavigate();
+  const navigate  = useNavigate();
+  const isMobile  = useMediaQuery(639);
 
-  const [items,       setItems]       = useState([]);
-  const [loading,     setLoading]     = useState(true);
-  const [err,         setErr]         = useState('');
-  const [search,      setSearch]      = useState('');
-  const [tierFilter,  setTierFilter]  = useState(null);  // null = all
-  const [catFilter,   setCatFilter]   = useState('');    // '' = all
-  const [favourites,  setFavourites]  = useState(() => {
+  const [items,        setItems]        = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [err,          setErr]          = useState('');
+  const [search,       setSearch]       = useState('');
+  const [tierFilter,   setTierFilter]   = useState(null);
+  const [catFilter,    setCatFilter]    = useState('');
+  const [sidebar,      setSidebar]      = useState(null);
+  const [favourites, setFavourites] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('gt-favourites') ?? '[]')); }
     catch { return new Set(); }
   });
 
-  const spriteUrl = '/api/gamedata/sprite';
-
-  const loadItems = useCallback(async () => {
-    try {
-      setItems(await api.allItems());
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    api.allItems()
+      .then(setItems)
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false));
+    api.trackerSidebar().then(setSidebar).catch(() => {});
   }, []);
-
-  useEffect(() => { loadItems(); }, [loadItems]);
 
   const categories = useMemo(() => {
     const seen = new Set();
@@ -65,171 +72,241 @@ export default function ItemGrid() {
     });
   }
 
-  const trackedItems   = filtered.filter((i) => i.tracked)
-    .sort((a, b) => (favourites.has(b.matId) ? 1 : 0) - (favourites.has(a.matId) ? 1 : 0));
+  const pinnedItems    = filtered.filter((i) => i.tracked && favourites.has(i.matId));
+  const trackedItems   = filtered.filter((i) => i.tracked && !favourites.has(i.matId));
   const untrackedItems = filtered.filter((i) => !i.tracked);
 
-  function handleCardClick(item) {
-    navigate(`/${toSlug(item.matName)}`);
+  function SectionLabel({ icon, label, count }) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em',
+        color: '#4a4a6a',
+      }}>
+        {icon && <span style={{ fontSize: 11 }}>{icon}</span>}
+        <span>{label}</span>
+        <span style={{ color: '#2e2e55', marginLeft: 2 }}>{count}</span>
+      </div>
+    );
   }
 
   function ItemCard({ item }) {
-    const isUntracked = !item.tracked;
     const isFav = favourites.has(item.matId);
-
-    const borderColor = item.tracked ? '#2e2e5a' : '#1a1a36';
-    const bg          = item.tracked ? '#0d0d22' : '#080818';
-    const nameColor   = item.tracked ? '#e0e0f0' : '#4a4a6a';
-
+    const borderColor = item.tracked ? '#1e1e3a' : '#131328';
+    const bg          = item.tracked ? '#0d0d22' : '#09091a';
     return (
       <div
-        onClick={() => handleCardClick(item)}
-        style={{
-          background: bg, border: `1px solid ${borderColor}`, borderRadius: 8,
-          padding: '14px 12px', cursor: 'pointer', transition: 'border-color 0.15s',
-          display: 'flex', flexDirection: 'column', gap: 6, minHeight: 80, position: 'relative',
-          opacity: isUntracked ? 0.5 : 1,
-        }}
+        onClick={() => navigate(`/${toSlug(item.matName)}`)}
         onMouseEnter={(e) => {
-          e.currentTarget.style.borderColor = item.tracked ? '#4a4a8a' : '#2a2a50';
+          e.currentTarget.style.borderColor = item.tracked ? '#3a3a70' : '#1e1e3a';
           e.currentTarget.style.opacity = '1';
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.borderColor = borderColor;
-          e.currentTarget.style.opacity = isUntracked ? '0.5' : '1';
+          e.currentTarget.style.opacity = item.tracked ? '1' : '0.4';
+        }}
+        style={{
+          background: bg, border: `1px solid ${borderColor}`, borderRadius: 7,
+          padding: '9px 10px', cursor: 'pointer', transition: 'border-color 0.12s',
+          display: 'flex', flexDirection: 'column', gap: 5, position: 'relative',
+          opacity: item.tracked ? 1 : 0.4,
         }}
       >
         {item.tracked && (
           <button
             onClick={(e) => toggleFavourite(e, item.matId)}
-            title={isFav ? 'Unpin' : 'Pin to top'}
+            title={isFav ? 'Unpin' : 'Pin'}
             style={{
-              position: 'absolute', top: 8, right: 8,
+              position: 'absolute', top: 6, right: 6,
               background: 'none', border: 'none', cursor: 'pointer',
-              fontSize: 12, lineHeight: 1, padding: 2,
-              color: isFav ? '#fbbf24' : '#2e2e5a',
-              opacity: isFav ? 1 : 0.6,
+              fontSize: 11, padding: 2, lineHeight: 1,
+              color: isFav ? '#fbbf24' : '#1e1e3a',
             }}
-          >
-            ★
-          </button>
+          >★</button>
         )}
-        <svg width="36" height="36" style={{ flexShrink: 0, filter: isUntracked ? 'grayscale(1)' : 'none' }}>
-          <use href={`${spriteUrl}#${toIconId(item.matName)}`} width="36" height="36" />
+        <svg width="28" height="28" style={{ flexShrink: 0, filter: item.tracked ? 'none' : 'grayscale(1)' }}>
+          <use href={`${spriteUrl}#${toIconId(item.matName)}`} width="28" height="28" />
         </svg>
-        <span style={{ fontSize: 13, fontWeight: 500, color: nameColor, lineHeight: 1.3 }}>
+        <span style={{ fontSize: 12, fontWeight: 500, color: item.tracked ? '#d8d8f0' : '#4a4a6a', lineHeight: 1.3 }}>
           {item.matName}
         </span>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 'auto' }}>
-          {item.tracked && (
-            item.dataReady
-              ? <span style={{ fontSize: 10, color: '#34d399', background: '#0a1f18', border: '1px solid #065f46', borderRadius: 4, padding: '1px 6px' }}>Active</span>
-              : <span style={{ fontSize: 10, color: '#a78bfa', background: '#1e1440', border: '1px solid #4c1d95', borderRadius: 4, padding: '1px 6px' }}>Recently added</span>
-          )}
-        </div>
+        {item.tracked && (
+          item.dataReady
+            ? <span style={{ fontSize: 10, color: '#34d399', background: '#0a1f18', border: '1px solid #065f46', borderRadius: 4, padding: '1px 5px', alignSelf: 'flex-start' }}>Active</span>
+            : <span style={{ fontSize: 10, color: '#a78bfa', background: '#1e1440', border: '1px solid #4c1d95', borderRadius: 4, padding: '1px 5px', alignSelf: 'flex-start' }}>New</span>
+        )}
       </div>
     );
   }
 
-  const gridStyle = {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-    gap: 10,
-  };
+  function SidebarCard({ title, subtitle, children }) {
+    return (
+      <div style={{ background: '#0d0d22', border: '1px solid #1a1a36', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ padding: '9px 12px 7px', borderBottom: '1px solid #131328' }}>
+          <div style={{ fontSize: 11, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>{title}</div>
+          {subtitle && <div style={{ fontSize: 10, color: '#2e2e50', marginTop: 2 }}>{subtitle}</div>}
+        </div>
+        {children}
+      </div>
+    );
+  }
 
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px 20px' }}>
+    <div style={{ maxWidth: 1200, margin: '0 auto', padding: isMobile ? '16px 12px' : '24px 20px' }}>
 
-      <div style={{ marginBottom: 20 }}>
-        <h1 style={{ margin: 0, fontSize: 20, color: '#e0e0ff' }}>Currently Tracked Items</h1>
-        <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6b6b8a' }}>
-          Items here are currently being tracked. Not sure what to track? Pick a high-volume item you sell!
-        </p>
-      </div>
-
-      <input
-        type="text"
-        placeholder="Search items…"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        style={{
-          width: '100%', boxSizing: 'border-box', marginBottom: 12,
-          background: '#13132a', border: '1px solid #2e2e5a', borderRadius: 6,
-          padding: '10px 14px', color: '#e0e0ff', fontSize: 13,
-        }}
-      />
-
-      {/* Filters */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20, alignItems: 'center' }}>
-        {/* Tier chips */}
-        <div style={{ display: 'flex', gap: 4 }}>
-          {[null, ...tiers].map((t) => (
-            <button
-              key={t ?? 'all'}
-              onClick={() => setTierFilter(t)}
-              style={{
-                background: tierFilter === t ? '#1e1440' : 'none',
-                border: `1px solid ${tierFilter === t ? '#7c3aed' : '#2e2e5a'}`,
-                borderRadius: 4, padding: '3px 8px',
-                color: tierFilter === t ? '#a78bfa' : '#6b6b8a',
-                fontSize: 11, cursor: 'pointer',
-              }}
-            >
-              {t === null ? 'All tiers' : `T${t}`}
-            </button>
-          ))}
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#e0e0f0' }}>Item Tracker</h1>
+          <div style={{ fontSize: 12, color: '#6b6b8a', marginTop: 2 }}>Market activity overview</div>
         </div>
 
-        <div style={{ width: 1, height: 18, background: '#1e1e3a' }} />
-
-        {/* Category select */}
-        <select
-          value={catFilter}
-          onChange={(e) => setCatFilter(e.target.value)}
-          style={{
-            background: catFilter ? '#1e1440' : '#13132a',
-            border: `1px solid ${catFilter ? '#7c3aed' : '#2e2e5a'}`,
-            borderRadius: 4, padding: '3px 8px',
-            color: catFilter ? '#a78bfa' : '#6b6b8a',
-            fontSize: 11, cursor: 'pointer',
-          }}
-        >
-          <option value="">All categories</option>
-          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          <input
+            type="text"
+            placeholder="Search items…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="search-input"
+            style={{ marginBottom: 0, width: isMobile ? '100%' : 180 }}
+          />
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[null, ...tiers].map((t) => (
+              <button
+                key={t ?? 'all'}
+                onClick={() => setTierFilter(t)}
+                style={{
+                  background: tierFilter === t ? '#1e1440' : 'none',
+                  border: `1px solid ${tierFilter === t ? '#7c3aed' : '#2e2e5a'}`,
+                  borderRadius: 4, padding: '3px 8px',
+                  color: tierFilter === t ? '#a78bfa' : '#6b6b8a',
+                  fontSize: 11, cursor: 'pointer',
+                }}
+              >
+                {t === null ? 'All' : `T${t}`}
+              </button>
+            ))}
+          </div>
+          <div style={{ width: 1, height: 16, background: '#1e1e3a' }} />
+          <select
+            value={catFilter}
+            onChange={(e) => setCatFilter(e.target.value)}
+            className="select-input"
+            style={{ fontSize: 11, padding: '3px 8px' }}
+          >
+            <option value="">All categories</option>
+            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
       </div>
 
-      {err && <p style={{ color: '#f87171', marginBottom: 16, fontSize: 13 }}>{err}</p>}
+      {err && <p style={{ color: '#f87171', marginBottom: 12, fontSize: 13 }}>{err}</p>}
 
       {loading ? (
         <p style={{ color: '#6b6b8a', textAlign: 'center', marginTop: 60 }}>Loading…</p>
       ) : (
-        <>
-          {trackedItems.length > 0 && (
-            <>
-              <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
-                Being tracked
-              </div>
-              <div style={gridStyle}>
-                {trackedItems.map((item) => <ItemCard key={item.matId} item={item} />)}
-              </div>
-              <div style={{ borderTop: '1px solid #1e1e3a', margin: '24px 0 20px' }} />
-            </>
-          )}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? '1fr' : '1fr 260px',
+          gap: 20,
+          alignItems: 'start',
+        }}>
 
-          {untrackedItems.length > 0 && (
-            <>
-              <div style={{ color: '#6b6b8a', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
-                Not yet tracked
+          {/* ── Main item sections ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+            {pinnedItems.length > 0 && (
+              <div>
+                <SectionLabel icon="★" label="Pinned" count={pinnedItems.length} />
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8, marginTop: 8 }}>
+                  {pinnedItems.map((item) => <ItemCard key={item.matId} item={item} />)}
+                </div>
               </div>
-              <div style={gridStyle}>
-                {untrackedItems.map((item) => <ItemCard key={item.matId} item={item} />)}
+            )}
+
+            {trackedItems.length > 0 && (
+              <div>
+                <SectionLabel label="Tracked" count={trackedItems.length} />
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8, marginTop: 8 }}>
+                  {trackedItems.map((item) => <ItemCard key={item.matId} item={item} />)}
+                </div>
               </div>
-            </>
-          )}
-        </>
+            )}
+
+            {untrackedItems.length > 0 && (
+              <div>
+                <SectionLabel label="Untracked" count={untrackedItems.length} />
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8, marginTop: 8 }}>
+                  {untrackedItems.map((item) => <ItemCard key={item.matId} item={item} />)}
+                </div>
+              </div>
+            )}
+
+            {pinnedItems.length === 0 && trackedItems.length === 0 && untrackedItems.length === 0 && (
+              <div style={{ padding: '32px 16px', color: '#4a4a6a', fontSize: 13, textAlign: 'center' }}>
+                No items match your search.
+              </div>
+            )}
+          </div>
+
+          {/* ── Sidebar ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+            <SidebarCard title="Today's Top Movers" subtitle="Biggest % price change · calendar day">
+              {!sidebar ? (
+                <div style={{ padding: '14px 12px', color: '#3a3a55', fontSize: 12 }}>Loading…</div>
+              ) : sidebar.movers.length === 0 ? (
+                <div style={{ padding: '14px 12px', color: '#3a3a55', fontSize: 12 }}>No price changes recorded yet today.</div>
+              ) : sidebar.movers.map((m) => {
+                const pct = Number(m.pct_change);
+                return (
+                  <div
+                    key={m.mat_id}
+                    onClick={() => navigate(`/${toSlug(m.mat_name)}`)}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = '#0f0f28'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', cursor: 'pointer', transition: 'background 0.1s' }}
+                  >
+                    <svg width="18" height="18" style={{ flexShrink: 0 }}>
+                      <use href={`${spriteUrl}#${toIconId(m.mat_name)}`} width="18" height="18" />
+                    </svg>
+                    <span style={{ flex: 1, fontSize: 12, color: '#b0b0cc', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {m.mat_name}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: pct > 0 ? '#34d399' : '#f87171', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                      {pct > 0 ? '+' : ''}{pct}%
+                    </span>
+                  </div>
+                );
+              })}
+            </SidebarCard>
+
+            <SidebarCard title="Recently Untracked" subtitle="Items no longer being monitored">
+              {!sidebar ? (
+                <div style={{ padding: '14px 12px', color: '#3a3a55', fontSize: 12 }}>Loading…</div>
+              ) : sidebar.recentlyUntracked.length === 0 ? (
+                <div style={{ padding: '14px 12px', color: '#3a3a55', fontSize: 12 }}>Nothing recently untracked.</div>
+              ) : sidebar.recentlyUntracked.map((u) => (
+                <div
+                  key={u.mat_id}
+                  onClick={() => navigate(`/${toSlug(u.mat_name)}`)}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#0f0f28'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', cursor: 'pointer', transition: 'background 0.1s' }}
+                >
+                  <svg width="18" height="18" style={{ flexShrink: 0, filter: 'grayscale(1)', opacity: 0.4 }}>
+                    <use href={`${spriteUrl}#${toIconId(u.mat_name)}`} width="18" height="18" />
+                  </svg>
+                  <span style={{ flex: 1, fontSize: 12, color: '#5a5a7a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {u.mat_name}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#3a3a52', flexShrink: 0 }}>{relTime(u.created_at)}</span>
+                </div>
+              ))}
+            </SidebarCard>
+
+          </div>
+        </div>
       )}
-
     </div>
   );
 }

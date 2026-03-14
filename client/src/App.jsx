@@ -16,6 +16,7 @@ import DevCompanySearch from './components/DevCompanySearch';
 import ErrorBoundary from './components/ErrorBoundary';
 import KeyInfoModal from './components/KeyInfoModal';
 import { api } from './api';
+import { toSlug } from './utils/slug';
 
 // ── Poll countdown ────────────────────────────────────────────────────────────
 
@@ -360,7 +361,9 @@ function NotificationBell() {
 
   function handleNotifClick(n) {
     setOpen(false);
-    if (n.contract_id) {
+    if (n.type === 'price_alert') {
+      navigate(`/${toSlug(n.mat_name)}`);
+    } else if (n.contract_id) {
       navigate(`/contracts?focus=${n.contract_id}`);
     } else {
       navigate('/contracts');
@@ -416,10 +419,16 @@ function NotificationBell() {
               }}>
                 <div
                   onClick={() => handleNotifClick(n)}
-                  style={{ flex: 1, cursor: n.contract_id ? 'pointer' : 'default' }}
+                  style={{ flex: 1, cursor: (n.type === 'price_alert' || n.contract_id) ? 'pointer' : 'default' }}
                 >
                   <div style={{ fontSize: 13, color: '#c8c8e8', lineHeight: 1.4 }}>
-                    {n.type === 'untracked' ? (
+                    {n.type === 'price_alert' ? (
+                      <>
+                        <span style={{ color: '#fbbf24', fontWeight: 600 }}>{n.mat_name}</span>
+                        {' hit your price alert of '}
+                        <span style={{ color: '#34d399', fontWeight: 600 }}>{n.from_company}</span>
+                      </>
+                    ) : n.type === 'untracked' ? (
                       <>
                         <span style={{ color: '#f87171', fontWeight: 600 }}>{n.mat_name}</span>
                         {' was untracked'}
@@ -552,6 +561,24 @@ function TabTitle() {
   return null;
 }
 
+// ── Page view tracker ────────────────────────────────────────────────────────
+
+function PageTracker() {
+  const location = useLocation();
+  useEffect(() => {
+    const p = location.pathname;
+    let page;
+    if (p === '/')            page = 'home';
+    else if (p === '/contracts') page = 'contracts';
+    else if (p === '/company')   page = 'company';
+    else if (p === '/login')     page = 'login';
+    else if (p === '/admin')     page = 'admin';
+    else                         page = `item:${p.slice(1)}`; // item slug
+    api.trackPage(page);
+  }, [location.pathname]);
+  return null;
+}
+
 // ── Route guard ───────────────────────────────────────────────────────────────
 
 function RequireAuth({ children }) {
@@ -572,6 +599,7 @@ export default function App() {
         <NotificationsProvider>
         <BrowserRouter>
           <TabTitle />
+          <PageTracker />
           <Nav />
           <main>
             <ErrorBoundary>
