@@ -15,26 +15,26 @@ router.get('/sidebar', async (req, res, next) => {
   try {
     const [moversRes, untrackedRes] = await Promise.all([
       pool.query(`
-        WITH first_today AS (
-          SELECT DISTINCT ON (mat_id) mat_id, current_price AS open_price
+        WITH yesterday_avg AS (
+          SELECT mat_id, ROUND(AVG(current_price)) AS avg_price
           FROM tracker_snapshots
-          WHERE recorded_at >= DATE_TRUNC('day', NOW())
+          WHERE recorded_at >= DATE_TRUNC('day', NOW() - INTERVAL '1 day')
+            AND recorded_at <  DATE_TRUNC('day', NOW())
             AND current_price > 0
-          ORDER BY mat_id, recorded_at ASC
+          GROUP BY mat_id
         ),
-        last_today AS (
-          SELECT DISTINCT ON (mat_id) mat_id, mat_name, current_price AS close_price
+        current_price AS (
+          SELECT DISTINCT ON (mat_id) mat_id, mat_name, current_price
           FROM tracker_snapshots
-          WHERE recorded_at >= DATE_TRUNC('day', NOW())
-            AND current_price > 0
+          WHERE current_price > 0
           ORDER BY mat_id, recorded_at DESC
         )
-        SELECT l.mat_id, l.mat_name, f.open_price, l.close_price,
-          ROUND(((l.close_price - f.open_price)::numeric / f.open_price) * 100, 1) AS pct_change
-        FROM first_today f
-        JOIN last_today l ON l.mat_id = f.mat_id
-        WHERE f.open_price <> l.close_price
-        ORDER BY ABS((l.close_price - f.open_price)::numeric / f.open_price) DESC
+        SELECT c.mat_id, c.mat_name, y.avg_price AS open_price, c.current_price AS close_price,
+          ROUND(((c.current_price - y.avg_price)::numeric / y.avg_price) * 100, 1) AS pct_change
+        FROM current_price c
+        JOIN yesterday_avg y ON y.mat_id = c.mat_id
+        WHERE y.avg_price <> c.current_price
+        ORDER BY ABS((c.current_price - y.avg_price)::numeric / y.avg_price) DESC
         LIMIT 10
       `),
       pool.query(`

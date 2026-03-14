@@ -251,7 +251,7 @@ export default function ItemGrid() {
           {/* ── Sidebar ── */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-            <SidebarCard title="Today's Top Movers" subtitle="Biggest % price change · calendar day">
+            <SidebarCard title="Today's Top Movers" subtitle="Current price vs yesterday's average">
               {!sidebar ? (
                 <div style={{ padding: '14px 12px', color: '#3a3a55', fontSize: 12 }}>Loading…</div>
               ) : sidebar.movers.length === 0 ? (
