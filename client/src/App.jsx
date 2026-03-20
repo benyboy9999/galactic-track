@@ -29,7 +29,7 @@ function TrackerCountdown() {
       try { setStatus(await api.trackerStatus()); } catch { /* server starting */ }
     };
     fetchStatus();
-    const si = setInterval(fetchStatus, 3_000);
+    const si = setInterval(fetchStatus, 60_000);
     return () => clearInterval(si);
   }, []);
 
