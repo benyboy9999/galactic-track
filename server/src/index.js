@@ -107,14 +107,11 @@ async function expireContracts() {
 
 async function pruneAll() {
   try {
-    // tracker_orders: keep only the 2 most recent snapshots per item — everything older is never read
+    // tracker_orders: keep only snapshots from the last 5 minutes (covers the 2 most recent per item)
     const ord = await pool.query(
       `DELETE FROM tracker_orders
        WHERE snapshot_id NOT IN (
-         SELECT id FROM (
-           SELECT id, ROW_NUMBER() OVER (PARTITION BY mat_id ORDER BY recorded_at DESC) AS rn
-           FROM tracker_snapshots
-         ) ranked WHERE rn <= 2
+         SELECT id FROM tracker_snapshots WHERE recorded_at > NOW() - INTERVAL '5 minutes'
        )`
     );
     if (ord.rowCount > 0) console.log(`Pruned ${ord.rowCount} old tracker_orders row(s)`);
@@ -124,6 +121,15 @@ async function pruneAll() {
       `DELETE FROM tracker_snapshots WHERE recorded_at < NOW() - INTERVAL '30 days'`
     );
     if (snp.rowCount > 0) console.log(`Pruned ${snp.rowCount} old tracker_snapshots row(s)`);
+
+    // tracker_snapshots: compress history older than 24h to 15-minute resolution
+    const cmp = await pool.query(
+      `DELETE FROM tracker_snapshots
+       WHERE recorded_at < NOW() - INTERVAL '1 day'
+         AND recorded_at >= NOW() - INTERVAL '30 days'
+         AND EXTRACT(MINUTE FROM recorded_at)::int % 15 <> 0`
+    );
+    if (cmp.rowCount > 0) console.log(`Compressed ${cmp.rowCount} old tracker_snapshots row(s) to 15-min resolution`);
 
     // tracker_events: keep 30 days
     const evt = await pool.query(
