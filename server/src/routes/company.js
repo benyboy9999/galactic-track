@@ -293,7 +293,10 @@ router.get('/summary', requireAuth, async (req, res, next) => {
       pool.query(evtSql, evtParams),
       pool.query(
         `WITH company_mats AS (
-           SELECT DISTINCT mat_id FROM tracker_orders WHERE company_id = $1
+           SELECT DISTINCT ts.mat_id
+           FROM tracker_orders o
+           JOIN tracker_snapshots ts ON ts.id = o.snapshot_id
+           WHERE o.company_id = $1
          ),
          latest_snaps AS (
            SELECT DISTINCT ON (ts.mat_id) ts.id, ts.mat_id
