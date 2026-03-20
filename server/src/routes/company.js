@@ -288,26 +288,31 @@ router.get('/summary', requireAuth, async (req, res, next) => {
         ORDER BY tc.qty_sold DESC`;
       evtParams = [companyId, hours];
     }
-    const evtRes = await pool.query(evtSql, evtParams);
-
-    // ── Current open orders (latest snapshot per tracked item) ──────────────
-    const listRes = await pool.query(
-      `SELECT
-         s.mat_id,
-         SUM(o.qty)::bigint  AS current_listed,
-         MIN(o.unit_price)   AS min_price,
-         MAX(o.unit_price)   AS max_price
-       FROM tracker_orders o
-       JOIN tracker_snapshots s ON s.id = o.snapshot_id
-       WHERE o.company_id = $1
-         AND s.id IN (
-           SELECT DISTINCT ON (mat_id) id
-           FROM tracker_snapshots
-           ORDER BY mat_id, recorded_at DESC
+    // Run event stats and current listings in parallel — they're independent
+    const [evtRes, listRes] = await Promise.all([
+      pool.query(evtSql, evtParams),
+      pool.query(
+        `WITH company_mats AS (
+           SELECT DISTINCT mat_id FROM tracker_orders WHERE company_id = $1
+         ),
+         latest_snaps AS (
+           SELECT DISTINCT ON (ts.mat_id) ts.id, ts.mat_id
+           FROM tracker_snapshots ts
+           WHERE ts.mat_id IN (SELECT mat_id FROM company_mats)
+           ORDER BY ts.mat_id, ts.recorded_at DESC
          )
-       GROUP BY s.mat_id`,
-      [companyId]
-    );
+         SELECT
+           ls.mat_id,
+           SUM(o.qty)::bigint AS current_listed,
+           MIN(o.unit_price)  AS min_price,
+           MAX(o.unit_price)  AS max_price
+         FROM tracker_orders o
+         JOIN latest_snaps ls ON ls.id = o.snapshot_id
+         WHERE o.company_id = $1
+         GROUP BY ls.mat_id`,
+        [companyId]
+      ),
+    ]);
 
     const listMap = new Map(listRes.rows.map((r) => [r.mat_id, r]));
 
@@ -414,15 +419,11 @@ router.get('/summary', requireAuth, async (req, res, next) => {
     let companyLogo = req.user.company_logo ?? null;
     let companyTag  = req.user.company_tag  ?? '';
     if (isDevOrAdmin && req.query.companyId) {
-      const nameRow = await pool.query(
-        `SELECT company_name FROM tracker_events WHERE company_id = $1 LIMIT 1`,
-        [companyId]
-      );
+      const [nameRow, userRow] = await Promise.all([
+        pool.query(`SELECT company_name FROM tracker_events WHERE company_id = $1 LIMIT 1`, [companyId]),
+        pool.query(`SELECT company_logo, company_tag FROM users WHERE company_id = $1 LIMIT 1`, [String(companyId)]),
+      ]);
       companyName = nameRow.rows[0]?.company_name ?? String(companyId);
-      const userRow = await pool.query(
-        `SELECT company_logo, company_tag FROM users WHERE company_id = $1 LIMIT 1`,
-        [String(companyId)]
-      );
       companyLogo = userRow.rows[0]?.company_logo ?? null;
       companyTag  = userRow.rows[0]?.company_tag  ?? '';
     }

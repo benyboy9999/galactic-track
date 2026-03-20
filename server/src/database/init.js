@@ -39,6 +39,7 @@ const schema = `
 
   CREATE INDEX IF NOT EXISTS idx_tsnap_mat_id ON tracker_snapshots(mat_id);
   CREATE INDEX IF NOT EXISTS idx_tsnap_recorded_at ON tracker_snapshots(recorded_at);
+  CREATE INDEX IF NOT EXISTS idx_tsnap_mat_recorded ON tracker_snapshots(mat_id, recorded_at DESC);
 
   CREATE TABLE IF NOT EXISTS tracker_orders (
     id          SERIAL PRIMARY KEY,
