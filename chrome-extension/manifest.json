@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Galactic Track Extension",
+  "version": "0.1",
+  "description": "Additional features from Galactic-Track.com for Galactic Tycoons",
+
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://g2.galactictycoons.com/exchange/*",
+    "https://api.g2.galactictycoons.com/public/company*",
+    "https://galactic-track.com/api/trade/*"
+  ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Guild Prices",
+    "default_icon": {
+      "16": "GTE16.png",
+      "48": "GTE48.png",
+      "128": "GTE128.png"
+    }
+  },
+
+  "icons": {
+    "16": "GTE16.png",
+    "48": "GTE48.png",
+    "128": "GTE128.png"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://g2.galactictycoons.com/exchange/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

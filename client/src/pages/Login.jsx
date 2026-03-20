@@ -37,7 +37,7 @@ export default function Login() {
     setLoading(true);
     try {
       const data = await api.login(apiKey.trim());
-      login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal, data.id, data.role);
+      login(data.sessionToken);
       navigate('/', { replace: true });
     } catch (e) {
       setErr(e.message);
@@ -51,7 +51,7 @@ export default function Login() {
     setErr('');
     try {
       const data = await api.devLogin();
-      login(data.sessionToken, data.companyName, data.creditsUsed, data.creditsTotal, data.id);
+      login(data.sessionToken);
       navigate('/', { replace: true });
     } catch (e) {
       setErr(e.message);

@@ -12,6 +12,7 @@ import Login from './pages/Login';
 import Admin from './pages/Admin';
 import Contracts from './pages/Contracts';
 import Company from './pages/Company';
+import Trade from './pages/Trade';
 import DevCompanySearch from './components/DevCompanySearch';
 import ErrorBoundary from './components/ErrorBoundary';
 import KeyInfoModal from './components/KeyInfoModal';
@@ -466,7 +467,7 @@ function NotificationBell() {
 // ── Nav ───────────────────────────────────────────────────────────────────────
 
 function Nav() {
-  const { user } = useAuth();
+  const { user, tradeAccess } = useAuth();
   const location  = useLocation();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -497,6 +498,7 @@ function Nav() {
     ['/', 'Tracker'],
     ['/company', 'Company'],
     ['/contracts', 'Marketplace'],
+    ...(tradeAccess ? [['/trade', 'Trade']] : []),
     ...(user?.role === 'admin' ? [['/admin', 'Admin']] : []),
   ];
 
@@ -609,6 +611,7 @@ export default function App() {
                 <Route path="/admin" element={<Admin />} />
                 <Route path="/contracts" element={<RequireAuth><Contracts /></RequireAuth>} />
                 <Route path="/company"   element={<RequireAuth><Company /></RequireAuth>} />
+                <Route path="/trade"     element={<RequireAuth><Trade /></RequireAuth>} />
                 <Route path="/:slug" element={<RequireAuth><ItemDetail /></RequireAuth>} />
                 <Route path="/" element={<RequireAuth><ItemGrid /></RequireAuth>} />
               </Routes>
