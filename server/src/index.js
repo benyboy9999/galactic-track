@@ -18,6 +18,7 @@ import { getRateLimitStatus, getCompanyDetail } from './services/gtApi.js';
 import { decryptApiKey } from './utils/apiKeyCrypto.js';
 import { optionalAuth } from './middleware/auth.js';
 import { startTracker } from './services/tracker.js';
+import { refreshSidebarCache } from './routes/tracker.js';
 import pool from './database/db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -153,6 +154,9 @@ app.listen(PORT, '0.0.0.0', () => {
   // Prune tracker tables: orders (keep 2 per item), snapshots + events (keep 30 days)
   pruneAll();
   setInterval(pruneAll, 6 * 60 * 60 * 1000);
+  // Pre-warm sidebar cache and refresh hourly
+  refreshSidebarCache();
+  setInterval(refreshSidebarCache, 60 * 60 * 1000);
   // Backfill logos for users with active contracts who don't have one yet
   backfillCompanyLogos();
 });
