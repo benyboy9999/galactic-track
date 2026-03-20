@@ -273,11 +273,12 @@ function onNavigate() {
   }
 }
 
-const _pushState = history.pushState.bind(history);
-history.pushState = function(...args) {
-  _pushState(...args);
+let _lastPath = location.pathname;
+setInterval(() => {
+  if (location.pathname === _lastPath) return;
+  _lastPath = location.pathname;
   onNavigate();
-};
+}, 500);
 
 window.addEventListener('popstate', onNavigate);
 
