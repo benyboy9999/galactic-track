@@ -4,3 +4,6 @@ server/.env
 *.sql
 ecosystem.config.cjs~
 server/sprite-cache.svg
+.DS_Store
+*.code-workspace
+*.zip

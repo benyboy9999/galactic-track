@@ -136,8 +136,9 @@ export const api = {
   deleteAlert:  (id)             => del(`/alerts/${id}`, true),
 
   // ── Trade ──────────────────────────────────────────────────────────────────
-  tradeAccess:   ()     => get('/trade/access', true),
-  tradeListings: ()     => get('/trade', true),
-  tradeAdd:      (body) => post('/trade', body, true),
-  tradeDelete:   (id)   => del(`/trade/${id}`, true),
+  tradeAccess:   ()          => get('/trade/access', true),
+  tradeListings: ()          => get('/trade', true),
+  tradeAdd:      (body)      => post('/trade', body, true),
+  tradeUpdate:   (id, body)  => patch(`/trade/${id}`, body, true),
+  tradeDelete:   (id)        => del(`/trade/${id}`, true),
 };
