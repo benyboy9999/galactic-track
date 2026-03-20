@@ -4,20 +4,34 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
+// In-memory cache of all distinct companies — refreshed every 30 minutes.
+// Avoids a full tracker_events table scan on every search keystroke.
+let companiesCache = null;
+let companiesCacheExpiry = 0;
+
+async function getCompanies() {
+  if (companiesCache && Date.now() < companiesCacheExpiry) return companiesCache;
+  const r = await pool.query(
+    `SELECT DISTINCT ON (company_id) company_id, company_name
+     FROM tracker_events
+     WHERE company_id IS NOT NULL
+     ORDER BY company_id, company_name ASC`
+  );
+  companiesCache = r.rows;
+  companiesCacheExpiry = Date.now() + 30 * 60 * 1000;
+  return companiesCache;
+}
+
 // GET /api/company/search?q=
 // Returns distinct companies seen in tracker_events matching the query.
 router.get('/search', requireAuth, async (req, res, next) => {
   try {
-    const q = (req.query.q ?? '').trim();
-    const r = await pool.query(
-      `SELECT DISTINCT ON (company_id) company_id, company_name
-       FROM tracker_events
-       WHERE company_name ILIKE $1 AND company_id IS NOT NULL
-       ORDER BY company_id, company_name ASC
-       LIMIT 15`,
-      [`%${q}%`]
-    );
-    res.json(r.rows);
+    const q = (req.query.q ?? '').trim().toLowerCase();
+    const all = await getCompanies();
+    const results = q
+      ? all.filter(c => c.company_name.toLowerCase().includes(q)).slice(0, 15)
+      : all.slice(0, 15);
+    res.json(results);
   } catch (err) { next(err); }
 });
 
