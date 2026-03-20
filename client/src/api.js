@@ -134,4 +134,10 @@ export const api = {
   getAlerts:    ()               => get('/alerts', true),
   createAlert:  (matId, targetPrice) => post('/alerts', { matId, targetPrice }, true),
   deleteAlert:  (id)             => del(`/alerts/${id}`, true),
+
+  // ── Trade ──────────────────────────────────────────────────────────────────
+  tradeAccess:   ()     => get('/trade/access', true),
+  tradeListings: ()     => get('/trade', true),
+  tradeAdd:      (body) => post('/trade', body, true),
+  tradeDelete:   (id)   => del(`/trade/${id}`, true),
 };

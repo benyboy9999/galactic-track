@@ -194,6 +194,27 @@ const schema = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_price_alerts_mat_id ON price_alerts(mat_id);
+
+  -- ── Guild Trade Board ─────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS trade_guild_access (
+    guild_tag  TEXT PRIMARY KEY,
+    added_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS trade_listings (
+    id           SERIAL PRIMARY KEY,
+    user_id      INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    company_id   TEXT NOT NULL,
+    company_name TEXT NOT NULL,
+    guild_tag    TEXT NOT NULL,
+    mat_id       INT NOT NULL,
+    mat_name     TEXT NOT NULL,
+    price_type   TEXT NOT NULL CHECK (price_type IN ('fixed', 'market_offset')),
+    price_value  INT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_tlist_guild_tag ON trade_listings(guild_tag);
+  CREATE INDEX IF NOT EXISTS idx_tlist_mat_id    ON trade_listings(mat_id);
 `;
 
 async function init() {
@@ -243,6 +264,29 @@ async function init() {
       )
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_price_alerts_mat_id ON price_alerts(mat_id)`);
+    // Migration: guild trade board
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trade_guild_access (
+        guild_tag  TEXT PRIMARY KEY,
+        added_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trade_listings (
+        id           SERIAL PRIMARY KEY,
+        user_id      INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        company_id   TEXT NOT NULL,
+        company_name TEXT NOT NULL,
+        guild_tag    TEXT NOT NULL,
+        mat_id       INT NOT NULL,
+        mat_name     TEXT NOT NULL,
+        price_type   TEXT NOT NULL CHECK (price_type IN ('fixed', 'market_offset')),
+        price_value  INT NOT NULL,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_tlist_guild_tag ON trade_listings(guild_tag)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_tlist_mat_id ON trade_listings(mat_id)`);
     console.log('Database schema initialized.');
   } finally {
     client.release();
