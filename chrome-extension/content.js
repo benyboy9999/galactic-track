@@ -239,7 +239,7 @@ async function fetchListings(gTag) {
 
 // ── Fetch prices + inject ─────────────────────────────────────────────────────
 
-async function run() {
+async function run(retries = 0) {
   removeInjection();
   if (tableObserver) { tableObserver.disconnect(); tableObserver = null; }
 
@@ -247,7 +247,11 @@ async function run() {
   if (!matId) return;
 
   const identity = await resolveIdentity();
-  if (!identity) return;
+  if (!identity) {
+    // Game Local API not ready yet — retry up to 3 times with increasing delay
+    if (retries < 3) setTimeout(() => run(retries + 1), 2000 * (retries + 1));
+    return;
+  }
   const { gTag } = identity;
 
   try {
