@@ -275,4 +275,6 @@ new MutationObserver(() => {
   }
 }).observe(document.body, { subtree: true, childList: true });
 
+// Pre-cache identity on any game page so it's ready before the user navigates to an exchange
+resolveIdentity().catch(() => {});
 run();

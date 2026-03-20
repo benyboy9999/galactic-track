@@ -550,7 +550,6 @@ export default function Trade() {
         <form onSubmit={handleSubmit} style={{
           marginBottom: 20,
           background: '#0d0d1f', border: '1px solid #2a2a4a', borderRadius: 8,
-          overflow: 'hidden',
         }}>
           {/* Item row */}
           <div style={{ padding: '12px 14px', borderBottom: '1px solid #1a1a2e' }}>
@@ -641,7 +640,7 @@ export default function Trade() {
               <div style={{ fontSize: 11, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
                 Your Listings
               </div>
-              <div style={{ border: '1px solid #1e1e3a', borderRadius: 7, overflow: 'hidden' }}>
+              <div style={{ border: '1px solid #1e1e3a', borderRadius: 7 }}>
                 {own.map((l, i) => (
                   <div key={l.id} style={{ borderBottom: i < own.length - 1 ? '1px solid #12122a' : 'none' }}>
                     {/* Listing header */}
