@@ -4,15 +4,28 @@ import { getTrackerStatus } from '../services/tracker.js';
 
 const router = Router();
 
+// Sidebar cache — expires at midnight UTC (yesterday's avg doesn't change)
+let sidebarCache = null;
+let sidebarCacheExpiry = 0;
+function getMidnightUTC() {
+  const now = new Date();
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+}
+
 // GET /api/tracker/status
 router.get('/status', (req, res) => {
   res.json(getTrackerStatus());
 });
 
 // GET /api/tracker/sidebar
-// Top price movers today + recently untracked items
-router.get('/sidebar', async (req, res, next) => {
+// Top price movers (current vs yesterday avg) + recently untracked items
+// Movers are cached until midnight UTC — yesterday's avg doesn't change within a day
+router.get('/sidebar', async (_req, res, next) => {
   try {
+    if (sidebarCache && Date.now() < sidebarCacheExpiry) {
+      return res.json(sidebarCache);
+    }
+
     const [moversRes, untrackedRes] = await Promise.all([
       pool.query(`
         WITH yesterday_avg AS (
@@ -53,7 +66,9 @@ router.get('/sidebar', async (req, res, next) => {
       `),
     ]);
 
-    res.json({ movers: moversRes.rows, recentlyUntracked: untrackedRes.rows });
+    sidebarCache = { movers: moversRes.rows, recentlyUntracked: untrackedRes.rows };
+    sidebarCacheExpiry = getMidnightUTC();
+    res.json(sidebarCache);
   } catch (err) { next(err); }
 });
 

@@ -109,13 +109,13 @@ async function saveSnapshot(client, matData, apiQtySold, apiQtySoldDate) {
 }
 
 async function saveEvents(client, events) {
-  for (const e of events) {
-    await client.query(
-      `INSERT INTO tracker_events(mat_id, order_id, company_id, company_name, unit_price, qty_change, event_type, snapshot_a_id, snapshot_b_id)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [e.matId, e.orderId, e.companyId, e.companyName, e.unitPrice, e.qtyChange, e.eventType, e.snapshotAId ?? null, e.snapshotBId]
-    );
-  }
+  if (!events.length) return;
+  const vals   = events.map((_, i) => `($${i*9+1},$${i*9+2},$${i*9+3},$${i*9+4},$${i*9+5},$${i*9+6},$${i*9+7},$${i*9+8},$${i*9+9})`);
+  const params = events.flatMap((e) => [e.matId, e.orderId, e.companyId, e.companyName, e.unitPrice, e.qtyChange, e.eventType, e.snapshotAId ?? null, e.snapshotBId]);
+  await client.query(
+    `INSERT INTO tracker_events(mat_id, order_id, company_id, company_name, unit_price, qty_change, event_type, snapshot_a_id, snapshot_b_id) VALUES ${vals.join(',')}`,
+    params
+  );
 }
 
 // ── Diff logic ─────────────────────────────────────────────────────────────────
@@ -157,6 +157,16 @@ async function pollItem(item) {
   const todayHistory = priceHistory.find((h) => h.date === todayStr) ?? priceHistory[0] ?? null;
   const apiQtySold     = todayHistory?.qtySold ?? null;
   const apiQtySoldDate = todayHistory?.date    ?? null;
+
+  // Read-only aggregate — run before opening the transaction to keep it short
+  const qspSalesRes = await pool.query(
+    `SELECT COALESCE(SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+             THEN ABS(qty_change) ELSE 0 END), 0)::bigint AS sold
+     FROM tracker_events
+     WHERE mat_id = $1 AND recorded_at > NOW() - INTERVAL '6 hours'`,
+    [item.matId]
+  );
+  const hourly_rate = Number(qspSalesRes.rows[0].sold) / 6;
 
   const client = await pool.connect();
   try {
@@ -219,15 +229,6 @@ async function pollItem(item) {
     }
 
     // ── Quick sell price ──────────────────────────────────────────────────────
-    const qspSalesRes = await client.query(
-      `SELECT COALESCE(SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
-               THEN ABS(qty_change) ELSE 0 END), 0)::bigint AS sold
-       FROM tracker_events
-       WHERE mat_id = $1 AND recorded_at > NOW() - INTERVAL '6 hours'`,
-      [item.matId]
-    );
-    const hourly_rate = Number(qspSalesRes.rows[0].sold) / 6;
-
     if (hourly_rate > 0) {
       const priceMap = new Map();
       for (const o of data.orders ?? []) {

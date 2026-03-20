@@ -128,7 +128,7 @@ export const api = {
   trackerCompanyEvents:  (matId, company, hours = 24) => get(`/tracker/company-events/${matId}?company=${encodeURIComponent(company)}&hours=${hours}`),
 
   // ── Analytics ──────────────────────────────────────────────────────────────────
-  trackPage: (page) => post('/pageview', { page }, true).catch(() => {}),
+  trackPage: (page, userId = null) => post('/pageview', { page, userId }).catch(() => {}),
 
   // ── Price Alerts ───────────────────────────────────────────────────────────────
   getAlerts:    ()               => get('/alerts', true),

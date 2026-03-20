@@ -565,6 +565,7 @@ function TabTitle() {
 
 function PageTracker() {
   const location = useLocation();
+  const { user }  = useAuth();
   useEffect(() => {
     const p = location.pathname;
     let page;
@@ -574,7 +575,7 @@ function PageTracker() {
     else if (p === '/login')     page = 'login';
     else if (p === '/admin')     page = 'admin';
     else                         page = `item:${p.slice(1)}`; // item slug
-    api.trackPage(page);
+    api.trackPage(page, user?.id ?? null);
   }, [location.pathname]);
   return null;
 }

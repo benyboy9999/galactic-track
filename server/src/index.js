@@ -43,12 +43,13 @@ app.use('/api/alerts',    alertsRoutes);
 app.get('/api/health',    (req, res) => res.json({ ok: true }));
 app.get('/api/ratelimit', (req, res) => res.json(getRateLimitStatus()));
 
-// POST /api/pageview — fire-and-forget page analytics
-app.post('/api/pageview', optionalAuth, (req, res) => {
-  const page = String(req.body?.page ?? '').slice(0, 128);
+// POST /api/pageview — fire-and-forget page analytics (no auth lookup needed)
+app.post('/api/pageview', (req, res) => {
+  const page   = String(req.body?.page ?? '').slice(0, 128);
+  const userId = req.body?.userId ? Number(req.body.userId) : null;
   if (page) pool.query(
     `INSERT INTO page_views(page, user_id) VALUES($1, $2)`,
-    [page, req.user?.id ?? null]
+    [page, userId]
   ).catch(() => {});
   res.json({ ok: true });
 });
@@ -151,7 +152,7 @@ app.listen(PORT, '0.0.0.0', () => {
   setInterval(expireContracts, 6 * 60 * 60 * 1000);
   // Prune tracker tables: orders (keep 2 per item), snapshots + events (keep 30 days)
   pruneAll();
-  setInterval(pruneAll, 60 * 60 * 1000);
+  setInterval(pruneAll, 6 * 60 * 60 * 1000);
   // Backfill logos for users with active contracts who don't have one yet
   backfillCompanyLogos();
 });
