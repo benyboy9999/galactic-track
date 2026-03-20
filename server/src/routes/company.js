@@ -185,8 +185,8 @@ router.get('/summary', requireAuth, async (req, res, next) => {
                           AND te.recorded_at >= $2::date - INTERVAL '1 day' AND te.recorded_at < $2::date
                      THEN ABS(qty_change) ELSE 0 END)::bigint AS prev_total_sold
           FROM tracker_events te
-          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
-          WHERE te.recorded_at >= $2::date - INTERVAL '1 day' AND te.recorded_at < $2::date + INTERVAL '1 day'
+          WHERE te.mat_id IN (SELECT mat_id FROM this_co)
+            AND te.recorded_at >= $2::date - INTERVAL '1 day' AND te.recorded_at < $2::date + INTERVAL '1 day'
           GROUP BY te.mat_id
         ),
         company_ranks AS (
@@ -199,8 +199,8 @@ router.get('/summary', requireAuth, async (req, res, next) => {
                                 THEN ABS(qty_change) ELSE 0 END) DESC
             ) AS rank
           FROM tracker_events te
-          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
-          WHERE te.recorded_at >= $2::date AND te.recorded_at < $2::date + INTERVAL '1 day'
+          WHERE te.mat_id IN (SELECT mat_id FROM this_co)
+            AND te.recorded_at >= $2::date AND te.recorded_at < $2::date + INTERVAL '1 day'
           GROUP BY te.mat_id, te.company_id
         )
         SELECT
@@ -257,8 +257,8 @@ router.get('/summary', requireAuth, async (req, res, next) => {
                           AND te.recorded_at <= NOW() - ($2 || ' hours')::interval
                      THEN ABS(qty_change) ELSE 0 END)::bigint AS prev_total_sold
           FROM tracker_events te
-          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
-          WHERE te.recorded_at > NOW() - ($2::int * 2 || ' hours')::interval
+          WHERE te.mat_id IN (SELECT mat_id FROM this_co)
+            AND te.recorded_at > NOW() - ($2::int * 2 || ' hours')::interval
           GROUP BY te.mat_id
         ),
         company_ranks AS (
@@ -271,8 +271,8 @@ router.get('/summary', requireAuth, async (req, res, next) => {
                                 THEN ABS(qty_change) ELSE 0 END) DESC
             ) AS rank
           FROM tracker_events te
-          JOIN tracked_items ti ON ti.mat_id = te.mat_id AND ti.active = TRUE
-          WHERE te.recorded_at > NOW() - ($2 || ' hours')::interval
+          WHERE te.mat_id IN (SELECT mat_id FROM this_co)
+            AND te.recorded_at > NOW() - ($2 || ' hours')::interval
           GROUP BY te.mat_id, te.company_id
         )
         SELECT
