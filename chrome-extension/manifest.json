@@ -6,7 +6,7 @@
 
   "permissions": ["storage"],
   "host_permissions": [
-    "https://g2.galactictycoons.com/exchange/*",
+    "https://g2.galactictycoons.com/*",
     "https://api.g2.galactictycoons.com/public/company*",
     "https://galactic-track.com/api/trade/*"
   ],
@@ -29,7 +29,7 @@
 
   "content_scripts": [
     {
-      "matches": ["https://g2.galactictycoons.com/exchange/*"],
+      "matches": ["https://g2.galactictycoons.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
