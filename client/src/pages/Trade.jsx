@@ -73,15 +73,10 @@ function relTime(iso) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function buildLocation(atExchange, planet) {
-  if (atExchange && planet) return `Exchange Station, ${planet}`;
-  if (atExchange)           return 'Exchange Station';
-  return planet;
-}
 
 const DEFAULT_LOC_FORM = {
   priceType: 'fixed', priceRaw: '', priceErr: '',
-  stockLevel: 'high', atExchange: true, planet: '', planetSearch: '',
+  stockLevel: 'high', planet: 'Exchange Station', planetSearch: 'Exchange Station',
 };
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
@@ -165,52 +160,41 @@ function ItemSearch({ items, onSelect }) {
   );
 }
 
-function LocationPicker({ planets, atExchange, setAtExchange, planet, setPlanet, planetSearch, setPlanetSearch }) {
+function LocationPicker({ planets, planet, setPlanet, planetSearch, setPlanetSearch }) {
   const [focused, setFocused] = useState(false);
   return (
-    <div>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 6 }}>
-        <input
-          type="checkbox" checked={atExchange} onChange={(e) => setAtExchange(e.target.checked)}
-          style={{ accentColor: '#7c3aed', width: 14, height: 14 }}
-        />
-        <span style={{ fontSize: 12, color: atExchange ? '#e0e0ff' : '#6b6b8a' }}>Exchange Station</span>
-      </label>
-      <div style={{ position: 'relative' }}>
-        <input
-          type="text" value={planetSearch} placeholder="+ Add a planet (optional)"
-          onChange={(e) => { setPlanetSearch(e.target.value); setPlanet(''); }}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setTimeout(() => setFocused(false), 150)}
-          style={{
-            width: '100%', boxSizing: 'border-box', background: '#0d0d1f',
-            border: `1px solid ${planet ? '#4c1d95' : '#2a2a4a'}`, borderRadius: 5,
-            padding: '7px 10px', color: '#e0e0ff', fontSize: 12, outline: 'none',
-          }}
-        />
-        {focused && planetSearch && !planet && (() => {
-          const q = planetSearch.toLowerCase();
-          const matches = planets.filter((p) => p !== 'Exchange Station' && p.toLowerCase().includes(q)).slice(0, 12);
-          return matches.length > 0 ? (
-            <div style={{
-              position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
-              background: '#0d0d1f', border: '1px solid #2a2a4a', borderRadius: 5,
-              marginTop: 2, maxHeight: 180, overflowY: 'auto',
-            }}>
-              {matches.map((p) => (
-                <div key={p} onMouseDown={() => { setPlanet(p); setPlanetSearch(p); }}
-                  style={{ padding: '7px 10px', fontSize: 12, color: '#c4c4e0', cursor: 'pointer' }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = '#1e1e3a'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                >{p}</div>
-              ))}
-            </div>
-          ) : null;
-        })()}
-      </div>
-      {!atExchange && !planet && (
-        <p style={{ margin: '4px 0 0', fontSize: 11, color: '#f87171' }}>Select Exchange Station or a planet</p>
-      )}
+    <div style={{ position: 'relative' }}>
+      <input
+        type="text" value={planetSearch} placeholder="Search location…"
+        onChange={(e) => { setPlanetSearch(e.target.value); setPlanet(''); }}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setTimeout(() => setFocused(false), 150)}
+        style={{
+          width: '100%', boxSizing: 'border-box', background: '#0d0d1f',
+          border: `1px solid ${planet ? '#4c1d95' : '#2a2a4a'}`, borderRadius: 5,
+          padding: '7px 10px', color: '#e0e0ff', fontSize: 12, outline: 'none',
+        }}
+      />
+      {focused && !planet && (() => {
+        const q = planetSearch.toLowerCase();
+        const matches = planets.filter((p) => p.toLowerCase().includes(q)).slice(0, 12);
+        return matches.length > 0 ? (
+          <div style={{
+            position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+            background: '#0d0d1f', border: '1px solid #2a2a4a', borderRadius: 5,
+            marginTop: 2, maxHeight: 180, overflowY: 'auto',
+          }}>
+            {matches.map((p) => (
+              <div key={p} onMouseDown={() => { setPlanet(p); setPlanetSearch(p); }}
+                style={{ padding: '7px 10px', fontSize: 12, color: '#c4c4e0', cursor: 'pointer' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#1e1e3a'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              >{p}</div>
+            ))}
+          </div>
+        ) : null;
+      })()}
+      {!planet && <p style={{ margin: '4px 0 0', fontSize: 11, color: '#f87171' }}>Select a location</p>}
     </div>
   );
 }
@@ -263,7 +247,6 @@ function LocationForm({ form, setForm, planets, onSubmit, onCancel, submitting, 
         <div style={{ fontSize: 10, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>Location</div>
         <LocationPicker
           planets={planets}
-          atExchange={form.atExchange} setAtExchange={(v) => setForm((f) => ({ ...f, atExchange: v }))}
           planet={form.planet}         setPlanet={(v) => setForm((f) => ({ ...f, planet: v }))}
           planetSearch={form.planetSearch} setPlanetSearch={(v) => setForm((f) => ({ ...f, planetSearch: v }))}
         />
@@ -412,7 +395,7 @@ export default function Trade() {
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
   function parseLocForm(form) {
-    const { priceType, priceRaw, stockLevel, atExchange, planet } = form;
+    const { priceType, priceRaw, stockLevel, planet } = form;
     let price_value = 0;
     if (priceType === 'fixed') {
       if (!/^\d+$/.test(priceRaw.trim())) return { err: 'Enter a whole number' };
@@ -421,9 +404,8 @@ export default function Trade() {
       if (!/^\d+$/.test(priceRaw.trim())) return { err: 'Enter the offset e.g. 1' };
       price_value = -parseInt(priceRaw.trim(), 10);
     }
-    const location = buildLocation(atExchange, planet);
-    if (!location) return { err: 'Select a location' };
-    return { price_type: priceType, price_value, stock_level: stockLevel, location };
+    if (!planet) return { err: 'Select a location' };
+    return { price_type: priceType, price_value, stock_level: stockLevel, location: planet };
   }
 
   // ── Listing CRUD ─────────────────────────────────────────────────────────────
@@ -486,14 +468,8 @@ export default function Trade() {
     let priceRaw = '';
     if (loc.price_type === 'fixed') priceRaw = String(loc.price_value);
     else if (loc.price_type === 'market_offset') priceRaw = String(Math.abs(loc.price_value));
-
-    let atExchange = false, planet = '', planetSearch = '';
-    if (loc.location) {
-      if (loc.location.startsWith('Exchange Station')) atExchange = true;
-      const rest = loc.location.replace('Exchange Station, ', '').replace('Exchange Station', '').trim();
-      if (rest) { planet = rest; planetSearch = rest; }
-    }
-    setLocForm({ priceType: loc.price_type, priceRaw, priceErr: '', stockLevel: loc.stock_level || 'high', atExchange, planet, planetSearch });
+    const planet = loc.location || '';
+    setLocForm({ priceType: loc.price_type, priceRaw, priceErr: '', stockLevel: loc.stock_level || 'high', planet, planetSearch: planet });
     setEditingLoc({ listingId, locId: loc.id });
     setAddingLocListingId(null);
   }
