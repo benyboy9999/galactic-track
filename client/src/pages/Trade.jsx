@@ -6,7 +6,7 @@ import { toIconId } from '../utils/materialIcon';
 
 const SPRITE_URL = '/api/gamedata/sprite';
 
-// ── Company logo decoder (same as Contracts.jsx) ──────────────────────────────
+// ── Company logo decoder ───────────────────────────────────────────────────────
 
 const LOGO_PALETTE = [
   '#db1a1a', '#c34b22', '#f68055', '#f2740d', '#f2ad0d',
@@ -52,15 +52,15 @@ function CompanyLogo({ ic, size = 18 }) {
   );
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
-const STOCK_LABELS = { high: 'High',  low: 'Low', to_order: 'To Order' };
+const STOCK_LABELS = { high: 'High', low: 'Low', to_order: 'To Order' };
 const STOCK_COLORS = { high: '#22c55e', low: '#f59e0b', to_order: '#a78bfa' };
 
 function fmtPrice(type, value) {
-  if (type === 'fixed')         return Number(value).toLocaleString();
-  if (type === 'average')       return 'Avg';
-  return `Market ${value}`;
+  if (type === 'fixed')   return Number(value).toLocaleString();
+  if (type === 'average') return 'Avg';
+  return `Market ${Number(value)}`;
 }
 
 function relTime(iso) {
@@ -73,15 +73,18 @@ function relTime(iso) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// ── Location helpers (transplanted from Contracts.jsx) ────────────────────────
-
 function buildLocation(atExchange, planet) {
   if (atExchange && planet) return `Exchange Station, ${planet}`;
   if (atExchange)           return 'Exchange Station';
   return planet;
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+const DEFAULT_LOC_FORM = {
+  priceType: 'fixed', priceRaw: '', priceErr: '',
+  stockLevel: 'high', atExchange: true, planet: '', planetSearch: '',
+};
+
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
 function ToggleGroup({ options, value, onChange }) {
   return (
@@ -212,7 +215,82 @@ function LocationPicker({ planets, atExchange, setAtExchange, planet, setPlanet,
   );
 }
 
-// ── Listing card (guild members) ──────────────────────────────────────────────
+// ── Location form (shared between add and edit) ────────────────────────────────
+
+function LocationForm({ form, setForm, planets, onSubmit, onCancel, submitting, label }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 10,
+      padding: '10px 12px', background: '#0a0a1a',
+      borderTop: '1px solid #1a1a35',
+    }}>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {/* Price */}
+        <div style={{ flex: '2 1 160px', minWidth: 0 }}>
+          <div style={{ fontSize: 10, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>Price</div>
+          <ToggleGroup
+            options={PRICE_TYPE_OPTIONS}
+            value={form.priceType}
+            onChange={(v) => setForm((f) => ({ ...f, priceType: v, priceRaw: '', priceErr: '' }))}
+          />
+          {form.priceType !== 'average' && (
+            <input
+              value={form.priceRaw}
+              onChange={(e) => setForm((f) => ({ ...f, priceRaw: e.target.value, priceErr: '' }))}
+              placeholder={form.priceType === 'fixed' ? 'e.g. 1650' : 'e.g. 1 (for Market −1)'}
+              style={{
+                marginTop: 6, width: '100%', padding: '6px 8px',
+                background: '#0d0d1f',
+                border: `1px solid ${form.priceErr ? '#ef4444' : '#2a2a4a'}`,
+                borderRadius: 5, color: '#d8d8f0', fontSize: 12, outline: 'none', boxSizing: 'border-box',
+              }}
+            />
+          )}
+          {form.priceErr && <span style={{ fontSize: 11, color: '#ef4444' }}>{form.priceErr}</span>}
+        </div>
+        {/* Stock */}
+        <div style={{ flex: '1 1 140px', minWidth: 0 }}>
+          <div style={{ fontSize: 10, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>Stock</div>
+          <ToggleGroup
+            options={STOCK_OPTIONS}
+            value={form.stockLevel}
+            onChange={(v) => setForm((f) => ({ ...f, stockLevel: v }))}
+          />
+        </div>
+      </div>
+      {/* Location */}
+      <div>
+        <div style={{ fontSize: 10, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>Location</div>
+        <LocationPicker
+          planets={planets}
+          atExchange={form.atExchange} setAtExchange={(v) => setForm((f) => ({ ...f, atExchange: v }))}
+          planet={form.planet}         setPlanet={(v) => setForm((f) => ({ ...f, planet: v }))}
+          planetSearch={form.planetSearch} setPlanetSearch={(v) => setForm((f) => ({ ...f, planetSearch: v }))}
+        />
+      </div>
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{ background: 'none', border: 'none', color: '#6b6b8a', cursor: 'pointer', fontSize: 12, padding: '4px 8px' }}
+        >Cancel</button>
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={submitting}
+          style={{
+            padding: '6px 16px', background: '#3730a3', border: '1px solid #4f46e5',
+            borderRadius: 5, color: '#d8d8f0', fontSize: 12,
+            cursor: submitting ? 'default' : 'pointer', opacity: submitting ? 0.6 : 1,
+          }}
+        >{label}</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Guild listing card (read-only, all members) ───────────────────────────────
 
 function ListingCard({ listing }) {
   return (
@@ -240,22 +318,34 @@ function ListingCard({ listing }) {
         </span>
       </div>
 
-      {/* Price */}
-      <div style={{ fontSize: 22, fontWeight: 700, color: '#e2e8f0', letterSpacing: '-0.02em' }}>
-        {fmtPrice(listing.price_type, listing.price_value)}
-      </div>
-
-      {/* Stock + location */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-        {listing.stock_level && (
-          <span style={{ fontSize: 11, color: STOCK_COLORS[listing.stock_level] ?? '#b0b0cc' }}>
-            {STOCK_LABELS[listing.stock_level] ?? listing.stock_level} stock
-          </span>
-        )}
-        {listing.location && (
-          <span style={{ fontSize: 11, color: '#5a5a7a' }}>{listing.location}</span>
-        )}
-      </div>
+      {/* Locations */}
+      {listing.locations?.length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {listing.locations.map((loc, i) => (
+            <div key={loc.id ?? i} style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              paddingTop: i > 0 ? 5 : 0,
+              borderTop: i > 0 ? '1px solid #1a1a35' : 'none',
+            }}>
+              <span style={{ fontSize: i === 0 ? 18 : 14, fontWeight: 700, color: i === 0 ? '#e2e8f0' : '#a0a0c0', letterSpacing: '-0.01em' }}>
+                {fmtPrice(loc.price_type, loc.price_value)}
+              </span>
+              {loc.stock_level && (
+                <span style={{ fontSize: 11, color: STOCK_COLORS[loc.stock_level] ?? '#b0b0cc' }}>
+                  {STOCK_LABELS[loc.stock_level] ?? loc.stock_level}
+                </span>
+              )}
+              {loc.location && (
+                <span style={{ fontSize: 11, color: '#5a5a7a', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {loc.location}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span style={{ fontSize: 12, color: '#3a3a5a', fontStyle: 'italic' }}>No locations</span>
+      )}
 
       {/* Footer */}
       <div style={{ fontSize: 11, color: '#3a3a5a', marginTop: 'auto' }}>
@@ -265,7 +355,7 @@ function ListingCard({ listing }) {
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const PRICE_TYPE_OPTIONS = [
   { label: 'Fixed',     val: 'fixed' },
@@ -279,6 +369,8 @@ const STOCK_OPTIONS = [
   { label: 'To Order', val: 'to_order' },
 ];
 
+// ── Main component ─────────────────────────────────────────────────────────────
+
 export default function Trade() {
   const { user } = useAuth();
 
@@ -287,22 +379,18 @@ export default function Trade() {
   const [planets,    setPlanets]    = useState(['Exchange Station']);
   const [loading,    setLoading]    = useState(true);
   const [err,        setErr]        = useState('');
-  const [formOpen,   setFormOpen]   = useState(false);
 
-  // Form state
-  const [selItem,      setSelItem]      = useState(null);
-  const [priceType,    setPriceType]    = useState('fixed');
-  const [priceRaw,     setPriceRaw]     = useState('');
-  const [priceErr,     setPriceErr]     = useState('');
-  const [stockLevel,   setStockLevel]   = useState('high');
-  const [atExchange,   setAtExchange]   = useState(true);
-  const [planet,       setPlanet]       = useState('');
-  const [planetSearch, setPlanetSearch] = useState('');
-  const [submitting,   setSubmitting]   = useState(false);
-  const [submitErr,    setSubmitErr]    = useState('');
-  const [deletingId,   setDeletingId]   = useState(null);
-  const [editingId,    setEditingId]    = useState(null);
-  const [editForm,     setEditForm]     = useState({});
+  // Add-listing form
+  const [formOpen,   setFormOpen]   = useState(false);
+  const [selItem,    setSelItem]    = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitErr,  setSubmitErr]  = useState('');
+  const [deletingId, setDeletingId] = useState(null);
+
+  // Location add/edit
+  const [addingLocListingId, setAddingLocListingId] = useState(null); // listing id with open add form
+  const [editingLoc,         setEditingLoc]         = useState(null); // { listingId, locId }
+  const [locForm,            setLocForm]            = useState({ ...DEFAULT_LOC_FORM });
 
   useEffect(() => {
     Promise.all([api.tradeListings(), api.allItems(), api.gamedata()])
@@ -321,49 +409,39 @@ export default function Trade() {
       .finally(() => setLoading(false));
   }, []);
 
-  function resetForm() {
-    setSelItem(null);
-    setPriceType('fixed');
-    setPriceRaw('');
-    setPriceErr('');
-    setStockLevel('high');
-    setAtExchange(true);
-    setPlanet('');
-    setPlanetSearch('');
-    setSubmitErr('');
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  function parseLocForm(form) {
+    const { priceType, priceRaw, stockLevel, atExchange, planet } = form;
+    let price_value = 0;
+    if (priceType === 'fixed') {
+      if (!/^\d+$/.test(priceRaw.trim())) return { err: 'Enter a whole number' };
+      price_value = parseInt(priceRaw.trim(), 10);
+    } else if (priceType === 'market_offset') {
+      if (!/^\d+$/.test(priceRaw.trim())) return { err: 'Enter the offset e.g. 1' };
+      price_value = -parseInt(priceRaw.trim(), 10);
+    }
+    const location = buildLocation(atExchange, planet);
+    if (!location) return { err: 'Select a location' };
+    return { price_type: priceType, price_value, stock_level: stockLevel, location };
   }
+
+  // ── Listing CRUD ─────────────────────────────────────────────────────────────
 
   async function handleSubmit(e) {
     e.preventDefault();
-    setPriceErr('');
-    setSubmitErr('');
     if (!selItem) return setSubmitErr('Please select an item.');
-
-    let price_value = 0;
-    if (priceType === 'fixed') {
-      if (!/^\d+$/.test(priceRaw.trim())) { setPriceErr('Enter a whole number'); return; }
-      price_value = parseInt(priceRaw.trim(), 10);
-    } else if (priceType === 'market_offset') {
-      if (!/^\d+$/.test(priceRaw.trim())) { setPriceErr('Enter the offset number e.g. 1'); return; }
-      price_value = -parseInt(priceRaw.trim(), 10);
-    }
-
-    const location = buildLocation(atExchange, planet);
-    if (!location) return setSubmitErr('Select a location');
-
     setSubmitting(true);
     try {
-      const row = await api.tradeAdd({
-        mat_id:      selItem.matId,
-        mat_name:    selItem.matName,
-        price_type:  priceType,
-        price_value,
-        stock_level: stockLevel,
-        location,
-      });
+      const row = await api.tradeAdd({ mat_id: selItem.matId, mat_name: selItem.matName });
       setListings((prev) => [row, ...prev]);
-      resetForm();
+      setSelItem(null);
       setFormOpen(false);
+      setSubmitErr('');
+      // Auto-open add-location form for the new listing
+      setLocForm({ ...DEFAULT_LOC_FORM });
+      setAddingLocListingId(row.id);
+      setEditingLoc(null);
     } catch (e) {
       setSubmitErr(e.message);
     } finally {
@@ -373,6 +451,8 @@ export default function Trade() {
 
   async function handleDelete(id) {
     setDeletingId(id);
+    if (addingLocListingId === id) setAddingLocListingId(null);
+    if (editingLoc?.listingId === id) setEditingLoc(null);
     try {
       await api.tradeDelete(id);
       setListings((prev) => prev.filter((l) => l.id !== id));
@@ -383,49 +463,77 @@ export default function Trade() {
     }
   }
 
-  function startEdit(l) {
-    let priceRaw = '';
-    if (l.price_type === 'fixed') priceRaw = String(l.price_value);
-    else if (l.price_type === 'market_offset') priceRaw = String(Math.abs(l.price_value));
+  // ── Location CRUD ────────────────────────────────────────────────────────────
 
-    let atExchange = false, planet = '', planetSearch = '';
-    if (l.location) {
-      if (l.location.startsWith('Exchange Station')) atExchange = true;
-      const rest = l.location.replace('Exchange Station, ', '').replace('Exchange Station', '').trim();
-      if (rest) { planet = rest; planetSearch = rest; }
-    }
-    setEditForm({ priceType: l.price_type, priceRaw, priceErr: '', stockLevel: l.stock_level || 'high', atExchange, planet, planetSearch });
-    setEditingId(l.id);
-  }
-
-  async function handleUpdate(id) {
-    const { priceType, priceRaw, stockLevel, atExchange, planet } = editForm;
-    let price_value = 0;
-    if (priceType === 'fixed') {
-      if (!/^\d+$/.test(priceRaw.trim())) { setEditForm((f) => ({ ...f, priceErr: 'Enter a whole number' })); return; }
-      price_value = parseInt(priceRaw.trim(), 10);
-    } else if (priceType === 'market_offset') {
-      if (!/^\d+$/.test(priceRaw.trim())) { setEditForm((f) => ({ ...f, priceErr: 'Enter the offset e.g. 1' })); return; }
-      price_value = -parseInt(priceRaw.trim(), 10);
-    }
-    const location = buildLocation(atExchange, planet);
-    if (!location) { setEditForm((f) => ({ ...f, priceErr: 'Select a location' })); return; }
-
+  async function handleAddLocation(listingId) {
+    const parsed = parseLocForm(locForm);
+    if (parsed.err) { setLocForm((f) => ({ ...f, priceErr: parsed.err })); return; }
     setSubmitting(true);
     try {
-      const updated = await api.tradeUpdate(id, { price_type: priceType, price_value, stock_level: stockLevel, location });
-      setListings((prev) => prev.map((l) => l.id === id ? { ...l, ...updated } : l));
-      setEditingId(null);
+      const loc = await api.tradeAddLocation(listingId, parsed);
+      setListings((prev) => prev.map((l) =>
+        l.id === listingId ? { ...l, locations: [...(l.locations ?? []), loc] } : l
+      ));
+      setAddingLocListingId(null);
     } catch (e) {
-      setEditForm((f) => ({ ...f, priceErr: e.message }));
+      setLocForm((f) => ({ ...f, priceErr: e.message }));
     } finally {
       setSubmitting(false);
     }
   }
 
+  function startEditLoc(listingId, loc) {
+    let priceRaw = '';
+    if (loc.price_type === 'fixed') priceRaw = String(loc.price_value);
+    else if (loc.price_type === 'market_offset') priceRaw = String(Math.abs(loc.price_value));
+
+    let atExchange = false, planet = '', planetSearch = '';
+    if (loc.location) {
+      if (loc.location.startsWith('Exchange Station')) atExchange = true;
+      const rest = loc.location.replace('Exchange Station, ', '').replace('Exchange Station', '').trim();
+      if (rest) { planet = rest; planetSearch = rest; }
+    }
+    setLocForm({ priceType: loc.price_type, priceRaw, priceErr: '', stockLevel: loc.stock_level || 'high', atExchange, planet, planetSearch });
+    setEditingLoc({ listingId, locId: loc.id });
+    setAddingLocListingId(null);
+  }
+
+  async function handleUpdateLocation(listingId, locId) {
+    const parsed = parseLocForm(locForm);
+    if (parsed.err) { setLocForm((f) => ({ ...f, priceErr: parsed.err })); return; }
+    setSubmitting(true);
+    try {
+      const updated = await api.tradeUpdateLocation(listingId, locId, parsed);
+      setListings((prev) => prev.map((l) =>
+        l.id === listingId
+          ? { ...l, locations: l.locations.map((loc) => loc.id === locId ? updated : loc) }
+          : l
+      ));
+      setEditingLoc(null);
+    } catch (e) {
+      setLocForm((f) => ({ ...f, priceErr: e.message }));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDeleteLocation(listingId, locId) {
+    try {
+      await api.tradeDeleteLocation(listingId, locId);
+      setListings((prev) => prev.map((l) =>
+        l.id === listingId ? { ...l, locations: l.locations.filter((loc) => loc.id !== locId) } : l
+      ));
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────────
+
   if (loading) return <div style={{ padding: 32, textAlign: 'center' }}><Spinner /></div>;
 
   const guildTag = listings[0]?.guild_tag ?? user?.companyTag ?? '';
+  const own      = listings.filter((l) => l.user_id === user?.id);
 
   return (
     <div>
@@ -446,7 +554,7 @@ export default function Trade() {
           </p>
         </div>
         <button
-          onClick={() => { setFormOpen((o) => !o); if (formOpen) resetForm(); }}
+          onClick={() => { setFormOpen((o) => !o); if (formOpen) { setSelItem(null); setSubmitErr(''); } }}
           style={{
             marginLeft: 'auto', padding: '7px 14px',
             background: formOpen ? '#1e1e3a' : '#3730a3',
@@ -456,21 +564,23 @@ export default function Trade() {
         >{formOpen ? '✕ Cancel' : '+ Add Listing'}</button>
       </div>
 
-      {/* Add listing form */}
+      {/* Add listing form — item selection only */}
       {formOpen && (
         <form onSubmit={handleSubmit} style={{
           marginBottom: 20, padding: '16px',
           background: '#0d0d1f', border: '1px solid #2a2a4a', borderRadius: 8,
           display: 'flex', flexDirection: 'column', gap: 14,
         }}>
-          {/* Row 1: Item */}
           <div>
             <label style={{ display: 'block', fontSize: 11, color: '#6b6b8a', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Item</label>
             {selItem ? (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
-                background: '#0d0d1f', border: '1px solid #3730a3', borderRadius: 6, cursor: 'pointer',
-              }} onClick={() => setSelItem(null)}>
+              <div
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
+                  background: '#0d0d1f', border: '1px solid #3730a3', borderRadius: 6, cursor: 'pointer',
+                }}
+                onClick={() => setSelItem(null)}
+              >
                 <svg width={18} height={18} style={{ flexShrink: 0 }}>
                   <use href={`${SPRITE_URL}#${toIconId(selItem.matName)}`} width={18} height={18} />
                 </svg>
@@ -481,60 +591,18 @@ export default function Trade() {
               <ItemSearch items={allItems} onSelect={(item) => setSelItem({ matId: item.matId, matName: item.matName })} />
             )}
           </div>
-
-          {/* Row 2: Price + Stock */}
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            <div style={{ flex: '2 1 200px', minWidth: 0 }}>
-              <label style={{ display: 'block', fontSize: 11, color: '#6b6b8a', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Price</label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <ToggleGroup options={PRICE_TYPE_OPTIONS} value={priceType} onChange={(v) => { setPriceType(v); setPriceRaw(''); setPriceErr(''); }} />
-                {priceType !== 'average' && (
-                  <div>
-                    <input
-                      value={priceRaw}
-                      onChange={(e) => { setPriceRaw(e.target.value); setPriceErr(''); }}
-                      placeholder={priceType === 'fixed' ? 'e.g. 1650' : 'e.g. 1 (for Market −1)'}
-                      style={{
-                        width: '100%', padding: '7px 10px', background: '#0d0d1f',
-                        border: '1px solid ' + (priceErr ? '#ef4444' : '#2a2a4a'),
-                        borderRadius: 6, color: '#d8d8f0', fontSize: 13, outline: 'none', boxSizing: 'border-box',
-                      }}
-                    />
-                    {priceErr && <span style={{ fontSize: 11, color: '#ef4444' }}>{priceErr}</span>}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div style={{ flex: '1 1 160px', minWidth: 0 }}>
-              <label style={{ display: 'block', fontSize: 11, color: '#6b6b8a', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Stock</label>
-              <ToggleGroup options={STOCK_OPTIONS} value={stockLevel} onChange={setStockLevel} />
-            </div>
-          </div>
-
-          {/* Row 3: Location */}
-          <div>
-            <label style={{ display: 'block', fontSize: 11, color: '#6b6b8a', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Location</label>
-            <LocationPicker
-              planets={planets}
-              atExchange={atExchange} setAtExchange={setAtExchange}
-              planet={planet} setPlanet={setPlanet}
-              planetSearch={planetSearch} setPlanetSearch={setPlanetSearch}
-            />
-          </div>
-
-          {/* Row 4: Submit */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12 }}>
             {submitErr && <span style={{ fontSize: 12, color: '#ef4444' }}>{submitErr}</span>}
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || !selItem}
               style={{
                 padding: '7px 20px', background: '#3730a3', border: '1px solid #4f46e5',
                 borderRadius: 6, color: '#d8d8f0', fontSize: 13,
-                cursor: submitting ? 'default' : 'pointer', opacity: submitting ? 0.6 : 1,
+                cursor: (submitting || !selItem) ? 'default' : 'pointer',
+                opacity: (submitting || !selItem) ? 0.5 : 1,
               }}
-            >{submitting ? 'Listing…' : 'List Item'}</button>
+            >{submitting ? 'Creating…' : 'Create Listing'}</button>
           </div>
         </form>
       )}
@@ -546,132 +614,131 @@ export default function Trade() {
         </div>
       )}
 
-      {/* Listings */}
       {listings.length === 0 ? (
         <div style={{ padding: '32px 0', textAlign: 'center', color: '#4a4a6a', fontSize: 14 }}>
           No guild listings yet. Be the first to add one.
         </div>
-      ) : (() => {
-        const own   = listings.filter((l) => l.user_id === user?.id);
-        const guild = listings;
-        return (
-          <>
-            {/* Your listings */}
-            {own.length > 0 && (
-              <div style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-                  Your Listings
-                </div>
-                <div style={{ border: '1px solid #1e1e3a', borderRadius: 7, overflow: 'hidden' }}>
-                  {own.map((l, i) => (
-                    <div key={l.id} style={{
-                      borderBottom: i < own.length - 1 ? '1px solid #12122a' : 'none',
-                      background: editingId === l.id ? '#0f0f28' : '#0d0d1f',
-                    }}>
-                      {editingId === l.id ? (
-                        <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                          {/* Item header */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <svg width={16} height={16} style={{ flexShrink: 0 }}>
-                              <use href={`${SPRITE_URL}#${toIconId(l.mat_name)}`} width={16} height={16} />
-                            </svg>
-                            <span style={{ fontSize: 13, color: '#d8d8f0', flex: 1 }}>{l.mat_name}</span>
-                            <button onClick={() => setEditingId(null)} style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 12, padding: 0 }}>Cancel</button>
-                          </div>
-                          {/* Price */}
-                          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                            <div style={{ flex: '2 1 160px' }}>
-                              <div style={{ fontSize: 10, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>Price</div>
-                              <ToggleGroup options={PRICE_TYPE_OPTIONS} value={editForm.priceType} onChange={(v) => setEditForm((f) => ({ ...f, priceType: v, priceRaw: '', priceErr: '' }))} />
-                              {editForm.priceType !== 'average' && (
-                                <input
-                                  value={editForm.priceRaw}
-                                  onChange={(e) => setEditForm((f) => ({ ...f, priceRaw: e.target.value, priceErr: '' }))}
-                                  placeholder={editForm.priceType === 'fixed' ? 'e.g. 1650' : 'e.g. 1'}
-                                  style={{ marginTop: 6, width: '100%', padding: '6px 8px', background: '#0d0d1f', border: '1px solid #2a2a4a', borderRadius: 5, color: '#d8d8f0', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
-                                />
-                              )}
-                            </div>
-                            <div style={{ flex: '1 1 140px' }}>
-                              <div style={{ fontSize: 10, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>Stock</div>
-                              <ToggleGroup options={STOCK_OPTIONS} value={editForm.stockLevel} onChange={(v) => setEditForm((f) => ({ ...f, stockLevel: v }))} />
-                            </div>
-                          </div>
-                          {/* Location */}
-                          <div>
-                            <div style={{ fontSize: 10, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>Location</div>
-                            <LocationPicker
-                              planets={planets}
-                              atExchange={editForm.atExchange} setAtExchange={(v) => setEditForm((f) => ({ ...f, atExchange: v }))}
-                              planet={editForm.planet} setPlanet={(v) => setEditForm((f) => ({ ...f, planet: v }))}
-                              planetSearch={editForm.planetSearch} setPlanetSearch={(v) => setEditForm((f) => ({ ...f, planetSearch: v }))}
-                            />
-                          </div>
-                          {/* Save */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
-                            {editForm.priceErr && <span style={{ fontSize: 11, color: '#ef4444' }}>{editForm.priceErr}</span>}
-                            <button
-                              onClick={() => handleUpdate(l.id)}
-                              disabled={submitting}
-                              style={{ padding: '6px 16px', background: '#3730a3', border: '1px solid #4f46e5', borderRadius: 5, color: '#d8d8f0', fontSize: 12, cursor: 'pointer', opacity: submitting ? 0.6 : 1 }}
-                            >Save</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px' }}>
-                          <svg width={18} height={18} style={{ flexShrink: 0 }}>
-                            <use href={`${SPRITE_URL}#${toIconId(l.mat_name)}`} width={18} height={18} />
-                          </svg>
-                          <span style={{ fontSize: 13, color: '#d8d8f0', flex: 1 }}>{l.mat_name}</span>
-                          {l.stock_level && (
-                            <span style={{ fontSize: 11, color: STOCK_COLORS[l.stock_level], whiteSpace: 'nowrap' }}>
-                              {STOCK_LABELS[l.stock_level]}
-                            </span>
-                          )}
-                          {l.location && (
-                            <span style={{ fontSize: 11, color: '#4a4a6a', whiteSpace: 'nowrap', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {l.location}
-                            </span>
-                          )}
-                          <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', whiteSpace: 'nowrap' }}>
-                            {fmtPrice(l.price_type, l.price_value)}
-                          </span>
-                          <span style={{ fontSize: 11, color: '#3a3a5a', whiteSpace: 'nowrap' }}>{relTime(l.created_at)}</span>
-                          <button
-                            onClick={() => startEdit(l)}
-                            style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 11, padding: '0 2px', flexShrink: 0 }}
-                            onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
-                          >Edit</button>
-                          <button
-                            onClick={() => handleDelete(l.id)}
-                            disabled={deletingId === l.id}
-                            style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: deletingId === l.id ? 'default' : 'pointer', fontSize: 13, padding: '0 2px', opacity: deletingId === l.id ? 0.4 : 1, flexShrink: 0 }}
-                            onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
-                          >✕</button>
-                        </div>
-                      )}
+      ) : (
+        <>
+          {/* Your Listings */}
+          {own.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+                Your Listings
+              </div>
+              <div style={{ border: '1px solid #1e1e3a', borderRadius: 7, overflow: 'hidden' }}>
+                {own.map((l, i) => (
+                  <div key={l.id} style={{ borderBottom: i < own.length - 1 ? '1px solid #12122a' : 'none' }}>
+                    {/* Listing header */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#0d0d1f' }}>
+                      <svg width={18} height={18} style={{ flexShrink: 0 }}>
+                        <use href={`${SPRITE_URL}#${toIconId(l.mat_name)}`} width={18} height={18} />
+                      </svg>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: '#d8d8f0', flex: 1 }}>{l.mat_name}</span>
+                      <span style={{ fontSize: 11, color: '#3a3a5a' }}>{relTime(l.created_at)}</span>
+                      <button
+                        onClick={() => handleDelete(l.id)}
+                        disabled={deletingId === l.id}
+                        style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: deletingId === l.id ? 'default' : 'pointer', fontSize: 13, padding: '0 2px', opacity: deletingId === l.id ? 0.4 : 1 }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
+                        title="Remove listing"
+                      >✕</button>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
-            {/* Guild members' listings */}
-            {guild.length > 0 && (
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-                  Guild Listings
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
-                  {guild.map((l) => <ListingCard key={l.id} listing={l} />)}
-                </div>
+                    {/* Location rows */}
+                    {(l.locations ?? []).map((loc) => (
+                      <div key={loc.id}>
+                        {editingLoc?.listingId === l.id && editingLoc?.locId === loc.id ? (
+                          <LocationForm
+                            form={locForm}
+                            setForm={setLocForm}
+                            planets={planets}
+                            onSubmit={() => handleUpdateLocation(l.id, loc.id)}
+                            onCancel={() => setEditingLoc(null)}
+                            submitting={submitting}
+                            label="Save"
+                          />
+                        ) : (
+                          <div style={{
+                            display: 'flex', alignItems: 'center', gap: 8,
+                            padding: '5px 12px 5px 38px', background: '#09091a',
+                            borderTop: '1px solid #111128',
+                          }}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', minWidth: 60 }}>
+                              {fmtPrice(loc.price_type, loc.price_value)}
+                            </span>
+                            {loc.stock_level && (
+                              <span style={{ fontSize: 11, color: STOCK_COLORS[loc.stock_level], whiteSpace: 'nowrap' }}>
+                                {STOCK_LABELS[loc.stock_level]}
+                              </span>
+                            )}
+                            {loc.location && (
+                              <span style={{ fontSize: 11, color: '#4a4a6a', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {loc.location}
+                              </span>
+                            )}
+                            <button
+                              onClick={() => startEditLoc(l.id, loc)}
+                              style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 11, padding: '0 2px' }}
+                              onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
+                            >Edit</button>
+                            <button
+                              onClick={() => handleDeleteLocation(l.id, loc.id)}
+                              style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 12, padding: '0 2px' }}
+                              onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
+                            >✕</button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+
+                    {/* Add location row / form */}
+                    {addingLocListingId === l.id ? (
+                      <LocationForm
+                        form={locForm}
+                        setForm={setLocForm}
+                        planets={planets}
+                        onSubmit={() => handleAddLocation(l.id)}
+                        onCancel={() => setAddingLocListingId(null)}
+                        submitting={submitting}
+                        label="Add Location"
+                      />
+                    ) : (
+                      <div style={{ padding: '5px 12px', background: '#09091a', borderTop: '1px solid #111128' }}>
+                        <button
+                          onClick={() => {
+                            setLocForm({ ...DEFAULT_LOC_FORM });
+                            setAddingLocListingId(l.id);
+                            setEditingLoc(null);
+                          }}
+                          style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 12, padding: '2px 0' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
+                        >+ Add Location</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
-            )}
-          </>
-        );
-      })()}
+            </div>
+          )}
+
+          {/* Guild Listings */}
+          {listings.length > 0 && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+                Guild Listings
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
+                {listings.map((l) => <ListingCard key={l.id} listing={l} />)}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

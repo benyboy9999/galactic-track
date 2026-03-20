@@ -209,12 +209,21 @@ const schema = `
     guild_tag    TEXT NOT NULL,
     mat_id       INT NOT NULL,
     mat_name     TEXT NOT NULL,
-    price_type   TEXT NOT NULL CHECK (price_type IN ('fixed', 'market_offset')),
-    price_value  INT NOT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
   CREATE INDEX IF NOT EXISTS idx_tlist_guild_tag ON trade_listings(guild_tag);
   CREATE INDEX IF NOT EXISTS idx_tlist_mat_id    ON trade_listings(mat_id);
+
+  CREATE TABLE IF NOT EXISTS trade_listing_locations (
+    id          SERIAL PRIMARY KEY,
+    listing_id  INT NOT NULL REFERENCES trade_listings(id) ON DELETE CASCADE,
+    price_type  TEXT NOT NULL CHECK (price_type IN ('fixed', 'market_offset', 'average')),
+    price_value INT NOT NULL DEFAULT 0,
+    stock_level TEXT,
+    location    TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_tll_listing_id ON trade_listing_locations(listing_id);
 `;
 
 async function init() {

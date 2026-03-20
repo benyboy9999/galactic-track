@@ -20,47 +20,17 @@
     }
     .header img { width: 22px; height: 22px; }
     .header-text { font-size: 13px; font-weight: 600; color: #d8d8f0; }
-    label {
-      display: block;
-      font-size: 11px;
-      color: #6b6b8a;
-      margin-bottom: 4px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    input {
-      width: 100%;
-      padding: 8px 10px;
-      background: #0d0d22;
-      border: 1px solid #2a2a4a;
-      border-radius: 6px;
-      color: #d8d8f0;
-      font-size: 12px;
-      font-family: monospace;
-      outline: none;
-      margin-bottom: 8px;
-    }
-    input:focus { border-color: #4f46e5; }
     button {
       width: 100%;
       padding: 8px 0;
-      background: #3730a3;
-      border: 1px solid #4f46e5;
+      background: transparent;
+      border: 1px solid #2a2a4a;
       border-radius: 6px;
-      color: #d8d8f0;
+      color: #6b6b8a;
       font-size: 12px;
       cursor: pointer;
-      margin-bottom: 6px;
     }
-    button:disabled { opacity: 0.5; cursor: default; }
-    button.secondary {
-      background: transparent;
-      border-color: #2a2a4a;
-      color: #6b6b8a;
-      margin-bottom: 0;
-    }
-    button.secondary:hover { border-color: #4a4a6a; color: #9090b0; }
+    button:hover { border-color: #4a4a6a; color: #9090b0; }
     .connected-status {
       display: flex;
       align-items: center;
@@ -81,8 +51,12 @@
       background: #22c55e;
       flex-shrink: 0;
     }
-    .err { color: #f87171; font-size: 11px; margin-top: 6px; }
-    .note { color: #4a4a6a; font-size: 10px; margin-top: 8px; line-height: 1.5; }
+    .not-connected {
+      font-size: 11px;
+      color: #4a4a6a;
+      margin-bottom: 12px;
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
@@ -93,18 +67,14 @@
     </div>
   </div>
 
-  <div id="view-setup">
-    <label>Limited API Key</label>
-    <input id="api-key-input" type="text" placeholder="Paste your GT API key…" autocomplete="off" spellcheck="false" />
-    <button id="btn-connect">Connect</button>
-    <div class="note">Your key is used once to look up your guild tag and is never stored or sent to Galactic Track.</div>
-    <div id="setup-err" class="err"></div>
-  </div>
-
   <div id="view-connected" style="display:none">
     <div class="connected-status"><span class="dot"></span>Connected</div>
     <div class="connected-company">[<span id="info-guild">—</span>] <span id="info-company">—</span></div>
-    <button id="btn-reset" class="secondary">Sign Out</button>
+    <button id="btn-reset">Sign Out</button>
+  </div>
+
+  <div id="view-not-connected">
+    <div class="not-connected">Visit an exchange page in Galactic Tycoons to connect automatically.</div>
   </div>
 
   <script src="popup.js"></script>

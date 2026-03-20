@@ -1,5 +1,6 @@
 const GT_TRACK = 'https://galactic-track.com';
-const INJECT_ID = 'gt-guild-row';
+const GT_API   = 'https://api.g2.galactictycoons.com';
+const INJECT_ID  = 'gt-guild-row';
 const TOOLTIP_ID = 'gt-tooltip';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -15,6 +16,52 @@ function fmtPrice(type, value) {
   return `Market ${Number(value)}`;
 }
 
+function lowestPrice(locations) {
+  if (!locations?.length) return null;
+  // 'average' has value 0 — treat as valid; find minimum price_value
+  return locations.reduce((a, b) => a.price_value <= b.price_value ? a : b);
+}
+
+// ── Identity (Local API auto-connect) ─────────────────────────────────────────
+
+async function resolveIdentity() {
+  const cached = await chrome.storage.local.get(['gTag', 'companyName']);
+  if (cached.gTag) return cached;
+
+  return new Promise(resolve => {
+    const reqId = `gt-${Date.now()}`;
+    const timeout = setTimeout(() => {
+      window.removeEventListener('message', handler);
+      resolve(null);
+    }, 3000);
+
+    function handler(event) {
+      if (event.data?.type !== 'GT_LAPI_RESPONSE' || event.data?.requestId !== reqId) return;
+      clearTimeout(timeout);
+      window.removeEventListener('message', handler);
+
+      if (!event.data.success) { resolve(null); return; }
+      let company;
+      try { company = JSON.parse(event.data.data); } catch { resolve(null); return; }
+      if (!company?.id || company.id === -1) { resolve(null); return; }
+
+      fetch(`${GT_API}/public/company/${company.id}/detail`)
+        .then(r => r.json())
+        .then(detail => {
+          const gTag = detail.gTag ?? detail.guild_tag ?? '';
+          if (!gTag) { resolve(null); return; }
+          const companyName = company.name ?? '';
+          chrome.storage.local.set({ gTag, companyName });
+          resolve({ gTag, companyName });
+        })
+        .catch(() => resolve(null));
+    }
+
+    window.addEventListener('message', handler);
+    window.postMessage({ type: 'GT_LAPI_REQUEST', action: 'getMyCompany', requestId: reqId, params: {} }, '*');
+  });
+}
+
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 
 const STOCK_LABELS = { high: 'High', low: 'Low', to_order: 'To Order' };
@@ -26,7 +73,8 @@ function removeTooltip() {
 
 function showTooltip(anchor, listing) {
   removeTooltip();
-  if (!listing.stock_level && !listing.location) return;
+  const locations = listing.locations;
+  if (!locations?.length) return;
 
   const rect = anchor.getBoundingClientRect();
   const tip  = document.createElement('div');
@@ -47,35 +95,33 @@ function showTooltip(anchor, listing) {
     'box-shadow:0 4px 16px rgba(0,0,0,0.7)',
     'pointer-events:none',
     'white-space:nowrap',
-    'line-height:1.6',
+    'line-height:1.8',
   ].join(';');
 
-  if (listing.stock_level) {
-    const label = STOCK_LABELS[listing.stock_level] || listing.stock_level;
-    const color = STOCK_COLORS[listing.stock_level] || '#b0b0cc';
+  locations.forEach((loc, i) => {
+    if (i > 0) tip.appendChild(document.createElement('br'));
 
-    const stockLabel = document.createElement('span');
-    stockLabel.style.color = '#6b7280';
-    stockLabel.textContent = 'Stock: ';
+    const priceSpan = document.createElement('span');
+    priceSpan.style.cssText = 'color:#d1d5db;font-weight:500;margin-right:6px';
+    priceSpan.textContent = fmtPrice(loc.price_type, loc.price_value);
+    tip.appendChild(priceSpan);
 
-    const stockValue = document.createElement('span');
-    stockValue.style.color = color;
-    stockValue.textContent = label;
+    if (loc.stock_level) {
+      const color = STOCK_COLORS[loc.stock_level] || '#b0b0cc';
+      const label = STOCK_LABELS[loc.stock_level] || loc.stock_level;
+      const stockSpan = document.createElement('span');
+      stockSpan.style.cssText = `color:${color};margin-right:6px`;
+      stockSpan.textContent = label;
+      tip.appendChild(stockSpan);
+    }
 
-    tip.appendChild(stockLabel);
-    tip.appendChild(stockValue);
-  }
-
-  if (listing.location) {
-    if (listing.stock_level) tip.appendChild(document.createElement('br'));
-
-    const locLabel = document.createElement('span');
-    locLabel.style.color = '#6b7280';
-    locLabel.textContent = 'Location: ';
-
-    tip.appendChild(locLabel);
-    tip.appendChild(document.createTextNode(listing.location));
-  }
+    if (loc.location) {
+      const locSpan = document.createElement('span');
+      locSpan.style.color = '#6b7280';
+      locSpan.textContent = loc.location;
+      tip.appendChild(locSpan);
+    }
+  });
 
   document.body.appendChild(tip);
 }
@@ -115,6 +161,9 @@ function inject(table, listings, gTag) {
     td.appendChild(empty);
   } else {
     listings.forEach(l => {
+      const best = lowestPrice(l.locations);
+      if (!best) return;
+
       const span = document.createElement('span');
       span.style.cssText = 'margin-right:14px;white-space:nowrap;cursor:default';
 
@@ -124,15 +173,20 @@ function inject(table, listings, gTag) {
 
       const priceEl = document.createElement('span');
       priceEl.style.cssText = 'color:#d1d5db;font-weight:500;margin-left:5px';
-      priceEl.textContent = fmtPrice(l.price_type, l.price_value);
+      priceEl.textContent = fmtPrice(best.price_type, best.price_value);
 
       span.appendChild(labelEl);
       span.appendChild(priceEl);
 
-      if (l.stock_level || l.location) {
-        span.addEventListener('mouseenter', () => showTooltip(span, l));
-        span.addEventListener('mouseleave', removeTooltip);
+      if (l.locations.length > 1) {
+        const moreEl = document.createElement('span');
+        moreEl.style.cssText = 'color:#6b7280;font-size:11px;margin-left:4px';
+        moreEl.textContent = `+${l.locations.length - 1}`;
+        span.appendChild(moreEl);
       }
+
+      span.addEventListener('mouseenter', () => showTooltip(span, l));
+      span.addEventListener('mouseleave', removeTooltip);
 
       td.appendChild(span);
     });
@@ -192,8 +246,9 @@ async function run() {
   const matId = getMatIdFromUrl();
   if (!matId) return;
 
-  const { gTag } = await chrome.storage.local.get('gTag');
-  if (!gTag) return;
+  const identity = await resolveIdentity();
+  if (!identity) return;
+  const { gTag } = identity;
 
   try {
     const all = await fetchListings(gTag);

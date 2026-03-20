@@ -29,11 +29,24 @@ router.get('/', requireAuth, requireTradeAccess, async (req, res, next) => {
   try {
     const r = await pool.query(
       `SELECT tl.id, tl.user_id, tl.company_name, tl.guild_tag, tl.mat_id, tl.mat_name,
-              tl.price_type, tl.price_value, tl.stock_level, tl.location, tl.created_at,
-              u.company_logo
+              tl.created_at, u.company_logo,
+              COALESCE(
+                json_agg(
+                  json_build_object(
+                    'id',          ll.id,
+                    'price_type',  ll.price_type,
+                    'price_value', ll.price_value,
+                    'stock_level', ll.stock_level,
+                    'location',    ll.location
+                  ) ORDER BY ll.price_value ASC
+                ) FILTER (WHERE ll.id IS NOT NULL),
+                '[]'
+              ) AS locations
        FROM trade_listings tl
        JOIN users u ON u.id = tl.user_id
+       LEFT JOIN trade_listing_locations ll ON ll.listing_id = tl.id
        WHERE tl.guild_tag = $1
+       GROUP BY tl.id, u.company_logo
        ORDER BY tl.created_at DESC`,
       [req.user.company_tag]
     );
@@ -44,12 +57,8 @@ router.get('/', requireAuth, requireTradeAccess, async (req, res, next) => {
 // ── POST /api/trade ────────────────────────────────────────────────────────────
 router.post('/', requireAuth, requireTradeAccess, async (req, res, next) => {
   try {
-    const { mat_id, mat_name, price_type, price_value, stock_level, location } = req.body;
-
+    const { mat_id, mat_name } = req.body;
     if (!mat_id || !mat_name) return res.status(400).json({ error: 'mat_id and mat_name are required' });
-    if (!['fixed', 'market_offset', 'average'].includes(price_type)) return res.status(400).json({ error: 'Invalid price_type' });
-    const effectiveValue = price_type === 'average' ? 0 : price_value;
-    if (!Number.isInteger(effectiveValue)) return res.status(400).json({ error: 'price_value must be an integer' });
 
     const dup = await pool.query(
       'SELECT id FROM trade_listings WHERE user_id = $1 AND mat_id = $2',
@@ -58,26 +67,12 @@ router.post('/', requireAuth, requireTradeAccess, async (req, res, next) => {
     if (dup.rows.length) return res.status(409).json({ error: 'You already have a listing for this item' });
 
     const r = await pool.query(
-      `INSERT INTO trade_listings
-         (user_id, company_id, company_name, guild_tag, mat_id, mat_name,
-          price_type, price_value, stock_level, location)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id, user_id, company_name, guild_tag, mat_id, mat_name,
-                 price_type, price_value, stock_level, location, created_at`,
-      [
-        req.user.id,
-        req.user.company_id,
-        req.user.company_name,
-        req.user.company_tag,
-        Number(mat_id),
-        mat_name,
-        price_type,
-        effectiveValue,
-        stock_level || null,
-        location || null,
-      ]
+      `INSERT INTO trade_listings (user_id, company_id, company_name, guild_tag, mat_id, mat_name)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, user_id, company_name, guild_tag, mat_id, mat_name, created_at`,
+      [req.user.id, req.user.company_id, req.user.company_name, req.user.company_tag, Number(mat_id), mat_name]
     );
-    res.status(201).json(r.rows[0]);
+    res.status(201).json({ ...r.rows[0], locations: [] });
   } catch (err) { next(err); }
 });
 
@@ -93,24 +88,73 @@ router.delete('/:id', requireAuth, requireTradeAccess, async (req, res, next) =>
   } catch (err) { next(err); }
 });
 
-// ── PATCH /api/trade/:id ───────────────────────────────────────────────────────
-router.patch('/:id', requireAuth, requireTradeAccess, async (req, res, next) => {
+// ── POST /api/trade/:id/locations ──────────────────────────────────────────────
+router.post('/:id/locations', requireAuth, requireTradeAccess, async (req, res, next) => {
   try {
+    const listing = await pool.query(
+      'SELECT id FROM trade_listings WHERE id = $1 AND user_id = $2',
+      [Number(req.params.id), req.user.id]
+    );
+    if (!listing.rows.length) return res.status(404).json({ error: 'Listing not found or not yours' });
+
     const { price_type, price_value, stock_level, location } = req.body;
-    if (!['fixed', 'market_offset', 'average'].includes(price_type)) return res.status(400).json({ error: 'Invalid price_type' });
+    if (!['fixed', 'market_offset', 'average'].includes(price_type))
+      return res.status(400).json({ error: 'Invalid price_type' });
     const effectiveValue = price_type === 'average' ? 0 : price_value;
     if (!Number.isInteger(effectiveValue)) return res.status(400).json({ error: 'price_value must be an integer' });
 
     const r = await pool.query(
-      `UPDATE trade_listings
-       SET price_type = $1, price_value = $2, stock_level = $3, location = $4
-       WHERE id = $5 AND user_id = $6
-       RETURNING id, user_id, company_name, guild_tag, mat_id, mat_name,
-                 price_type, price_value, stock_level, location, created_at`,
-      [price_type, effectiveValue, stock_level || null, location || null, Number(req.params.id), req.user.id]
+      `INSERT INTO trade_listing_locations (listing_id, price_type, price_value, stock_level, location)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, listing_id, price_type, price_value, stock_level, location, created_at`,
+      [Number(req.params.id), price_type, effectiveValue, stock_level || null, location || null]
     );
-    if (!r.rows.length) return res.status(404).json({ error: 'Listing not found or not yours' });
+    res.status(201).json(r.rows[0]);
+  } catch (err) { next(err); }
+});
+
+// ── PATCH /api/trade/:id/locations/:locId ──────────────────────────────────────
+router.patch('/:id/locations/:locId', requireAuth, requireTradeAccess, async (req, res, next) => {
+  try {
+    const listing = await pool.query(
+      'SELECT id FROM trade_listings WHERE id = $1 AND user_id = $2',
+      [Number(req.params.id), req.user.id]
+    );
+    if (!listing.rows.length) return res.status(404).json({ error: 'Listing not found or not yours' });
+
+    const { price_type, price_value, stock_level, location } = req.body;
+    if (!['fixed', 'market_offset', 'average'].includes(price_type))
+      return res.status(400).json({ error: 'Invalid price_type' });
+    const effectiveValue = price_type === 'average' ? 0 : price_value;
+    if (!Number.isInteger(effectiveValue)) return res.status(400).json({ error: 'price_value must be an integer' });
+
+    const r = await pool.query(
+      `UPDATE trade_listing_locations
+       SET price_type = $1, price_value = $2, stock_level = $3, location = $4
+       WHERE id = $5 AND listing_id = $6
+       RETURNING id, listing_id, price_type, price_value, stock_level, location, created_at`,
+      [price_type, effectiveValue, stock_level || null, location || null, Number(req.params.locId), Number(req.params.id)]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Location not found' });
     res.json(r.rows[0]);
+  } catch (err) { next(err); }
+});
+
+// ── DELETE /api/trade/:id/locations/:locId ─────────────────────────────────────
+router.delete('/:id/locations/:locId', requireAuth, requireTradeAccess, async (req, res, next) => {
+  try {
+    const listing = await pool.query(
+      'SELECT id FROM trade_listings WHERE id = $1 AND user_id = $2',
+      [Number(req.params.id), req.user.id]
+    );
+    if (!listing.rows.length) return res.status(404).json({ error: 'Listing not found or not yours' });
+
+    const r = await pool.query(
+      'DELETE FROM trade_listing_locations WHERE id = $1 AND listing_id = $2 RETURNING id',
+      [Number(req.params.locId), Number(req.params.id)]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Location not found' });
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 
@@ -133,19 +177,18 @@ function checkPublicRateLimit(req, res, next) {
 
 // ── GET /api/trade/public ──────────────────────────────────────────────────────
 // Public endpoint for the Chrome extension. No auth required.
-// ?tag=ATS           — returns all listings for that guild (used by extension).
-// ?tag=ATS&matId=45  — returns listings for that guild + item (legacy, still supported).
-// ?demo=1            — returns a hardcoded test listing regardless of tag/matId.
+// ?tag=ATS           — returns all listings for that guild with nested locations.
+// ?tag=ATS&matId=45  — filtered by material (legacy, still supported).
+// ?demo=1            — returns a hardcoded test listing.
 router.get('/public', checkPublicRateLimit, async (req, res, next) => {
   try {
     if (req.query.demo === '1') {
       return res.json([{
         company_name: 'Test Corp',
-        price_type: 'fixed',
-        price_value: 1337,
-        stock_level: 'high',
-        location: 'Exchange Station',
         mat_id: 0,
+        locations: [
+          { price_type: 'fixed', price_value: 1337, stock_level: 'high', location: 'Exchange Station' }
+        ],
         created_at: new Date().toISOString(),
       }]);
     }
@@ -153,27 +196,27 @@ router.get('/public', checkPublicRateLimit, async (req, res, next) => {
     const { tag, matId } = req.query;
     if (!tag) return res.json([]);
 
-    if (matId) {
-      const r = await pool.query(
-        `SELECT tl.company_name, tl.price_type, tl.price_value,
-                tl.stock_level, tl.location, tl.mat_id, tl.created_at
-         FROM trade_listings tl
-         JOIN trade_guild_access tga ON tga.guild_tag = tl.guild_tag
-         WHERE tl.guild_tag = $1 AND tl.mat_id = $2
-         ORDER BY tl.price_value ASC`,
-        [tag, Number(matId)]
-      );
-      return res.json(r.rows);
-    }
+    const params = [tag];
+    const matFilter = matId ? 'AND tl.mat_id = $2' : '';
+    if (matId) params.push(Number(matId));
 
     const r = await pool.query(
-      `SELECT tl.company_name, tl.price_type, tl.price_value,
-              tl.stock_level, tl.location, tl.mat_id, tl.created_at
+      `SELECT tl.company_name, tl.mat_id,
+              json_agg(
+                json_build_object(
+                  'price_type',  ll.price_type,
+                  'price_value', ll.price_value,
+                  'stock_level', ll.stock_level,
+                  'location',    ll.location
+                ) ORDER BY ll.price_value ASC
+              ) AS locations
        FROM trade_listings tl
+       JOIN trade_listing_locations ll ON ll.listing_id = tl.id
        JOIN trade_guild_access tga ON tga.guild_tag = tl.guild_tag
-       WHERE tl.guild_tag = $1
-       ORDER BY tl.mat_id ASC, tl.price_value ASC`,
-      [tag]
+       WHERE tl.guild_tag = $1 ${matFilter}
+       GROUP BY tl.id
+       ORDER BY tl.mat_id ASC`,
+      params
     );
     res.json(r.rows);
   } catch (err) { next(err); }
