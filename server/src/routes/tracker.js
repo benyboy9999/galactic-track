@@ -148,7 +148,7 @@ router.get('/orders/:matId', async (req, res, next) => {
 });
 
 // GET /api/tracker/activity/:matId?hours=24
-// Per-snapshot sales activity for the bar chart
+// 15-min bucketed sales activity for the bar chart (events only, no snapshot join)
 router.get('/activity/:matId', async (req, res, next) => {
   try {
     const { matId } = req.params;
@@ -156,22 +156,16 @@ router.get('/activity/:matId', async (req, res, next) => {
 
     const r = await pool.query(
       `SELECT
-         s.id          AS snapshot_id,
-         s.recorded_at,
-         s.current_price,
-         s.total_qty_available,
-         s.flash_qty,
-         COALESCE(SUM(CASE WHEN e.event_type IN ('partial_fill','full_fill')
-                           THEN ABS(e.qty_change) END), 0)::bigint AS qty_sold_since_prev,
-         COALESCE(SUM(CASE WHEN e.event_type IN ('new_listing','restocked')
-                           THEN e.qty_change END), 0)::bigint      AS qty_listed_since_prev
-       FROM tracker_snapshots s
-       LEFT JOIN tracker_events e
-         ON e.snapshot_b_id = s.id AND e.mat_id = s.mat_id
-       WHERE s.mat_id = $1
-         AND s.recorded_at > NOW() - ($2 || ' hours')::interval
-       GROUP BY s.id
-       ORDER BY s.recorded_at ASC`,
+         to_timestamp(floor(extract(epoch from recorded_at) / 900) * 900) AS recorded_at,
+         COALESCE(SUM(CASE WHEN event_type IN ('partial_fill','full_fill')
+                           THEN ABS(qty_change) END), 0)::bigint AS qty_sold_since_prev,
+         COALESCE(SUM(CASE WHEN event_type IN ('new_listing','restocked')
+                           THEN qty_change     END), 0)::bigint AS qty_listed_since_prev
+       FROM tracker_events
+       WHERE mat_id = $1
+         AND recorded_at > NOW() - ($2 || ' hours')::interval
+       GROUP BY 1
+       ORDER BY 1 ASC`,
       [matId, hours]
     );
 
