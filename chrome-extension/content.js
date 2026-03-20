@@ -262,18 +262,24 @@ async function run(retries = 0) {
 }
 
 // ── SPA navigation ────────────────────────────────────────────────────────────
+// Intercept history.pushState so we fire synchronously on every route change,
+// rather than relying on MutationObserver timing which misses early navigations.
 
-let lastUrl = location.href;
-
-new MutationObserver(() => {
-  if (location.href === lastUrl) return;
-  lastUrl = location.href;
+function onNavigate() {
   if (location.pathname.startsWith('/exchange/')) {
     run();
   } else {
     removeInjection();
   }
-}).observe(document.body, { subtree: true, childList: true });
+}
+
+const _pushState = history.pushState.bind(history);
+history.pushState = function(...args) {
+  _pushState(...args);
+  onNavigate();
+};
+
+window.addEventListener('popstate', onNavigate);
 
 // Pre-cache identity on any game page so it's ready before the user navigates to an exchange
 resolveIdentity().catch(() => {});
