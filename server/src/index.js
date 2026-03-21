@@ -43,6 +43,8 @@ app.use('/api/company',   companyRoutes);
 app.use('/api/alerts',    alertsRoutes);
 app.use('/api/trade',     tradeRoutes);
 
+app.get('/extension', (_req, res) => res.redirect(301, 'https://chromewebstore.google.com/detail/galactic-track-extension/mdlimpfkmgnclcfglcidnnnklhdjalbg'));
+
 app.get('/api/health',    (req, res) => res.json({ ok: true }));
 app.get('/api/ratelimit', (req, res) => res.json(getRateLimitStatus()));
 
