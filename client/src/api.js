@@ -59,7 +59,7 @@ async function del(path, authed = false) {
 export const api = {
   // ── Auth ───────────────────────────────────────────────────────────────────
   login:         (apiKey) => post('/auth/login', { apiKey }),
-  devLogin:      (companyName, companyId) => post('/auth/dev-login', { companyName, companyId }),
+  devLogin:      (companyName, companyId, companyTag) => post('/auth/dev-login', { companyName, companyId, companyTag }),
   devSearch:     (q = '')               => get(`/auth/dev-search?q=${encodeURIComponent(q)}`),
   me:            ()       => get('/auth/me', true),
   logout:        ()       => post('/auth/logout', {}, true),

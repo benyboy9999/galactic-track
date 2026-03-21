@@ -178,7 +178,7 @@ router.get('/dev-search', async (req, res, next) => {
   try {
     const q = (req.query.q ?? '').trim();
     const r = await pool.query(
-      `SELECT company_name, company_id
+      `SELECT company_name, company_id, company_tag
        FROM users
        WHERE company_name ILIKE $1 AND company_id IS NOT NULL AND company_id != '0'
        ORDER BY company_name ASC
@@ -198,16 +198,17 @@ router.post('/dev-login', async (req, res, next) => {
     return res.status(404).json({ error: 'Not found' });
   }
   try {
-    const { companyName = 'Dev User', companyId = '0' } = req.body;
+    const { companyName = 'Dev User', companyId = '0', companyTag = '' } = req.body;
     const upsert = await pool.query(
-      `INSERT INTO users(api_key, api_key_encrypted, session_token, company_id, company_name, last_seen)
-       VALUES($1, $2, $3, $4, $5, NOW())
+      `INSERT INTO users(api_key, api_key_encrypted, session_token, company_id, company_name, company_tag, last_seen)
+       VALUES($1, $2, $3, $4, $5, $6, NOW())
        ON CONFLICT(api_key) DO UPDATE
          SET company_id = EXCLUDED.company_id,
              company_name = EXCLUDED.company_name,
+             company_tag = EXCLUDED.company_tag,
              last_seen = NOW(), revoked = FALSE
        RETURNING id, session_token, credits_used, credits_total`,
-      [hashApiKey('dev-local'), encryptApiKey('dev-local'), randomUUID(), companyId, companyName]
+      [hashApiKey('dev-local'), encryptApiKey('dev-local'), randomUUID(), companyId, companyName, companyTag]
     );
     const user = upsert.rows[0];
     res.json({

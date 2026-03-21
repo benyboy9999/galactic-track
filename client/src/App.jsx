@@ -110,11 +110,11 @@ function SettingsModal({ onClose }) {
     );
   }
 
-  async function handleDevSwitch(companyName, companyId) {
+  async function handleDevSwitch(companyName, companyId, companyTag) {
     setDevSwitching(true);
     setErr('');
     try {
-      const data = await api.devLogin(companyName, companyId);
+      const data = await api.devLogin(companyName, companyId, companyTag);
       localStorage.setItem('sessionToken', data.sessionToken);
       await refreshUser();
       onClose();
@@ -251,7 +251,7 @@ function SettingsModal({ onClose }) {
               Dev — switch company
             </div>
             <DevCompanySearch
-              onSelect={(companyName, companyId) => handleDevSwitch(companyName, companyId)}
+              onSelect={(companyName, companyId, companyTag) => handleDevSwitch(companyName, companyId, companyTag)}
               disabled={devSwitching}
             />
           </div>

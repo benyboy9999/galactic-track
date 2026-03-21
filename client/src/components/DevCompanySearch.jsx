@@ -42,7 +42,7 @@ export default function DevCompanySearch({ onSelect, disabled }) {
     setQuery('');
     setResults([]);
     setOpen(false);
-    onSelect(row.company_name, row.company_id);
+    onSelect(row.company_name, row.company_id, row.company_tag ?? '');
   }
 
   return (
