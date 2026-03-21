@@ -577,7 +577,7 @@ export default function Trade() {
               </span>
             )}
           </div>
-          <div style={{ fontSize: 12, color: '#6b6b8a', marginTop: 2 }}>Internal guild pricing — visible to guild members only</div>
+          <div style={{ fontSize: 12, color: '#6b6b8a', marginTop: 2 }}>Internal guild pricing system — Currently exclusive for ATS members.</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <a
