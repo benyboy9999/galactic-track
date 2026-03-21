@@ -18,15 +18,19 @@ function fmtPrice(type, value) {
 
 function lowestPrice(locations) {
   if (!locations?.length) return null;
-  // 'average' has value 0 — treat as valid; find minimum price_value
-  return locations.reduce((a, b) => a.price_value <= b.price_value ? a : b);
+  // Prefer fixed/market_offset over average (which has price_value=0 and would always win)
+  const fixed = locations.filter(l => l.price_type !== 'average');
+  const pool  = fixed.length ? fixed : locations;
+  return pool.reduce((a, b) => a.price_value <= b.price_value ? a : b);
 }
 
 // ── Identity (Local API auto-connect) ─────────────────────────────────────────
 
+const IDENTITY_TTL = 24 * 60 * 60 * 1000;
+
 async function resolveIdentity() {
-  const cached = await chrome.storage.local.get(['gTag', 'companyName']);
-  if (cached.gTag) return cached;
+  const cached = await chrome.storage.local.get(['gTag', 'companyName', 'gTagTs']);
+  if (cached.gTag && Date.now() - (cached.gTagTs ?? 0) < IDENTITY_TTL) return cached;
 
   return new Promise(resolve => {
     const reqId = `gt-${Date.now()}`;
@@ -36,6 +40,7 @@ async function resolveIdentity() {
     }, 3000);
 
     function handler(event) {
+      if (event.source !== window) return;
       if (event.data?.type !== 'GT_LAPI_RESPONSE' || event.data?.requestId !== reqId) return;
       clearTimeout(timeout);
       window.removeEventListener('message', handler);
@@ -43,7 +48,7 @@ async function resolveIdentity() {
       if (!event.data.success) { resolve(null); return; }
       let company;
       try { company = JSON.parse(event.data.data); } catch { resolve(null); return; }
-      if (!company?.id || company.id === -1) { resolve(null); return; }
+      if (!Number.isInteger(company.id) || company.id <= 0) { resolve(null); return; }
 
       fetch(`${GT_API}/public/company/${company.id}/detail`)
         .then(r => r.json())
@@ -51,7 +56,7 @@ async function resolveIdentity() {
           const gTag = detail.gTag ?? detail.guild_tag ?? '';
           if (!gTag) { resolve(null); return; }
           const companyName = company.name ?? '';
-          chrome.storage.local.set({ gTag, companyName });
+          chrome.storage.local.set({ gTag, companyName, gTagTs: Date.now() });
           resolve({ gTag, companyName });
         })
         .catch(() => resolve(null));
@@ -295,6 +300,8 @@ chrome.storage.onChanged.addListener((changes) => {
   }
 });
 
-// Pre-cache identity on any game page so it's ready before the user navigates to an exchange
-resolveIdentity().catch(() => {});
+// Pre-cache identity on any game page (only when enabled)
+chrome.storage.local.get('enabled', ({ enabled }) => {
+  if (enabled !== false) resolveIdentity().catch(() => {});
+});
 run();
