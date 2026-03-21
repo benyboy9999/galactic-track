@@ -580,6 +580,22 @@ export default function Trade() {
           <div style={{ fontSize: 12, color: '#6b6b8a', marginTop: 2 }}>Internal guild pricing — visible to guild members only</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <a
+            href="https://galactic-track.com/extension"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '6px 12px', background: '#1e1440',
+              border: '1px solid #4c1d95', borderRadius: 6,
+              color: '#a78bfa', fontSize: 12, fontWeight: 600,
+              textDecoration: 'none', whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#2d1f5e'; e.currentTarget.style.borderColor = '#6d28d9'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = '#1e1440'; e.currentTarget.style.borderColor = '#4c1d95'; }}
+          >
+            ⚙️ View Guild Prices In-Game — Get Chrome Extension
+          </a>
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
