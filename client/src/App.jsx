@@ -476,7 +476,7 @@ function Nav() {
   // Close mobile menu on navigation
   useEffect(() => { setMenuOpen(false); }, [location.pathname]);
 
-  const navLink = (to, label, mobile = false) => {
+  const navLink = (to, label, mobile = false, badge = null) => {
     const active = location.pathname === to || (to !== '/' && location.pathname.startsWith(to));
     if (mobile) {
       return (
@@ -484,13 +484,24 @@ function Nav() {
       );
     }
     return (
-      <Link to={to} style={{
-        textDecoration: 'none', fontSize: 13, fontWeight: 500,
-        color: active ? '#e0e0ff' : '#6b6b8a',
-        borderBottom: active ? '2px solid #6366f1' : '2px solid transparent',
-        paddingBottom: 2,
-        transition: 'color 0.15s',
-      }}>{label}</Link>
+      <span key={to} style={{ position: 'relative', display: 'inline-block' }}>
+        <Link to={to} style={{
+          textDecoration: 'none', fontSize: 13, fontWeight: 500,
+          color: active ? '#e0e0ff' : '#6b6b8a',
+          borderBottom: active ? '2px solid #6366f1' : '2px solid transparent',
+          paddingBottom: 2,
+          transition: 'color 0.15s',
+        }}>{label}</Link>
+        {badge && (
+          <span style={{
+            position: 'absolute', top: -7, right: -18,
+            fontSize: 7, fontWeight: 700, color: '#fff',
+            background: '#7c3aed', borderRadius: 3,
+            padding: '1px 3px', letterSpacing: '0.05em',
+            lineHeight: 1, pointerEvents: 'none',
+          }}>{badge}</span>
+        )}
+      </span>
     );
   };
 
@@ -498,7 +509,7 @@ function Nav() {
     ['/', 'Tracker'],
     ['/company', 'Company'],
     ['/contracts', 'Marketplace'],
-    ...(tradeAccess ? [['/trade', 'Trade']] : []),
+    ...(tradeAccess ? [['/trade', 'Trade', 'NEW']] : []),
     ...(user?.role === 'admin' ? [['/admin', 'Admin']] : []),
   ];
 
@@ -510,7 +521,7 @@ function Nav() {
           <Link to="/" style={{ textDecoration: 'none' }}><div className="nav-brand">Galactic Track</div></Link>
           {!isMobile && (
             <div className="nav-links" style={{ display: 'flex', alignItems: 'center', gap: 20, height: 42 }}>
-              {navLinks.map(([to, label]) => navLink(to, label))}
+              {navLinks.map(([to, label, badge]) => navLink(to, label, false, badge))}
             </div>
           )}
           {isMobile && (
@@ -545,7 +556,7 @@ function Nav() {
       </nav>
       {isMobile && menuOpen && (
         <div className="nav-mobile-menu">
-          {navLinks.map(([to, label]) => navLink(to, label, true))}
+          {navLinks.map(([to, label, badge]) => navLink(to, label, true, badge))}
         </div>
       )}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
