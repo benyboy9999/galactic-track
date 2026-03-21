@@ -116,6 +116,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
     res.json({
       id:           req.user.id,
       companyName:  req.user.company_name,
+      companyId:    req.user.company_id,
       creditsUsed:  req.user.credits_used,
       creditsTotal: req.user.credits_total,
       role:         req.user.role ?? 'user',

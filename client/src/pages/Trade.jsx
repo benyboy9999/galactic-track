@@ -263,71 +263,6 @@ function LocationForm({ form, setForm, planets, onSubmit, onCancel, submitting, 
   );
 }
 
-// ── Guild listing card (read-only, all members) ───────────────────────────────
-
-function ListingCard({ listing }) {
-  return (
-    <div style={{
-      background: '#0d0d22', border: '1px solid #1e1e3a',
-      borderRadius: 7, padding: '10px 12px',
-      display: 'flex', flexDirection: 'column', gap: 8,
-    }}>
-      {/* Item */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-        <svg width={22} height={22} style={{ flexShrink: 0 }}>
-          <use href={`${SPRITE_URL}#${toIconId(listing.mat_name)}`} width={22} height={22} />
-        </svg>
-        <span style={{ fontSize: 15, fontWeight: 700, color: '#e0e0ff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {listing.mat_name}
-        </span>
-      </div>
-
-      {/* Company */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        {listing.company_logo && <CompanyLogo ic={listing.company_logo} size={15} />}
-        <span style={{ fontSize: 13, color: '#c8c8e8', fontWeight: 600, lineHeight: 1.2 }}>
-          {listing.guild_tag && <span style={{ color: '#8080b0', marginRight: 4 }}>[{listing.guild_tag}]</span>}
-          {listing.company_name}
-        </span>
-      </div>
-
-      {/* Locations */}
-      {listing.locations?.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          {listing.locations.map((loc, i) => (
-            <div key={loc.id ?? i} style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              paddingTop: i > 0 ? 5 : 0,
-              borderTop: i > 0 ? '1px solid #1a1a35' : 'none',
-            }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: '#a0a0c0', letterSpacing: '-0.01em' }}>
-                {fmtPrice(loc.price_type, loc.price_value)}
-              </span>
-              {loc.stock_level && (
-                <span style={{ fontSize: 11, color: STOCK_COLORS[loc.stock_level] ?? '#b0b0cc' }}>
-                  {STOCK_LABELS[loc.stock_level] ?? loc.stock_level}
-                </span>
-              )}
-              {loc.location && (
-                <span style={{ fontSize: 11, color: '#5a5a7a', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {loc.location}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <span style={{ fontSize: 12, color: '#3a3a5a', fontStyle: 'italic' }}>No locations</span>
-      )}
-
-      {/* Footer */}
-      <div style={{ fontSize: 11, color: '#3a3a5a', marginTop: 'auto' }}>
-        {relTime(listing.created_at)}
-      </div>
-    </div>
-  );
-}
-
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const PRICE_TYPE_OPTIONS = [
@@ -360,6 +295,8 @@ export default function Trade() {
   const [submitting,    setSubmitting]    = useState(false);
   const [submitErr,     setSubmitErr]     = useState('');
   const [deletingId,    setDeletingId]    = useState(null);
+  const [searchQuery,   setSearchQuery]   = useState('');
+  const [expandedItem, setExpandedItem] = useState(null);
 
   // Location add/edit
   const [addingLocListingId, setAddingLocListingId] = useState(null); // listing id with open add form
@@ -503,78 +440,206 @@ export default function Trade() {
     }
   }
 
+  // ── Ownership helper ─────────────────────────────────────────────────────────
+
+  function checkOwn(l) {
+    return l.user_id === user?.id ||
+      (String(user?.companyId) === '0' && l.company_name === user?.companyName);
+  }
+
+  const myListings = useMemo(() => listings.filter(checkOwn), [listings, user]);
+
+  // ── Grouped listings ─────────────────────────────────────────────────────────
+
+  const groupedListings = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const map = new Map();
+    for (const l of listings) {
+      if (!map.has(l.mat_id)) map.set(l.mat_id, { mat_id: l.mat_id, mat_name: l.mat_name, rows: [] });
+      map.get(l.mat_id).rows.push(l);
+    }
+    let groups = Array.from(map.values());
+    if (q) groups = groups.filter((g) => g.mat_name.toLowerCase().includes(q));
+    groups.sort((a, b) => a.mat_name.localeCompare(b.mat_name));
+    return groups;
+  }, [listings, searchQuery]);
+
   // ── Render ───────────────────────────────────────────────────────────────────
 
   if (loading) return <div style={{ padding: 32, textAlign: 'center' }}><Spinner /></div>;
 
   const guildTag = listings[0]?.guild_tag ?? user?.companyTag ?? '';
-  const own      = listings.filter((l) => l.user_id === user?.id);
+
+  function toggleItem(matId) {
+    setExpandedItem((prev) => prev === matId ? null : matId);
+  }
+
+  // ── Your Listings column renderer ─────────────────────────────────────────────
+
+  function renderMyListing(l) {
+    return (
+      <div key={l.id} style={{ borderTop: '1px solid #1a1a35' }}>
+        {/* Item header row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', background: '#0d0d22' }}>
+          <svg width={16} height={16} style={{ flexShrink: 0 }}>
+            <use href={`${SPRITE_URL}#${toIconId(l.mat_name)}`} width={16} height={16} />
+          </svg>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#d8d8f0', flex: 1 }}>{l.mat_name}</span>
+          <button
+            onClick={() => { setLocForm({ ...DEFAULT_LOC_FORM }); setAddingLocListingId(addingLocListingId === l.id ? null : l.id); setEditingLoc(null); }}
+            style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 11, padding: '0 4px' }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
+          >+ Location</button>
+          <button
+            onClick={() => handleDelete(l.id)}
+            disabled={deletingId === l.id}
+            style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: deletingId === l.id ? 'default' : 'pointer', fontSize: 13, padding: '0 2px', opacity: deletingId === l.id ? 0.4 : 1 }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
+            title="Remove listing"
+          >✕</button>
+        </div>
+        {/* Location rows */}
+        {(l.locations ?? []).map((loc) => (
+          <div key={loc.id}>
+            {editingLoc?.listingId === l.id && editingLoc?.locId === loc.id ? (
+              <LocationForm
+                form={locForm}
+                setForm={setLocForm}
+                planets={planets}
+                onSubmit={() => handleUpdateLocation(l.id, loc.id)}
+                onCancel={() => setEditingLoc(null)}
+                submitting={submitting}
+                label="Save"
+              />
+            ) : (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '4px 12px 4px 28px', background: '#0a0a1e',
+                borderTop: '1px solid #0e0e22',
+              }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', minWidth: 50 }}>
+                  {fmtPrice(loc.price_type, loc.price_value)}
+                </span>
+                {loc.stock_level && (
+                  <span style={{ fontSize: 11, color: STOCK_COLORS[loc.stock_level], whiteSpace: 'nowrap' }}>
+                    {STOCK_LABELS[loc.stock_level]}
+                  </span>
+                )}
+                {loc.location && (
+                  <span style={{ fontSize: 11, color: '#4a4a6a', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {loc.location}
+                  </span>
+                )}
+                <button
+                  onClick={() => startEditLoc(l.id, loc)}
+                  style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 11, padding: '0 2px' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
+                >Edit</button>
+                <button
+                  onClick={() => handleDeleteLocation(l.id, loc.id)}
+                  style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 12, padding: '0 2px' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
+                >✕</button>
+              </div>
+            )}
+          </div>
+        ))}
+        {/* Add location form */}
+        {addingLocListingId === l.id && (
+          <LocationForm
+            form={locForm}
+            setForm={setLocForm}
+            planets={planets}
+            onSubmit={() => handleAddLocation(l.id)}
+            onCancel={() => setAddingLocListingId(null)}
+            submitting={submitting}
+            label="Add Location"
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <h2 style={{ margin: 0, fontSize: 20, color: '#d8d8f0', fontWeight: 600 }}>Guild Trade Board</h2>
+            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#e0e0f0' }}>Guild Trade Board</h1>
             {guildTag && (
-              <span style={{
-                padding: '2px 8px', background: '#1e1e3a', border: '1px solid #3a3a5a',
-                borderRadius: 4, fontSize: 11, color: '#8080aa', fontWeight: 600, letterSpacing: 1,
-              }}>{guildTag}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#a78bfa', background: '#1e1440', border: '1px solid #4c1d95', borderRadius: 4, padding: '1px 7px', letterSpacing: '0.05em' }}>
+                {guildTag}
+              </span>
             )}
           </div>
-          <p style={{ margin: '4px 0 0', fontSize: 12, color: '#5a5a7a' }}>
-            Internal guild pricing — visible to guild members only
-          </p>
+          <div style={{ fontSize: 12, color: '#6b6b8a', marginTop: 2 }}>Internal guild pricing — visible to guild members only</div>
         </div>
-        <button
-          onClick={() => { setFormOpen((o) => !o); if (formOpen) { setSelItem(null); setPendingLocs([]); setPendingLocForm({ ...DEFAULT_LOC_FORM }); setSubmitErr(''); } }}
-          style={{
-            marginLeft: 'auto', padding: '7px 14px',
-            background: formOpen ? '#1e1e3a' : '#3730a3',
-            border: '1px solid ' + (formOpen ? '#3a3a5a' : '#4f46e5'),
-            borderRadius: 6, color: '#d8d8f0', fontSize: 13, cursor: 'pointer',
-          }}
-        >{formOpen ? '✕ Cancel' : '+ Add Listing'}</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search items…"
+            style={{
+              width: 200, boxSizing: 'border-box', padding: '6px 10px',
+              background: '#13132a', border: '1px solid #1e1e3a', borderRadius: 6,
+              color: '#d8d8f0', fontSize: 12, outline: 'none',
+            }}
+          />
+          <button
+            onClick={() => { setFormOpen((o) => !o); if (formOpen) { setSelItem(null); setPendingLocForm({ ...DEFAULT_LOC_FORM }); setSubmitErr(''); } }}
+            style={{
+              padding: '6px 14px',
+              background: formOpen ? '#13132a' : '#1e1440',
+              border: `1px solid ${formOpen ? '#2e2e5a' : '#4c1d95'}`,
+              borderRadius: 6,
+              color: formOpen ? '#6b6b8a' : '#a78bfa',
+              fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >{formOpen ? '✕ Cancel' : '+ Post Listing'}</button>
+        </div>
       </div>
 
-      {/* Add listing form */}
+      {/* Post listing form */}
       {formOpen && (
-        <div style={{ marginBottom: 20, background: '#0d0d1f', border: '1px solid #2a2a4a', borderRadius: 8 }}>
-          {/* Item row */}
-          <div style={{ padding: '12px 14px', borderBottom: '1px solid #1a1a2e' }}>
-            <label style={{ display: 'block', fontSize: 11, color: '#6b6b8a', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Item</label>
-            {selItem ? (
-              <div
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', background: '#0d0d1f', border: '1px solid #3730a3', borderRadius: 6, cursor: 'pointer' }}
-                onClick={() => { setSelItem(null); setPendingLocForm({ ...DEFAULT_LOC_FORM }); }}
-              >
-                <svg width={18} height={18} style={{ flexShrink: 0 }}>
-                  <use href={`${SPRITE_URL}#${toIconId(selItem.matName)}`} width={18} height={18} />
-                </svg>
-                <span style={{ fontSize: 13, color: '#d8d8f0', flex: 1 }}>{selItem.matName}</span>
-                <span style={{ fontSize: 11, color: '#5a5a7a' }}>✕</span>
+        <div style={{ marginBottom: 20, background: '#0d0d1f', border: '1px solid #2e2e5a', borderRadius: 8 }}>
+          {selItem ? (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+              <div style={{ padding: '12px 14px', borderRight: '1px solid #1a1a2e' }}>
+                <label style={{ display: 'block', fontSize: 11, color: '#6b6b8a', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Item</label>
+                <div
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', background: '#0d0d1f', border: '1px solid #4c1d95', borderRadius: 6, cursor: 'pointer' }}
+                  onClick={() => { setSelItem(null); setPendingLocForm({ ...DEFAULT_LOC_FORM }); }}
+                >
+                  <svg width={18} height={18} style={{ flexShrink: 0 }}>
+                    <use href={`${SPRITE_URL}#${toIconId(selItem.matName)}`} width={18} height={18} />
+                  </svg>
+                  <span style={{ fontSize: 13, color: '#d8d8f0', flex: 1 }}>{selItem.matName}</span>
+                  <span style={{ fontSize: 11, color: '#5a5a7a' }}>✕</span>
+                </div>
+                {submitErr && <div style={{ fontSize: 12, color: '#ef4444', marginTop: 6 }}>{submitErr}</div>}
               </div>
-            ) : (
+              <div>
+                <LocationForm
+                  form={pendingLocForm}
+                  setForm={setPendingLocForm}
+                  planets={planets}
+                  onSubmit={handleCreateWithLocation}
+                  onCancel={null}
+                  submitting={submitting}
+                  label={submitting ? 'Posting…' : 'Post Listing'}
+                />
+              </div>
+            </div>
+          ) : (
+            <div style={{ padding: '12px 14px' }}>
+              <label style={{ display: 'block', fontSize: 11, color: '#6b6b8a', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Item</label>
               <ItemSearch items={allItems} onSelect={(item) => setSelItem({ matId: item.matId, matName: item.matName })} />
-            )}
-          </div>
-
-          {/* Location form — only shown once item is selected */}
-          {selItem && (
-            <>
-              {submitErr && <div style={{ padding: '6px 14px', fontSize: 12, color: '#ef4444' }}>{submitErr}</div>}
-              <LocationForm
-                form={pendingLocForm}
-                setForm={setPendingLocForm}
-                planets={planets}
-                onSubmit={handleCreateWithLocation}
-                onCancel={null}
-                submitting={submitting}
-                label={submitting ? 'Creating…' : 'Create Listing'}
-              />
-            </>
+            </div>
           )}
         </div>
       )}
@@ -586,131 +651,131 @@ export default function Trade() {
         </div>
       )}
 
-      {listings.length === 0 ? (
-        <div style={{ padding: '32px 0', textAlign: 'center', color: '#4a4a6a', fontSize: 14 }}>
-          No guild listings yet. Be the first to add one.
-        </div>
-      ) : (
-        <>
-          {/* Your Listings */}
-          {own.length > 0 && (
-            <div style={{ marginBottom: 24 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-                Your Listings
-              </div>
-              <div style={{ border: '1px solid #1e1e3a', borderRadius: 7 }}>
-                {own.map((l, i) => (
-                  <div key={l.id} style={{ borderBottom: i < own.length - 1 ? '1px solid #12122a' : 'none' }}>
-                    {/* Listing header */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#0d0d1f' }}>
+      {/* Two-column layout */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 400px', gap: 16, alignItems: 'start' }}>
+
+        {/* Left — Guild Listings */}
+        <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid #1a1a35' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Guild Listings</span>
+          </div>
+          {listings.length === 0 ? (
+            <div style={{ padding: '32px 0', textAlign: 'center', color: '#4a4a6a', fontSize: 14 }}>
+              No guild listings yet. Be the first to post one.
+            </div>
+          ) : groupedListings.length === 0 ? (
+            <div style={{ padding: '24px 0', textAlign: 'center', color: '#4a4a6a', fontSize: 14 }}>
+              No items match "{searchQuery}"
+            </div>
+          ) : (
+            <div>
+              {groupedListings.map((group, gi) => {
+                const isExpanded = expandedItem === group.mat_id;
+                const allLocs = group.rows.flatMap((r) => r.locations ?? []);
+                const fixed = allLocs.filter((l) => l.price_type !== 'average');
+                const bestLoc = (fixed.length ? fixed : allLocs).reduce(
+                  (a, b) => a && a.price_value <= b.price_value ? a : b, null
+                );
+
+                return (
+                  <div key={group.mat_id}>
+                    {/* Item row */}
+                    <div
+                      onClick={() => toggleItem(group.mat_id)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '9px 14px', cursor: 'pointer',
+                        background: isExpanded ? '#0f0f2a' : '#0d0d22',
+                        borderTop: gi > 0 ? '1px solid #1a1a35' : 'none',
+                      }}
+                      onMouseEnter={(e) => { if (!isExpanded) e.currentTarget.style.background = '#0f0f2a'; }}
+                      onMouseLeave={(e) => { if (!isExpanded) e.currentTarget.style.background = '#0d0d22'; }}
+                    >
                       <svg width={18} height={18} style={{ flexShrink: 0 }}>
-                        <use href={`${SPRITE_URL}#${toIconId(l.mat_name)}`} width={18} height={18} />
+                        <use href={`${SPRITE_URL}#${toIconId(group.mat_name)}`} width={18} height={18} />
                       </svg>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: '#d8d8f0', flex: 1 }}>{l.mat_name}</span>
-                      <span style={{ fontSize: 11, color: '#3a3a5a' }}>{relTime(l.created_at)}</span>
-                      <button
-                        onClick={() => handleDelete(l.id)}
-                        disabled={deletingId === l.id}
-                        style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: deletingId === l.id ? 'default' : 'pointer', fontSize: 13, padding: '0 2px', opacity: deletingId === l.id ? 0.4 : 1 }}
-                        onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
-                        title="Remove listing"
-                      >✕</button>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: '#d8d8f0', flex: 1 }}>{group.mat_name}</span>
+                      {bestLoc && (
+                        <span style={{ fontSize: 13, color: '#c0c0e0', fontWeight: 500, marginRight: 8 }}>
+                          {fmtPrice(bestLoc.price_type, bestLoc.price_value)}
+                        </span>
+                      )}
+                      <span style={{ fontSize: 11, color: '#4a4a6a', marginRight: 8 }}>
+                        {group.rows.length} {group.rows.length === 1 ? 'seller' : 'sellers'}
+                      </span>
+                      <span style={{ fontSize: 12, color: '#4a4a6a', transition: 'transform 0.15s', display: 'inline-block', transform: isExpanded ? 'rotate(90deg)' : 'none' }}>›</span>
                     </div>
 
-                    {/* Location rows */}
-                    {(l.locations ?? []).map((loc) => (
-                      <div key={loc.id}>
-                        {editingLoc?.listingId === l.id && editingLoc?.locId === loc.id ? (
-                          <LocationForm
-                            form={locForm}
-                            setForm={setLocForm}
-                            planets={planets}
-                            onSubmit={() => handleUpdateLocation(l.id, loc.id)}
-                            onCancel={() => setEditingLoc(null)}
-                            submitting={submitting}
-                            label="Save"
-                          />
-                        ) : (
+                    {/* Expanded: sellers + locations */}
+                    {isExpanded && group.rows.map((l) => {
+                      const isOwn = checkOwn(l);
+                      return (
+                        <div key={l.id}>
                           <div style={{
                             display: 'flex', alignItems: 'center', gap: 8,
-                            padding: '5px 12px 5px 38px', background: '#09091a',
-                            borderTop: '1px solid #111128',
+                            padding: '6px 14px 6px 40px', background: '#0a0a1e',
+                            borderTop: '1px solid #12122a',
                           }}>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', minWidth: 60 }}>
-                              {fmtPrice(loc.price_type, loc.price_value)}
+                            {l.company_logo && <CompanyLogo ic={l.company_logo} size={14} />}
+                            <span style={{ fontSize: 12, color: '#a0a0c8', fontWeight: 600, flex: 1 }}>
+                              {l.guild_tag && <span style={{ color: '#5a5a90', marginRight: 4 }}>[{l.guild_tag}]</span>}
+                              {l.company_name}
                             </span>
-                            {loc.stock_level && (
-                              <span style={{ fontSize: 11, color: STOCK_COLORS[loc.stock_level], whiteSpace: 'nowrap' }}>
-                                {STOCK_LABELS[loc.stock_level]}
-                              </span>
-                            )}
-                            {loc.location && (
-                              <span style={{ fontSize: 11, color: '#4a4a6a', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {loc.location}
-                              </span>
-                            )}
-                            <button
-                              onClick={() => startEditLoc(l.id, loc)}
-                              style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 11, padding: '0 2px' }}
-                              onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
-                              onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
-                            >Edit</button>
-                            <button
-                              onClick={() => handleDeleteLocation(l.id, loc.id)}
-                              style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 12, padding: '0 2px' }}
-                              onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }}
-                              onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
-                            >✕</button>
+                            <span style={{ fontSize: 11, color: '#3a3a5a' }}>{relTime(l.created_at)}</span>
                           </div>
-                        )}
-                      </div>
-                    ))}
 
-                    {/* Add location row / form */}
-                    {addingLocListingId === l.id ? (
-                      <LocationForm
-                        form={locForm}
-                        setForm={setLocForm}
-                        planets={planets}
-                        onSubmit={() => handleAddLocation(l.id)}
-                        onCancel={() => setAddingLocListingId(null)}
-                        submitting={submitting}
-                        label="Add Location"
-                      />
-                    ) : (
-                      <div style={{ padding: '5px 12px', background: '#09091a', borderTop: '1px solid #111128' }}>
-                        <button
-                          onClick={() => {
-                            setLocForm({ ...DEFAULT_LOC_FORM });
-                            setAddingLocListingId(l.id);
-                            setEditingLoc(null);
-                          }}
-                          style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 12, padding: '2px 0' }}
-                          onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
-                        >+ Add Location</button>
-                      </div>
-                    )}
+                          {/* Location rows */}
+                          {(l.locations ?? []).map((loc) => (
+                            <div key={loc.id}>
+                              <div style={{
+                                display: 'flex', alignItems: 'center', gap: 10,
+                                padding: '4px 14px 4px 56px', background: '#080818',
+                                borderTop: '1px solid #0e0e22',
+                              }}>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', minWidth: 55 }}>
+                                  {fmtPrice(loc.price_type, loc.price_value)}
+                                </span>
+                                {loc.stock_level && (
+                                  <span style={{ fontSize: 11, color: STOCK_COLORS[loc.stock_level], whiteSpace: 'nowrap' }}>
+                                    {STOCK_LABELS[loc.stock_level]}
+                                  </span>
+                                )}
+                                {loc.location && (
+                                  <span style={{ fontSize: 11, color: '#4a4a6a', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {loc.location}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
           )}
+        </div>
 
-          {/* Guild Listings */}
-          {listings.length > 0 && (
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-                Guild Listings
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
-                {listings.map((l) => <ListingCard key={l.id} listing={l} />)}
-              </div>
+        {/* Right — Your Listings */}
+        <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid #1a1a35', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Your Listings</span>
+            {myListings.length > 0 && (
+              <span style={{ fontSize: 11, color: '#3a3a5a' }}>{myListings.length}</span>
+            )}
+          </div>
+          {myListings.length === 0 ? (
+            <div style={{ padding: '20px 12px', textAlign: 'center', color: '#3a3a5a', fontSize: 12 }}>
+              No listings yet
             </div>
+          ) : (
+            myListings.map((l) => renderMyListing(l))
           )}
-        </>
-      )}
+        </div>
+
+      </div>
     </div>
   );
 }
