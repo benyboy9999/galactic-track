@@ -356,7 +356,6 @@ export default function Trade() {
   // Add-listing form
   const [formOpen,      setFormOpen]      = useState(false);
   const [selItem,       setSelItem]       = useState(null);
-  const [pendingLocs,   setPendingLocs]   = useState([]);
   const [pendingLocForm, setPendingLocForm] = useState({ ...DEFAULT_LOC_FORM });
   const [submitting,    setSubmitting]    = useState(false);
   const [submitErr,     setSubmitErr]     = useState('');
@@ -402,33 +401,19 @@ export default function Trade() {
 
   // ── Listing CRUD ─────────────────────────────────────────────────────────────
 
-  function addToPending() {
+  async function handleCreateWithLocation() {
+    if (!selItem) return;
     const parsed = parseLocForm(pendingLocForm);
     if (parsed.err) { setPendingLocForm((f) => ({ ...f, priceErr: parsed.err })); return; }
-    setPendingLocs((prev) => [...prev, parsed]);
-    setPendingLocForm({ ...DEFAULT_LOC_FORM });
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!selItem) return setSubmitErr('Please select an item.');
     setSubmitting(true);
+    setSubmitErr('');
     try {
       const row = await api.tradeAdd({ mat_id: selItem.matId, mat_name: selItem.matName });
-      // Post all pending locations
-      const locs = await Promise.all(pendingLocs.map((loc) => api.tradeAddLocation(row.id, loc)));
-      setListings((prev) => [{ ...row, locations: locs }, ...prev]);
+      const loc = await api.tradeAddLocation(row.id, parsed);
+      setListings((prev) => [{ ...row, locations: [loc] }, ...prev]);
       setSelItem(null);
-      setPendingLocs([]);
       setPendingLocForm({ ...DEFAULT_LOC_FORM });
       setFormOpen(false);
-      setSubmitErr('');
-      // If no pending locs were added, open add-location form on the new listing
-      if (locs.length === 0) {
-        setLocForm({ ...DEFAULT_LOC_FORM });
-        setAddingLocListingId(row.id);
-        setEditingLoc(null);
-      }
     } catch (e) {
       setSubmitErr(e.message);
     } finally {
@@ -500,10 +485,19 @@ export default function Trade() {
 
   async function handleDeleteLocation(listingId, locId) {
     try {
+      const listing = listings.find((l) => l.id === listingId);
+      const isLast = listing?.locations?.length === 1;
       await api.tradeDeleteLocation(listingId, locId);
-      setListings((prev) => prev.map((l) =>
-        l.id === listingId ? { ...l, locations: l.locations.filter((loc) => loc.id !== locId) } : l
-      ));
+      if (isLast) {
+        await api.tradeDelete(listingId);
+        if (addingLocListingId === listingId) setAddingLocListingId(null);
+        if (editingLoc?.listingId === listingId) setEditingLoc(null);
+        setListings((prev) => prev.filter((l) => l.id !== listingId));
+      } else {
+        setListings((prev) => prev.map((l) =>
+          l.id === listingId ? { ...l, locations: l.locations.filter((loc) => loc.id !== locId) } : l
+        ));
+      }
     } catch (e) {
       setErr(e.message);
     }
@@ -547,17 +541,14 @@ export default function Trade() {
 
       {/* Add listing form */}
       {formOpen && (
-        <form onSubmit={handleSubmit} style={{
-          marginBottom: 20,
-          background: '#0d0d1f', border: '1px solid #2a2a4a', borderRadius: 8,
-        }}>
+        <div style={{ marginBottom: 20, background: '#0d0d1f', border: '1px solid #2a2a4a', borderRadius: 8 }}>
           {/* Item row */}
           <div style={{ padding: '12px 14px', borderBottom: '1px solid #1a1a2e' }}>
             <label style={{ display: 'block', fontSize: 11, color: '#6b6b8a', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Item</label>
             {selItem ? (
               <div
                 style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', background: '#0d0d1f', border: '1px solid #3730a3', borderRadius: 6, cursor: 'pointer' }}
-                onClick={() => { setSelItem(null); setPendingLocs([]); setPendingLocForm({ ...DEFAULT_LOC_FORM }); }}
+                onClick={() => { setSelItem(null); setPendingLocForm({ ...DEFAULT_LOC_FORM }); }}
               >
                 <svg width={18} height={18} style={{ flexShrink: 0 }}>
                   <use href={`${SPRITE_URL}#${toIconId(selItem.matName)}`} width={18} height={18} />
@@ -570,55 +561,22 @@ export default function Trade() {
             )}
           </div>
 
-          {/* Locations section — only shown once item is selected */}
+          {/* Location form — only shown once item is selected */}
           {selItem && (
-            <div>
-              <div style={{ padding: '8px 14px 4px', fontSize: 11, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                Locations {pendingLocs.length > 0 && <span style={{ color: '#4f46e5' }}>({pendingLocs.length})</span>}
-              </div>
-              {/* Pending location rows */}
-              {pendingLocs.map((loc, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 14px', background: '#09091a', borderTop: '1px solid #111128' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', minWidth: 60 }}>{fmtPrice(loc.price_type, loc.price_value)}</span>
-                  {loc.stock_level && <span style={{ fontSize: 11, color: STOCK_COLORS[loc.stock_level] }}>{STOCK_LABELS[loc.stock_level]}</span>}
-                  {loc.location && <span style={{ fontSize: 11, color: '#4a4a6a', flex: 1 }}>{loc.location}</span>}
-                  <button
-                    type="button"
-                    onClick={() => setPendingLocs((prev) => prev.filter((_, j) => j !== i))}
-                    style={{ background: 'none', border: 'none', color: '#4a4a6a', cursor: 'pointer', fontSize: 12, padding: '0 2px' }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = '#4a4a6a'; }}
-                  >✕</button>
-                </div>
-              ))}
-              {/* Inline add-location form */}
+            <>
+              {submitErr && <div style={{ padding: '6px 14px', fontSize: 12, color: '#ef4444' }}>{submitErr}</div>}
               <LocationForm
                 form={pendingLocForm}
                 setForm={setPendingLocForm}
                 planets={planets}
-                onSubmit={addToPending}
+                onSubmit={handleCreateWithLocation}
                 onCancel={null}
-                submitting={false}
-                label="+ Add"
+                submitting={submitting}
+                label={submitting ? 'Creating…' : 'Create Listing'}
               />
-            </div>
+            </>
           )}
-
-          {/* Submit row */}
-          <div style={{ padding: '10px 14px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, borderTop: '1px solid #1a1a2e' }}>
-            {submitErr && <span style={{ fontSize: 12, color: '#ef4444' }}>{submitErr}</span>}
-            <button
-              type="submit"
-              disabled={submitting || !selItem}
-              style={{
-                padding: '7px 20px', background: '#3730a3', border: '1px solid #4f46e5',
-                borderRadius: 6, color: '#d8d8f0', fontSize: 13,
-                cursor: (submitting || !selItem) ? 'default' : 'pointer',
-                opacity: (submitting || !selItem) ? 0.5 : 1,
-              }}
-            >{submitting ? 'Creating…' : 'Create Listing'}</button>
-          </div>
-        </form>
+        </div>
       )}
 
       {/* Error */}
