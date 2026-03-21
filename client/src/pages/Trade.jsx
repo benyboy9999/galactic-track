@@ -230,8 +230,8 @@ function LocationForm({ form, setForm, planets, onSubmit, onCancel, submitting, 
         />
       </div>
       {/* Row 2: location + action buttons inline */}
-      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
-        <div style={{ flex: 1 }}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', flexWrap: 'nowrap' }}>
+        <div style={{ width: 180, flexShrink: 0 }}>
           <LocationPicker
             planets={planets}
             planet={form.planet}
@@ -300,7 +300,7 @@ function ListingCard({ listing }) {
               paddingTop: i > 0 ? 5 : 0,
               borderTop: i > 0 ? '1px solid #1a1a35' : 'none',
             }}>
-              <span style={{ fontSize: i === 0 ? 18 : 14, fontWeight: 700, color: i === 0 ? '#e2e8f0' : '#a0a0c0', letterSpacing: '-0.01em' }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: '#a0a0c0', letterSpacing: '-0.01em' }}>
                 {fmtPrice(loc.price_type, loc.price_value)}
               </span>
               {loc.stock_level && (
