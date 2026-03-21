@@ -243,6 +243,9 @@ async function run(retries = 0) {
   removeInjection();
   if (tableObserver) { tableObserver.disconnect(); tableObserver = null; }
 
+  const { enabled } = await chrome.storage.local.get('enabled');
+  if (enabled === false) return;
+
   const matId = getMatIdFromUrl();
   if (!matId) return;
 
@@ -281,6 +284,16 @@ setInterval(() => {
 }, 500);
 
 window.addEventListener('popstate', onNavigate);
+
+// React to toggle changes without requiring a page reload
+chrome.storage.onChanged.addListener((changes) => {
+  if (!('enabled' in changes)) return;
+  if (changes.enabled.newValue === false) {
+    removeInjection();
+  } else {
+    onNavigate();
+  }
+});
 
 // Pre-cache identity on any game page so it's ready before the user navigates to an exchange
 resolveIdentity().catch(() => {});

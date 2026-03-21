@@ -20,61 +20,96 @@
     }
     .header img { width: 22px; height: 22px; }
     .header-text { font-size: 13px; font-weight: 600; color: #d8d8f0; }
-    button {
-      width: 100%;
-      padding: 8px 0;
-      background: transparent;
-      border: 1px solid #2a2a4a;
-      border-radius: 6px;
-      color: #6b6b8a;
-      font-size: 12px;
-      cursor: pointer;
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
     }
-    button:hover { border-color: #4a4a6a; color: #9090b0; }
-    .connected-status {
+    .status-left {
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: 12px;
-      color: #22c55e;
-      margin-bottom: 4px;
-    }
-    .connected-company {
-      font-size: 12px;
-      color: #b0b0cc;
-      margin-bottom: 12px;
+      min-width: 0;
     }
     .dot {
       width: 7px;
       height: 7px;
       border-radius: 50%;
-      background: #22c55e;
       flex-shrink: 0;
+      transition: background 0.2s;
     }
-    .not-connected {
+    .dot.on  { background: #22c55e; }
+    .dot.off { background: #ef4444; }
+    .status-label {
+      font-size: 12px;
+      font-weight: 600;
+      transition: color 0.2s;
+    }
+    .status-label.on  { color: #22c55e; }
+    .status-label.off { color: #ef4444; }
+
+    .info-line {
       font-size: 11px;
-      color: #4a4a6a;
-      margin-bottom: 12px;
-      line-height: 1.5;
+      color: #6b6b8a;
+      margin-top: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .info-line span { color: #9090b0; }
+
+    /* Toggle slider */
+    .toggle-wrap { flex-shrink: 0; }
+    .toggle-wrap input { display: none; }
+    .toggle-track {
+      display: block;
+      width: 36px;
+      height: 20px;
+      background: #2a2a4a;
+      border-radius: 10px;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle-track::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 14px;
+      height: 14px;
+      background: #6b6b8a;
+      border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    input:checked + .toggle-track { background: #166534; }
+    input:checked + .toggle-track::after {
+      transform: translateX(16px);
+      background: #22c55e;
     }
   </style>
 </head>
 <body>
   <div class="header">
     <img src="GTE48.png" alt="" />
-    <div>
-      <div class="header-text">Galactic Track Extension</div>
+    <div class="header-text">Galactic Track</div>
+  </div>
+
+  <div class="status-row">
+    <div class="status-left">
+      <span class="dot" id="dot"></span>
+      <span class="status-label" id="status-label">—</span>
     </div>
+    <label class="toggle-wrap">
+      <input type="checkbox" id="toggle" />
+      <span class="toggle-track"></span>
+    </label>
   </div>
 
-  <div id="view-connected" style="display:none">
-    <div class="connected-status"><span class="dot"></span>Connected</div>
-    <div class="connected-company">[<span id="info-guild">—</span>] <span id="info-company">—</span></div>
-    <button id="btn-reset">Sign Out</button>
-  </div>
-
-  <div id="view-not-connected">
-    <div class="not-connected">Visit an exchange page in Galactic Tycoons to connect automatically.</div>
+  <div class="info-line" id="info-line" style="display:none">
+    [<span id="info-guild">—</span>] <span id="info-company">—</span>
   </div>
 
   <script src="popup.js"></script>
