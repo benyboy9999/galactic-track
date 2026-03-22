@@ -775,7 +775,7 @@ export default function Trade() {
         </div>
 
         {/* Right — Your Listings */}
-        <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 8 }}>
           <div style={{ padding: '8px 12px', borderBottom: '1px solid #1a1a35', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Your Listings</span>
             {myListings.length > 0 && (
