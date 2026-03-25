@@ -276,25 +276,23 @@ router.delete('/contracts/:id', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/admin/trade  — guild adoption stats + access list
+// GET /api/admin/trade  — guild adoption stats (all guilds with listings)
 router.get('/trade', requireAdmin, async (req, res, next) => {
   try {
     const r = await pool.query(`
       SELECT
-        tga.guild_tag,
-        tga.added_at,
-        (SELECT COUNT(*)::int FROM users u WHERE u.company_tag = tga.guild_tag)               AS member_count,
-        COUNT(DISTINCT tl.id)::int                                                             AS listing_count,
-        COUNT(DISTINCT tl.user_id)::int                                                        AS active_users,
-        COUNT(DISTINCT tl.mat_id)::int                                                         AS material_count,
-        COUNT(DISTINCT tll.id)::int                                                            AS location_count,
-        MAX(tl.created_at)                                                                     AS last_listing_at,
-        COUNT(DISTINCT tl.id) FILTER (WHERE tl.created_at > NOW() - INTERVAL '7 days')::int   AS listings_last_7d
-      FROM trade_guild_access tga
-      LEFT JOIN trade_listings tl  ON tl.guild_tag   = tga.guild_tag
+        tl.guild_tag,
+        (SELECT COUNT(*)::int FROM users u WHERE u.company_tag = tl.guild_tag)               AS member_count,
+        COUNT(DISTINCT tl.id)::int                                                            AS listing_count,
+        COUNT(DISTINCT tl.user_id)::int                                                       AS active_users,
+        COUNT(DISTINCT tl.mat_id)::int                                                        AS material_count,
+        COUNT(DISTINCT tll.id)::int                                                           AS location_count,
+        MAX(tl.created_at)                                                                    AS last_listing_at,
+        COUNT(DISTINCT tl.id) FILTER (WHERE tl.created_at > NOW() - INTERVAL '7 days')::int  AS listings_last_7d
+      FROM trade_listings tl
       LEFT JOIN trade_listing_locations tll ON tll.listing_id = tl.id
-      GROUP BY tga.guild_tag, tga.added_at
-      ORDER BY listing_count DESC, tga.guild_tag ASC
+      GROUP BY tl.guild_tag
+      ORDER BY listing_count DESC, tl.guild_tag ASC
     `);
     res.json(r.rows);
   } catch (err) { next(err); }
