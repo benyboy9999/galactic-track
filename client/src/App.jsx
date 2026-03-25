@@ -509,7 +509,7 @@ function Nav() {
     ['/', 'Tracker'],
     ['/company', 'Company'],
     ['/contracts', 'Marketplace'],
-    ...(tradeAccess ? [['/trade', 'Trade', 'NEW']] : []),
+    ...(tradeAccess ? [['/trade', 'Guild Trade', 'NEW']] : []),
     ...(user?.role === 'admin' ? [['/admin', 'Admin']] : []),
   ];
 

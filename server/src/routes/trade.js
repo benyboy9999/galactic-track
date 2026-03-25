@@ -4,28 +4,14 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-// ── Guild access middleware ────────────────────────────────────────────────────
-
-async function requireTradeAccess(req, res, next) {
-  const tag = req.user.company_tag;
-  if (!tag) return res.status(403).json({ error: 'No guild on account' });
-  const r = await pool.query('SELECT 1 FROM trade_guild_access WHERE guild_tag = $1', [tag]);
-  if (!r.rows.length) return res.status(403).json({ error: 'Trade not available for your guild' });
-  next();
-}
-
 // ── GET /api/trade/access ──────────────────────────────────────────────────────
-router.get('/access', requireAuth, async (req, res, next) => {
-  try {
-    const tag = req.user.company_tag || '';
-    if (!tag) return res.json({ access: false, guild_tag: '' });
-    const r = await pool.query('SELECT 1 FROM trade_guild_access WHERE guild_tag = $1', [tag]);
-    res.json({ access: r.rows.length > 0, guild_tag: tag });
-  } catch (err) { next(err); }
+router.get('/access', requireAuth, (req, res) => {
+  const tag = req.user.company_tag || '';
+  res.json({ access: tag.length > 0, guild_tag: tag });
 });
 
 // ── GET /api/trade ─────────────────────────────────────────────────────────────
-router.get('/', requireAuth, requireTradeAccess, async (req, res, next) => {
+router.get('/', requireAuth, async (req, res, next) => {
   try {
     const r = await pool.query(
       `SELECT tl.id, tl.user_id, tl.company_name, tl.guild_tag, tl.mat_id, tl.mat_name,
@@ -55,7 +41,7 @@ router.get('/', requireAuth, requireTradeAccess, async (req, res, next) => {
 });
 
 // ── POST /api/trade ────────────────────────────────────────────────────────────
-router.post('/', requireAuth, requireTradeAccess, async (req, res, next) => {
+router.post('/', requireAuth, async (req, res, next) => {
   try {
     const { mat_id, mat_name } = req.body;
     if (!mat_id || !mat_name) return res.status(400).json({ error: 'mat_id and mat_name are required' });
@@ -77,7 +63,7 @@ router.post('/', requireAuth, requireTradeAccess, async (req, res, next) => {
 });
 
 // ── DELETE /api/trade/:id ──────────────────────────────────────────────────────
-router.delete('/:id', requireAuth, requireTradeAccess, async (req, res, next) => {
+router.delete('/:id', requireAuth, async (req, res, next) => {
   try {
     const r = await pool.query(
       'DELETE FROM trade_listings WHERE id = $1 AND user_id = $2 RETURNING id',
@@ -89,7 +75,7 @@ router.delete('/:id', requireAuth, requireTradeAccess, async (req, res, next) =>
 });
 
 // ── POST /api/trade/:id/locations ──────────────────────────────────────────────
-router.post('/:id/locations', requireAuth, requireTradeAccess, async (req, res, next) => {
+router.post('/:id/locations', requireAuth, async (req, res, next) => {
   try {
     const listing = await pool.query(
       'SELECT id FROM trade_listings WHERE id = $1 AND user_id = $2',
@@ -114,7 +100,7 @@ router.post('/:id/locations', requireAuth, requireTradeAccess, async (req, res, 
 });
 
 // ── PATCH /api/trade/:id/locations/:locId ──────────────────────────────────────
-router.patch('/:id/locations/:locId', requireAuth, requireTradeAccess, async (req, res, next) => {
+router.patch('/:id/locations/:locId', requireAuth, async (req, res, next) => {
   try {
     const listing = await pool.query(
       'SELECT id FROM trade_listings WHERE id = $1 AND user_id = $2',
@@ -141,7 +127,7 @@ router.patch('/:id/locations/:locId', requireAuth, requireTradeAccess, async (re
 });
 
 // ── DELETE /api/trade/:id/locations/:locId ─────────────────────────────────────
-router.delete('/:id/locations/:locId', requireAuth, requireTradeAccess, async (req, res, next) => {
+router.delete('/:id/locations/:locId', requireAuth, async (req, res, next) => {
   try {
     const listing = await pool.query(
       'SELECT id FROM trade_listings WHERE id = $1 AND user_id = $2',
@@ -212,7 +198,6 @@ router.get('/public', checkPublicRateLimit, async (req, res, next) => {
               ) AS locations
        FROM trade_listings tl
        JOIN trade_listing_locations ll ON ll.listing_id = tl.id
-       JOIN trade_guild_access tga ON tga.guild_tag = tl.guild_tag
        WHERE tl.guild_tag = $1 ${matFilter}
        GROUP BY tl.id
        ORDER BY tl.mat_id ASC`,

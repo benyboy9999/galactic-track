@@ -276,6 +276,57 @@ router.delete('/contracts/:id', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/admin/trade  — guild adoption stats + access list
+router.get('/trade', requireAdmin, async (req, res, next) => {
+  try {
+    const r = await pool.query(`
+      SELECT
+        tga.guild_tag,
+        tga.added_at,
+        (SELECT COUNT(*)::int FROM users u WHERE u.company_tag = tga.guild_tag)               AS member_count,
+        COUNT(DISTINCT tl.id)::int                                                             AS listing_count,
+        COUNT(DISTINCT tl.user_id)::int                                                        AS active_users,
+        COUNT(DISTINCT tl.mat_id)::int                                                         AS material_count,
+        COUNT(DISTINCT tll.id)::int                                                            AS location_count,
+        MAX(tl.created_at)                                                                     AS last_listing_at,
+        COUNT(DISTINCT tl.id) FILTER (WHERE tl.created_at > NOW() - INTERVAL '7 days')::int   AS listings_last_7d
+      FROM trade_guild_access tga
+      LEFT JOIN trade_listings tl  ON tl.guild_tag   = tga.guild_tag
+      LEFT JOIN trade_listing_locations tll ON tll.listing_id = tl.id
+      GROUP BY tga.guild_tag, tga.added_at
+      ORDER BY listing_count DESC, tga.guild_tag ASC
+    `);
+    res.json(r.rows);
+  } catch (err) { next(err); }
+});
+
+// POST /api/admin/trade/guilds  — grant guild trade access
+router.post('/trade/guilds', requireAdmin, async (req, res, next) => {
+  try {
+    const { guild_tag } = req.body;
+    if (!guild_tag || typeof guild_tag !== 'string' || !/^[A-Z0-9_-]{1,20}$/i.test(guild_tag.trim())) {
+      return res.status(400).json({ error: 'Invalid guild_tag' });
+    }
+    await pool.query(
+      `INSERT INTO trade_guild_access(guild_tag) VALUES($1) ON CONFLICT DO NOTHING`,
+      [guild_tag.trim().toUpperCase()]
+    );
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/admin/trade/guilds/:tag  — revoke guild trade access
+router.delete('/trade/guilds/:tag', requireAdmin, async (req, res, next) => {
+  try {
+    const r = await pool.query(
+      `DELETE FROM trade_guild_access WHERE guild_tag = $1 RETURNING guild_tag`,
+      [req.params.tag]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Guild not found' });
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // GET /api/admin/analytics
 router.get('/analytics', requireAdmin, async (req, res, next) => {
   try {

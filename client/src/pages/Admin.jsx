@@ -273,6 +273,117 @@ function AnalyticsTab({ data }) {
   );
 }
 
+// ── Trade tab ─────────────────────────────────────────────────────────────────
+
+function TradeTab({ data, token, onRefresh }) {
+  const [newTag, setNewTag] = useState('');
+  const [working, setWorking] = useState(null);
+
+  const totalListings = data.reduce((s, r) => s + r.listing_count, 0);
+  const totalUsers    = data.reduce((s, r) => s + r.active_users, 0);
+
+  async function addGuild(e) {
+    e.preventDefault();
+    const tag = newTag.trim().toUpperCase();
+    if (!tag) return;
+    setWorking('add');
+    try {
+      await adminFetch('/trade/guilds', token, {
+        method: 'POST',
+        body: JSON.stringify({ guild_tag: tag }),
+      });
+      setNewTag('');
+      await onRefresh();
+    } catch (err) { alert(err.message); }
+    finally { setWorking(null); }
+  }
+
+  async function removeGuild(tag) {
+    if (!confirm(`Remove trade access for ${tag}? Members will lose access immediately.`)) return;
+    setWorking(tag);
+    try {
+      await adminFetch(`/trade/guilds/${encodeURIComponent(tag)}`, token, { method: 'DELETE' });
+      await onRefresh();
+    } catch (err) { alert(err.message); }
+    finally { setWorking(null); }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+      {/* Summary stats */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        {[
+          { label: 'Guilds enabled',    value: data.length },
+          { label: 'Total listings',    value: totalListings },
+          { label: 'Active users',      value: totalUsers },
+        ].map(({ label, value }) => (
+          <div key={label} style={{ background: '#13132a', border: '1px solid #1e1e3a', borderRadius: 6, padding: '10px 16px', flex: '1 1 auto', minWidth: 100 }}>
+            <div style={{ fontSize: 11, color: '#6b6b8a', marginBottom: 4 }}>{label}</div>
+            <div style={{ fontSize: 20, fontWeight: 600, color: '#e0e0ff' }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Per-guild table */}
+      {data.length === 0 ? (
+        <p style={{ color: '#4a4a6a', fontSize: 13, margin: 0 }}>No guilds have trade access yet.</p>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr>
+                {['Guild', 'Members', 'Users w/ listings', 'Listings', 'Materials', 'Locations', 'Last activity', '7d new', 'Enabled', ''].map((h) => (
+                  <th key={h} style={{ textAlign: h === 'Guild' || h === '' ? 'left' : 'right', padding: '6px 10px', color: '#6b6b8a', fontWeight: 500, borderBottom: '1px solid #1e1e3a', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((r) => (
+                <tr key={r.guild_tag} style={{ borderBottom: '1px solid #13132a' }}>
+                  <td style={{ padding: '7px 10px', fontWeight: 600, color: '#a78bfa', fontFamily: 'monospace' }}>{r.guild_tag}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: '#c4c4e0', fontVariantNumeric: 'tabular-nums' }}>{r.member_count}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: '#c4c4e0', fontVariantNumeric: 'tabular-nums' }}>{r.active_users}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: r.listing_count > 0 ? '#e0e0ff' : '#3a3a55', fontWeight: r.listing_count > 0 ? 600 : 400, fontVariantNumeric: 'tabular-nums' }}>{r.listing_count}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: '#c4c4e0', fontVariantNumeric: 'tabular-nums' }}>{r.material_count}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: '#c4c4e0', fontVariantNumeric: 'tabular-nums' }}>{r.location_count}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: '#6b6b8a', whiteSpace: 'nowrap' }}>{r.last_listing_at ? fmtAgo(r.last_listing_at) : '—'}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: r.listings_last_7d > 0 ? '#34d399' : '#3a3a55', fontVariantNumeric: 'tabular-nums' }}>{r.listings_last_7d > 0 ? `+${r.listings_last_7d}` : '—'}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: '#6b6b8a', whiteSpace: 'nowrap' }}>{fmtDate(r.added_at)}</td>
+                  <td style={{ padding: '7px 10px' }}>
+                    <Btn danger onClick={() => removeGuild(r.guild_tag)} disabled={working === r.guild_tag}>Remove</Btn>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Add guild form */}
+      <div>
+        <div style={{ fontSize: 11, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>Grant trade access</div>
+        <form onSubmit={addGuild} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            value={newTag}
+            onChange={(e) => setNewTag(e.target.value.toUpperCase())}
+            placeholder="Guild tag (e.g. ATS)"
+            maxLength={20}
+            style={{ background: '#13132a', border: '1px solid #2e2e5a', borderRadius: 4, padding: '6px 10px', color: '#e0e0ff', fontSize: 12, width: 180, fontFamily: 'monospace', textTransform: 'uppercase' }}
+          />
+          <button
+            type="submit"
+            disabled={!newTag.trim() || working === 'add'}
+            style={{ background: '#2e1e6a', color: '#a78bfa', border: '1px solid #4c1d95', borderRadius: 4, padding: '6px 14px', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}
+          >
+            {working === 'add' ? 'Adding…' : 'Add Guild'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ token, onLogout }) {
   const isMobile = useMediaQuery(639);
   const [users,       setUsers]       = useState([]);
@@ -283,6 +394,7 @@ function Dashboard({ token, onLogout }) {
   const [interests,   setInterests]   = useState([]);
   const [trackingLog, setTrackingLog] = useState([]);
   const [analytics,   setAnalytics]   = useState(null);
+  const [tradeData,   setTradeData]   = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [err,         setErr]         = useState('');
   const [tab,         setTab]         = useState('users');
@@ -291,7 +403,7 @@ function Dashboard({ token, onLogout }) {
 
   const load = useCallback(async () => {
     try {
-      const [u, it, rl, er, co, ci, tl, an] = await Promise.all([
+      const [u, it, rl, er, co, ci, tl, an, td] = await Promise.all([
         adminFetch('/users',         token),
         adminFetch('/tracked-items', token),
         adminFetch('/rate-limits',   token),
@@ -300,6 +412,7 @@ function Dashboard({ token, onLogout }) {
         adminFetch('/interests',     token),
         adminFetch('/tracking-log',  token),
         adminFetch('/analytics',     token),
+        adminFetch('/trade',         token),
       ]);
       setUsers(u);
       setItems(it);
@@ -309,6 +422,7 @@ function Dashboard({ token, onLogout }) {
       setInterests(ci);
       setTrackingLog(tl);
       setAnalytics(an);
+      setTradeData(td);
       setErr('');
     } catch (e) {
       if (e.message.includes('Invalid admin token')) {
@@ -627,6 +741,7 @@ function Dashboard({ token, onLogout }) {
           { key: 'errors',    label: `Errors (${errors.length})` },
           { key: 'log',       label: `Track Log (${trackingLog.length})` },
           { key: 'analytics', label: 'Analytics' },
+          { key: 'trade',     label: `Trade (${tradeData.length})` },
         ].map(({ key, label }) => (
           <button key={key} style={tabStyle(key)} onClick={() => setTab(key)}>{label}</button>
         ))}
@@ -643,6 +758,7 @@ function Dashboard({ token, onLogout }) {
         {tab === 'errors'    && <Table cols={errorCols}    rows={errors}       emptyMsg="No errors recorded" />}
         {tab === 'log'       && <Table cols={logCols}      rows={trackingLog}  emptyMsg="No tracking events yet" />}
         {tab === 'analytics' && <AnalyticsTab data={analytics} />}
+        {tab === 'trade'     && <TradeTab data={tradeData} token={token} onRefresh={load} />}
       </div>
     </div>
   );
