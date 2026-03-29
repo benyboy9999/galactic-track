@@ -33,5 +33,10 @@
       "js": ["content.js"],
       "run_at": "document_idle"
     }
-  ]
+  ],
+
+  "web_accessible_resources": [{
+    "resources": ["data/gamedata.json"],
+    "matches": ["*://g2.galactictycoons.com/*"]
+  }]
 }

@@ -172,9 +172,8 @@ router.get('/public', checkPublicRateLimit, async (req, res, next) => {
       return res.json([{
         company_name: 'Test Corp',
         mat_id: 0,
-        locations: [
-          { price_type: 'fixed', price_value: 1337, stock_level: 'high', location: 'Exchange Station' }
-        ],
+        price_type: 'fixed', price_value: 1337, stock_level: 'high', location: 'Exchange Station',
+        locations: [{ price_type: 'fixed', price_value: 1337, stock_level: 'high', location: 'Exchange Station' }],
         created_at: new Date().toISOString(),
       }]);
     }
@@ -188,6 +187,12 @@ router.get('/public', checkPublicRateLimit, async (req, res, next) => {
 
     const r = await pool.query(
       `SELECT tl.company_name, tl.mat_id,
+              -- best (lowest) location — flat fields for backward-compat with published extension
+              (SELECT ll2.price_type  FROM trade_listing_locations ll2 WHERE ll2.listing_id = tl.id ORDER BY ll2.price_value ASC LIMIT 1) AS price_type,
+              (SELECT ll2.price_value FROM trade_listing_locations ll2 WHERE ll2.listing_id = tl.id ORDER BY ll2.price_value ASC LIMIT 1) AS price_value,
+              (SELECT ll2.stock_level FROM trade_listing_locations ll2 WHERE ll2.listing_id = tl.id ORDER BY ll2.price_value ASC LIMIT 1) AS stock_level,
+              (SELECT ll2.location   FROM trade_listing_locations ll2 WHERE ll2.listing_id = tl.id ORDER BY ll2.price_value ASC LIMIT 1) AS location,
+              -- full locations array for new extension
               json_agg(
                 json_build_object(
                   'price_type',  ll.price_type,

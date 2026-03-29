@@ -38,6 +38,30 @@ function render(enabled, gTag, companyName) {
   }
 }
 
+// ── API Key management ────────────────────────────────────────────────────────
+
+chrome.storage.local.get(['gtApiKey'], ({ gtApiKey }) => {
+  document.getElementById('key-missing').style.display = gtApiKey ? 'none' : 'block';
+  document.getElementById('key-saved').style.display   = gtApiKey ? 'flex' : 'none';
+});
+
+document.getElementById('key-save').addEventListener('click', () => {
+  const val = document.getElementById('key-input').value.trim();
+  if (!val) return;
+  chrome.storage.local.set({ gtApiKey: val }, () => {
+    document.getElementById('key-missing').style.display = 'none';
+    document.getElementById('key-saved').style.display   = 'flex';
+  });
+});
+
+document.getElementById('key-clear').addEventListener('click', () => {
+  chrome.storage.local.remove('gtApiKey', () => {
+    document.getElementById('key-input').value = '';
+    document.getElementById('key-saved').style.display   = 'none';
+    document.getElementById('key-missing').style.display = 'block';
+  });
+});
+
 // ── Toggle ────────────────────────────────────────────────────────────────────
 
 toggle.addEventListener('change', () => {
