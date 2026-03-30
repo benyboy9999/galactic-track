@@ -464,7 +464,7 @@ export default function Trade() {
     if (q) groups = groups.filter((g) => g.mat_name.toLowerCase().includes(q));
     groups.sort((a, b) => a.mat_name.localeCompare(b.mat_name));
     return groups;
-  }, [listings, searchQuery]);
+  }, [guildListings, searchQuery]);
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
