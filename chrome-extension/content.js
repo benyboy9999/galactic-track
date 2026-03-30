@@ -77,7 +77,7 @@ async function resolveIdentity() {
   const { gtExtApiKey } = await chrome.storage.local.get(['gtExtApiKey']);
   if (!gtExtApiKey) return null;
   try {
-    const r1 = await fetch(`${GT_API}/public/company?apikey=${encodeURIComponent(gtExtApiKey)}`);
+    const r1 = await fetch(`${GT_API}/public/company`, { headers: { 'X-Api-Key': gtExtApiKey } });
     if (!r1.ok) return null;
     const co = await r1.json();
     const cid = co.id ?? co.cId;
@@ -308,12 +308,14 @@ function onNavigate() {
   }
 }
 
+// Interval fallback needed because history.pushState (used by the game's React router)
+// does not fire popstate, so we poll at a low frequency alongside the popstate listener.
 let _lastPath = location.pathname;
 setInterval(() => {
   if (location.pathname === _lastPath) return;
   _lastPath = location.pathname;
   onNavigate();
-}, 500);
+}, 1000);
 
 window.addEventListener('popstate', onNavigate);
 
@@ -356,10 +358,14 @@ async function loadSprite() {
     const resp = await fetch('https://galactic-track.com/api/gamedata/sprite');
     if (!resp.ok) return;
     const svg  = await resp.text();
+    const doc  = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    const svgRoot = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svgRoot.style.display = 'none';
+    doc.querySelectorAll('symbol').forEach(s => svgRoot.appendChild(document.importNode(s, true)));
     const wrap = document.createElement('div');
     wrap.id = GT_SPRITE_ID;
     wrap.style.cssText = 'display:none;position:absolute;width:0;height:0;overflow:hidden;';
-    wrap.innerHTML = svg;
+    wrap.appendChild(svgRoot);
     document.body.insertBefore(wrap, document.body.firstChild);
     _spriteLoaded = true;
   } catch { /* icons gracefully absent */ }
@@ -693,6 +699,7 @@ function showToast(msg, ok = true) {
 let _detailBaseId = null;
 
 function removeProductionUI() {
+  _headerResizeObs?.disconnect(); _headerResizeObs = null;
   document.getElementById(GT_HEADER_ID)?.remove();
   document.getElementById(GT_DETAIL_ID)?.remove();
   document.getElementById(GT_SPACER_ID)?.remove();
@@ -1283,6 +1290,9 @@ function buildSettingsPanel() {
     container.appendChild(row);
   }
 
+  // Cache header element reference for use in toggle callbacks
+  const _panelHeader = document.getElementById(GT_HEADER_ID);
+
   // ── Helper: chip-rebuilding toggle row ────────────────────────────────────
   function mkChipToggleRow(container, label, settingKey) {
     const row = document.createElement('div');
@@ -1293,7 +1303,7 @@ function buildSettingsPanel() {
     const tog = buildMiniToggle(_settings[settingKey], (val) => {
       _settings[settingKey] = val;
       saveSettings();
-      const header = document.getElementById(GT_HEADER_ID);
+      const header = _panelHeader;
       if (header && _loadedHeaderBases && _loadedHeaderGamedata) {
         header.querySelectorAll('[data-base-id]').forEach(chip => {
           const base = _loadedHeaderBases.find(b => String(b.id) === chip.dataset.baseId);
@@ -1384,8 +1394,7 @@ function buildSettingsPanel() {
         }
         saveSettings();
         // Update header chips immediately
-        const header = document.getElementById(GT_HEADER_ID);
-        const chipArea = header?.querySelector('[data-chip-area]');
+        const chipArea = _panelHeader?.querySelector('[data-chip-area]');
         if (chipArea && _loadedHeaderGamedata) {
           const existing = chipArea.querySelector(`[data-base-id="${bid}"]`);
           if (visible && !existing) {
@@ -1440,9 +1449,8 @@ function buildSettingsPanel() {
       saveSettings();
       if (key === 'showCosts') {
         // Rebuild chips + detail live without full reload
-        const header = document.getElementById(GT_HEADER_ID);
-        if (header && _loadedHeaderBases && _loadedHeaderGamedata) {
-          header.querySelectorAll('[data-base-id]').forEach(chip => {
+        if (_panelHeader && _loadedHeaderBases && _loadedHeaderGamedata) {
+          _panelHeader.querySelectorAll('[data-base-id]').forEach(chip => {
             const base = _loadedHeaderBases.find(b => String(b.id) === chip.dataset.baseId);
             if (base) chip.replaceWith(buildHeaderChip(base, _loadedHeaderGamedata));
           });
@@ -2155,7 +2163,7 @@ async function loadAndInjectHeader() {
     document.body.appendChild(header);
 
     // Keep spacer + tab + all floating panels in sync with header height
-    const ro = new ResizeObserver(() => {
+    _headerResizeObs = new ResizeObserver(() => {
       if (_headerCollapsed) return;
       const h = header.offsetHeight;
       spacer.style.height = h + 'px';
@@ -2166,11 +2174,11 @@ async function loadAndInjectHeader() {
       });
       syncOverflowBadge();
     });
-    ro.observe(header);
+    _headerResizeObs.observe(header);
 
     // Close panels when clicking anywhere outside the extension UI
-    if (!document._gtOutsideClick) {
-      document._gtOutsideClick = true;
+    if (!_outsideClickBound) {
+      _outsideClickBound = true;
       document.addEventListener('click', (e) => {
         const extIds = [GT_HEADER_ID, GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID, GT_TAB_ID, GT_TOAST_ID];
         const inExt = extIds.some(id => document.getElementById(id)?.contains(e.target));
@@ -2234,7 +2242,10 @@ let _gteDataLoaded  = false;
 let _gteSearchQ     = '';
 let _gteFormMode    = null;   // 'new' | 'add-loc' | 'edit-loc'
 let _gteFormCtx     = null;   // { listingId?, locId?, matId?, matName? }
-let _gteNavObs      = null;
+let _gteNavObs       = null;
+let _headerResizeObs = null;
+let _outsideClickBound = false;
+let _escHandler      = null;
 
 // ── GTE Auth helpers ──────────────────────────────────────────────────────────
 
@@ -2541,9 +2552,22 @@ function gteRenderLeft() {
   col.appendChild(listArea);
 
   function renderGroups() {
+    const scrollTop = listArea.scrollTop;
     listArea.innerHTML = '';
-    if (_gteLoading) { listArea.innerHTML = '<div style="padding:24px;text-align:center;color:#4a4a6a;">Loading…</div>'; return; }
-    if (_gteErr)     { listArea.innerHTML = `<div style="padding:20px;color:#ef4444;font-size:13px;">${_gteErr}</div>`; return; }
+    if (_gteLoading) {
+      const d = document.createElement('div');
+      d.style.cssText = 'padding:24px;text-align:center;color:#4a4a6a;';
+      d.textContent = 'Loading…';
+      listArea.appendChild(d);
+      return;
+    }
+    if (_gteErr) {
+      const d = document.createElement('div');
+      d.style.cssText = 'padding:20px;color:#ef4444;font-size:13px;';
+      d.textContent = _gteErr;
+      listArea.appendChild(d);
+      return;
+    }
 
     const map = new Map();
     for (const l of _gteListings) {
@@ -2638,6 +2662,7 @@ function gteRenderLeft() {
 
       listArea.appendChild(groupEl);
     });
+    listArea.scrollTop = scrollTop;
   }
 
   renderGroups();
@@ -2646,6 +2671,7 @@ function gteRenderLeft() {
 function gteRenderRight() {
   const col = document.getElementById(GTE_RIGHT_ID);
   if (!col) return;
+  const scrollTop = col.scrollTop;
   col.innerHTML = '';
 
   // Column header
@@ -2904,6 +2930,7 @@ function gteRenderRight() {
 
     col.appendChild(listingEl);
   });
+  col.scrollTop = scrollTop;
 }
 
 // ── GTE Modal open/close ──────────────────────────────────────────────────────
@@ -2975,9 +3002,9 @@ function openGteModal() {
   document.body.append(backdrop, modal);
 
   // Esc to close
-  if (!document._gteEscHandler) {
-    document._gteEscHandler = (e) => { if (e.key === 'Escape') closeGteModal(); };
-    document.addEventListener('keydown', document._gteEscHandler);
+  if (!_escHandler) {
+    _escHandler = (e) => { if (e.key === 'Escape') closeGteModal(); };
+    document.addEventListener('keydown', _escHandler);
   }
 
   // Mark nav link active
