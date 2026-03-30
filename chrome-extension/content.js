@@ -211,7 +211,7 @@ function inject(target, listings, gTag) {
         span.appendChild(moreEl);
       }
 
-      span.addEventListener('mouseenter', () => showTooltip(span, l));
+      span.addEventListener('mouseenter', () => { if (_settings.showTooltips) showTooltip(span, l); });
       span.addEventListener('mouseleave', removeTooltip);
 
       wrap.appendChild(span);
@@ -460,6 +460,7 @@ const DEFAULT_SETTINGS = {
   showWishlist:     true,
   showGuildPrices:  true,
   showCosts:        true,
+  showTooltips:     true,
 };
 
 let _settings = { ...DEFAULT_SETTINGS };
@@ -499,26 +500,33 @@ async function getExtApiKey() {
 // ── Bases fetch (5-min cache) ─────────────────────────────────────────────────
 
 let _basesCache = { data: null, ts: 0 };
-async function fetchBases(apiKey) {
+async function fetchBases() {
   if (_basesCache.data && Date.now() - _basesCache.ts < BASES_CACHE_TTL) {
     return _basesCache.data;
   }
-  // Try Local API first
   const company = await requestGTLocalAPI('getMyCompany');
-  if (company) {
-    const bases = company.bases ?? company.buildingBases ?? (Array.isArray(company) ? company : null);
-    if (Array.isArray(bases) && bases.length) {
-      _basesCache = { data: bases, ts: Date.now() };
-      return bases;
-    }
-  }
-  // Fall back to direct API
-  if (!apiKey) throw new Error('No API key and local API unavailable');
-  const resp = await fetch(`${GT_API}/public/company/bases?apikey=${encodeURIComponent(apiKey)}`);
-  if (!resp.ok) throw new Error(`bases fetch failed: ${resp.status}`);
-  const data = await resp.json();
-  _basesCache = { data, ts: Date.now() };
-  return data;
+  const stubs = company?.bases ?? company?.buildingBases ?? (Array.isArray(company) ? company : null);
+  if (!Array.isArray(stubs) || !stubs.length) return [];
+
+  // Fetch full detail for each base via getBase(baseId)
+  const detailed = await Promise.all(
+    stubs.map(async (stub) => {
+      const id = stub.id ?? stub.baseId;
+      if (!id) return stub; // fallback: use stub as-is
+      const full = await requestGTLocalAPI('getBase', { baseId: id });
+      if (full) {
+        console.debug('[GT] getBase sample (first):', full); // temporary — remove once field names confirmed
+        return full;
+      }
+      return stub;
+    })
+  );
+
+  // Only log once
+  if (detailed[0]) console.debug('[GT] Base fields:', Object.keys(detailed[0]));
+
+  _basesCache = { data: detailed, ts: Date.now() };
+  return detailed;
 }
 
 // ── Company data cache ────────────────────────────────────────────────────────
@@ -1011,7 +1019,7 @@ function buildMatList(items) {
 async function submitWishlist(title, mats, btn) {
   const apiKey = await getExtApiKey();
   if (!apiKey) {
-    showToast('Extended API key needed \u2014 set in popup', false);
+    showToast('Extended API key needed \u2014 set in Settings', false);
     return;
   }
   if (!mats.length) {
@@ -1025,6 +1033,7 @@ async function submitWishlist(title, mats, btn) {
       { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, mats }) }
     );
+    if (resp.status === 403) { showToast('Extended API Key required for Wishlisting', false); return; }
     if (!resp.ok) throw new Error(`${resp.status}`);
     showToast(`\u2713 ${title}`);
     if (btn) { btn.style.color = COL_OK; setTimeout(() => { btn.style.color = ''; }, 3000); }
@@ -1054,12 +1063,18 @@ async function handleSectionWishlist(base, items, label, btn) {
 }
 
 // Wishlist All — one wishlist per visible base
-async function handleWishlistAll(btn) {
+// opts: { bases, includeInputs, includeConsumables, includeStock } — all optional, fall back to _settings
+async function handleWishlistAll(btn, opts = {}) {
   const apiKey = await getExtApiKey();
-  if (!apiKey) { showToast('Extended API key needed \u2014 set in popup', false); return; }
+  if (!apiKey) { showToast('Extended API key needed \u2014 set in Settings', false); return; }
   if (!_loadedHeaderBases || !_loadedHeaderGamedata) return;
 
-  const bases = sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
+  const bases         = opts.bases         ?? sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
+  const inclInputs    = opts.includeInputs      ?? _settings.includeInputs;
+  const inclConsumables = opts.includeConsumables ?? _settings.includeConsumables;
+  const inclStock     = opts.includeStock   ?? _settings.includeStock;
+  const td            = _settings.targetDays;
+
   if (!bases.length) return;
 
   btn.disabled = true;
@@ -1070,17 +1085,25 @@ async function handleWishlistAll(btn) {
   for (const base of bases) {
     const { inputs, consumables } = calcBaseNeeds(base, _loadedHeaderGamedata);
     const eligible = [
-      ...(_settings.includeInputs      ? inputs      : []),
-      ...(_settings.includeConsumables ? consumables : []),
+      ...(inclInputs      ? inputs      : []),
+      ...(inclConsumables ? consumables : []),
     ];
-    const mats = buildMatList(eligible);
+    const mats = eligible
+      .map(r => ({
+        id: r.matId,
+        am: inclStock
+          ? Math.max(0, Math.ceil(r.dailyNeed * td - r.inStock))
+          : Math.ceil(r.dailyNeed * td),
+      }))
+      .filter(m => m.am > 0);
     if (!mats.length) { skip++; continue; }
     try {
       const resp = await fetch(
         `${GT_API}/public/wishlist/create?apikey=${encodeURIComponent(apiKey)}`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: `${base.name} \u2014 ${_settings.targetDays}d restock`, mats }) }
+          body: JSON.stringify({ title: `${base.name} \u2014 ${td}d restock`, mats }) }
       );
+      if (resp.status === 403) { showToast('Extended API Key required for Wishlisting', false); break; }
       if (!resp.ok) throw new Error();
       ok++;
     } catch { fail++; }
@@ -1097,10 +1120,19 @@ async function handleWishlistAll(btn) {
 }
 
 // Wishlist-all confirmation modal
+// onConfirm receives opts: { bases, includeInputs, includeConsumables, includeStock }
 function showWishlistAllModal(onConfirm) {
   if (!_loadedHeaderBases || !_loadedHeaderGamedata) return;
-  const bases = sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
-  if (!bases.length) return;
+  const allBases = sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
+  if (!allBases.length) return;
+
+  // Local state — does not affect _settings
+  const localState = {
+    includeInputs:      _settings.includeInputs,
+    includeConsumables: _settings.includeConsumables,
+    includeStock:       _settings.includeStock,
+  };
+  const localBasesOn = new Set(allBases.map(b => String(b.id)));
 
   const backdrop = document.createElement('div');
   backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:2147483640;display:flex;align-items:center;justify-content:center;';
@@ -1113,53 +1145,72 @@ function showWishlistAllModal(onConfirm) {
   title.textContent = 'Wishlist All Bases';
   modal.appendChild(title);
 
-  // Bases list
+  // ── Bases section ──────────────────────────────────────────────────────────
   const basesLabel = document.createElement('div');
   basesLabel.style.cssText = 'font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#6b6b8a;margin-bottom:6px;';
-  basesLabel.textContent = `Bases included (${bases.length})`;
   modal.appendChild(basesLabel);
+
+  const updateBasesLabel = () => {
+    basesLabel.textContent = `Bases (${localBasesOn.size} of ${allBases.length})`;
+  };
+  updateBasesLabel();
 
   const basesList = document.createElement('div');
   basesList.style.cssText = 'background:#0a0a18;border:1px solid #1a1a30;border-radius:6px;padding:8px 10px;margin-bottom:14px;max-height:140px;overflow-y:auto;';
-  bases.forEach(b => {
+
+  allBases.forEach(b => {
+    const bid = String(b.id);
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:7px;padding:2px 0;font-size:12px;';
     const { col } = baseStatusColour(b, _loadedHeaderGamedata);
     const dot = document.createElement('span');
     dot.style.cssText = `width:7px;height:7px;border-radius:50%;background:${col};flex-shrink:0;display:inline-block;`;
     const name = document.createElement('span');
-    name.style.color = '#c0c0da';
+    name.style.cssText = 'flex:1;color:#c0c0da;';
     name.textContent = b.name;
-    row.append(dot, name);
+    const tog = buildMiniToggle(true, val => {
+      if (val) localBasesOn.add(bid); else localBasesOn.delete(bid);
+      updateBasesLabel();
+    });
+    row.append(dot, name, tog);
     basesList.appendChild(row);
   });
   modal.appendChild(basesList);
 
-  // Settings summary
+  // ── Settings section ───────────────────────────────────────────────────────
   const sumLabel = document.createElement('div');
   sumLabel.style.cssText = 'font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#6b6b8a;margin-bottom:6px;';
   sumLabel.textContent = 'Wishlist settings';
   modal.appendChild(sumLabel);
 
-  const summaryBox = document.createElement('div');
-  summaryBox.style.cssText = 'background:#0a0a18;border:1px solid #1a1a30;border-radius:6px;padding:8px 10px;margin-bottom:18px;';
-  const rows = [
-    ['Stock period',    `${_settings.targetDays}d`],
-    ['Current stock',  _settings.includeStock       ? 'Subtracted' : 'Not subtracted'],
-    ['Prod. inputs',   _settings.includeInputs      ? 'Included'   : 'Excluded'],
-    ['Consumables',    _settings.includeConsumables ? 'Included'   : 'Excluded'],
-  ];
-  rows.forEach(([k, v]) => {
-    const r = document.createElement('div');
-    r.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;padding:2px 0;';
-    const kEl = document.createElement('span'); kEl.style.color = '#6b6b8a'; kEl.textContent = k;
-    const vEl = document.createElement('span'); vEl.style.color = '#c0c0da'; vEl.textContent = v;
-    r.append(kEl, vEl);
-    summaryBox.appendChild(r);
-  });
-  modal.appendChild(summaryBox);
+  const settingsBox = document.createElement('div');
+  settingsBox.style.cssText = 'background:#0a0a18;border:1px solid #1a1a30;border-radius:6px;padding:6px 10px;margin-bottom:18px;';
 
-  // Buttons
+  // Stock period — read-only, just show the value
+  const stockPeriodRow = document.createElement('div');
+  stockPeriodRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;border-bottom:1px solid #12122a;';
+  const spLabel = document.createElement('span'); spLabel.style.color = '#6b6b8a'; spLabel.textContent = 'Stock period';
+  const spVal   = document.createElement('span'); spVal.style.color   = '#c0c0da'; spVal.textContent   = `${_settings.targetDays}d`;
+  stockPeriodRow.append(spLabel, spVal);
+  settingsBox.appendChild(stockPeriodRow);
+
+  const toggleRows = [
+    { label: 'Subtract current stock', key: 'includeStock' },
+    { label: 'Production inputs',      key: 'includeInputs' },
+    { label: 'Worker consumables',     key: 'includeConsumables' },
+  ];
+  toggleRows.forEach(({ label, key }, i) => {
+    const row = document.createElement('div');
+    const isLast = i === toggleRows.length - 1;
+    row.style.cssText = `display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;${isLast ? '' : 'border-bottom:1px solid #12122a;'}`;
+    const lbl = document.createElement('span'); lbl.style.color = '#6b6b8a'; lbl.textContent = label;
+    const tog = buildMiniToggle(localState[key], val => { localState[key] = val; });
+    row.append(lbl, tog);
+    settingsBox.appendChild(row);
+  });
+  modal.appendChild(settingsBox);
+
+  // ── Buttons ────────────────────────────────────────────────────────────────
   const btnRow = document.createElement('div');
   btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
 
@@ -1171,7 +1222,15 @@ function showWishlistAllModal(onConfirm) {
   const confirmBtn = document.createElement('button');
   confirmBtn.textContent = 'Create Wishlists \u2192';
   confirmBtn.style.cssText = 'background:#166534;border:none;border-radius:5px;color:#22c55e;font-size:12px;padding:6px 14px;cursor:pointer;font-family:inherit;font-weight:600;';
-  confirmBtn.addEventListener('click', () => { backdrop.remove(); onConfirm(); });
+  confirmBtn.addEventListener('click', () => {
+    backdrop.remove();
+    onConfirm({
+      bases:              allBases.filter(b => localBasesOn.has(String(b.id))),
+      includeInputs:      localState.includeInputs,
+      includeConsumables: localState.includeConsumables,
+      includeStock:       localState.includeStock,
+    });
+  });
 
   btnRow.append(cancelBtn, confirmBtn);
   modal.appendChild(btnRow);
@@ -1183,7 +1242,7 @@ function showWishlistAllModal(onConfirm) {
 // Delete All Wishlists — fetches then deletes each one
 async function handleDeleteAllWishlists(btn, resetFn) {
   const apiKey = await getExtApiKey();
-  if (!apiKey) { showToast('Extended API key needed \u2014 set in popup', false); resetFn(); return; }
+  if (!apiKey) { showToast('Extended API key needed \u2014 set in Settings', false); resetFn(); return; }
 
   btn.disabled = true;
   btn.textContent = 'Fetching\u2026';
@@ -1313,6 +1372,8 @@ function buildSettingsPanel() {
   Object.assign(panel.style, {
     position: 'fixed', top: `${HEADER_H}px`, right: '0',
     width: '220px',
+    maxHeight: `calc(100vh - ${HEADER_H}px)`,
+    overflowY: 'auto',
     background: '#0a0a18', border: '1px solid #2a2a4a',
     borderTop: 'none', borderRadius: '0 0 0 8px',
     padding: '10px 12px 12px',
@@ -1325,6 +1386,86 @@ function buildSettingsPanel() {
   title.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;';
   title.textContent = 'Settings';
   panel.appendChild(title);
+
+  // ── API Key section ───────────────────────────────────────────────────────
+  const keySection = document.createElement('div');
+  keySection.style.cssText = 'margin-bottom:2px;';
+
+  const keyHeaderRow = document.createElement('div');
+  keyHeaderRow.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:5px;';
+
+  const keyLabel = document.createElement('span');
+  keyLabel.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;';
+  keyLabel.textContent = 'API Key';
+
+  const keyHelp = document.createElement('span');
+  keyHelp.textContent = '?';
+  keyHelp.title = 'Limited API key required for Guild Trade tab. Extended API Key required for Guild Trade & Wishlisting.';
+  keyHelp.style.cssText = 'color:#6b6b8a;font-size:9px;border:1px solid #2a2a4a;border-radius:50%;width:13px;height:13px;display:inline-flex;align-items:center;justify-content:center;cursor:default;flex-shrink:0;';
+
+  keyHeaderRow.appendChild(keyLabel);
+  keyHeaderRow.appendChild(keyHelp);
+  keySection.appendChild(keyHeaderRow);
+
+  const keyMissing = document.createElement('div');
+
+  const keyInputWrap = document.createElement('div');
+  keyInputWrap.style.cssText = 'display:flex;gap:4px;';
+
+  const keyInput = document.createElement('input');
+  keyInput.type = 'password';
+  keyInput.placeholder = 'Paste API key\u2026';
+  keyInput.style.cssText = 'flex:1;min-width:0;background:#1a1a30;border:1px solid #2a2a4a;border-radius:4px;color:#d8d8f0;font-size:11px;padding:3px 6px;outline:none;';
+
+  const keySaveBtn = document.createElement('button');
+  keySaveBtn.textContent = 'Save';
+  keySaveBtn.style.cssText = 'background:#166534;color:#22c55e;border:none;border-radius:4px;font-size:11px;padding:3px 8px;cursor:pointer;flex-shrink:0;';
+
+  keyInputWrap.appendChild(keyInput);
+  keyInputWrap.appendChild(keySaveBtn);
+  keyMissing.appendChild(keyInputWrap);
+
+  const keySavedRow = document.createElement('div');
+  keySavedRow.style.cssText = 'display:none;align-items:center;justify-content:space-between;';
+
+  const keySavedSpan = document.createElement('span');
+  keySavedSpan.style.cssText = 'color:#22c55e;font-size:11px;';
+  keySavedSpan.textContent = '\u2713 API key saved';
+
+  const keyClearBtn = document.createElement('button');
+  keyClearBtn.textContent = 'Clear';
+  keyClearBtn.style.cssText = 'background:none;border:1px solid #2a2a4a;border-radius:3px;color:#6b6b8a;font-size:10px;padding:2px 6px;cursor:pointer;';
+
+  keySavedRow.appendChild(keySavedSpan);
+  keySavedRow.appendChild(keyClearBtn);
+
+  keySection.appendChild(keyMissing);
+  keySection.appendChild(keySavedRow);
+  panel.appendChild(keySection);
+
+  chrome.storage.local.get(['gtExtApiKey'], ({ gtExtApiKey }) => {
+    if (gtExtApiKey) {
+      keyMissing.style.display = 'none';
+      keySavedRow.style.display = 'flex';
+    }
+  });
+
+  keySaveBtn.addEventListener('click', () => {
+    const val = keyInput.value.trim();
+    if (!val) return;
+    chrome.storage.local.set({ gtExtApiKey: val }, () => {
+      keyInput.value = '';
+      keyMissing.style.display = 'none';
+      keySavedRow.style.display = 'flex';
+    });
+  });
+
+  keyClearBtn.addEventListener('click', () => {
+    chrome.storage.local.remove('gtExtApiKey', () => {
+      keySavedRow.style.display = 'none';
+      keyMissing.style.display = '';
+    });
+  });
 
   // ── Helper: collapsible section ───────────────────────────────────────────
   function mkCollapsible(labelText, startOpen = false) {
@@ -1521,6 +1662,7 @@ function buildSettingsPanel() {
 
   const featToggles = [
     { key: 'showCosts',       label: 'Show costs / values' },
+    { key: 'showTooltips',    label: 'Price tooltips' },
     { key: 'showGuildPrices', label: 'Guild prices in-game' },
     { key: 'showGTE',         label: 'Guild Trade' },
     { key: 'showSummary',     label: 'Summary panel' },
@@ -1563,6 +1705,21 @@ function buildSettingsPanel() {
     row.appendChild(tog);
     panel.appendChild(row);
   }
+
+  // Visit link
+  const sepLink = document.createElement('div');
+  sepLink.style.cssText = 'border-top:1px solid #1a1a30;margin:10px 0 8px;';
+  panel.appendChild(sepLink);
+
+  const visitBtn = document.createElement('a');
+  visitBtn.href = 'https://galactic-track.com';
+  visitBtn.target = '_blank';
+  visitBtn.rel = 'noopener noreferrer';
+  visitBtn.textContent = 'Visit Galactic-Track.com \u2197';
+  visitBtn.style.cssText = 'display:block;text-align:center;font-size:11px;color:#6366f1;text-decoration:none;padding:4px 0;border-radius:4px;transition:color 0.15s;';
+  visitBtn.addEventListener('mouseenter', () => { visitBtn.style.color = '#818cf8'; });
+  visitBtn.addEventListener('mouseleave', () => { visitBtn.style.color = '#6366f1'; });
+  panel.appendChild(visitBtn);
 
   return panel;
 }
@@ -2016,13 +2173,11 @@ function toggleSummaryPanel() {
 // ── Header injection ──────────────────────────────────────────────────────────
 
 async function loadAndInjectHeader() {
-  const apiKey = await getExtApiKey(); // may be null — fetchBases handles it via local API
-
   await loadSettings();
 
   try {
-    const [bases, gamedata] = await Promise.all([fetchBases(apiKey), loadGamedata()]);
-    if (!bases?.length) return;
+    const gamedata = await loadGamedata();
+    const bases    = await fetchBases().catch(() => []);
     _loadedHeaderBases    = bases;
     _loadedHeaderGamedata = gamedata;
 
@@ -2064,8 +2219,13 @@ async function loadAndInjectHeader() {
     chipArea.appendChild(badge);
 
     const sorted = sortBases(bases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
-    for (const base of sorted) {
-      chipArea.appendChild(buildHeaderChip(base, gamedata));
+    if (sorted.length) {
+      for (const base of sorted) chipArea.appendChild(buildHeaderChip(base, gamedata));
+    } else {
+      const hint = document.createElement('span');
+      hint.style.cssText = 'color:#3a3a5a;font-size:11px;padding:0 4px;white-space:nowrap;';
+      hint.textContent = 'No bases found — make sure you are logged into the game';
+      chipArea.appendChild(hint);
     }
 
     // Overflow badge — shows "+N" with worst hidden-chip colour when bar is collapsed
@@ -2180,7 +2340,7 @@ async function loadAndInjectHeader() {
     if (_settings.showWishlist) {
       const wishAllBtn = mkCtrlBtn('&#128722;', 'Create wishlists for all visible bases');
       wishAllBtn.addEventListener('click', () => {
-        showWishlistAllModal(() => handleWishlistAll(wishAllBtn));
+        showWishlistAllModal(opts => handleWishlistAll(wishAllBtn, opts));
       });
       controls.appendChild(wishAllBtn);
     }
@@ -2275,6 +2435,17 @@ async function loadAndInjectHeader() {
       loadSprite();
       loadAndInjectHeader();
       watchGteNav();
+      // Retry header injection until the game's local API is ready (SPA may load after content script)
+      let retries = 0;
+      const retryTimer = setInterval(async () => {
+        if (_loadedHeaderBases?.length || retries++ >= 10) { clearInterval(retryTimer); return; }
+        const company = await requestGTLocalAPI('getMyCompany');
+        const bases = company?.bases ?? company?.buildingBases ?? (Array.isArray(company) ? company : null);
+        if (Array.isArray(bases) && bases.length) {
+          clearInterval(retryTimer);
+          loadAndInjectHeader();
+        }
+      }, 3000);
     }
   });
 })();
@@ -2336,7 +2507,7 @@ async function gteAutoLogin() {
     apiKey = gtExtApiKey ?? null;
   }
 
-  if (!apiKey) throw new Error('No API key — set one in the extension popup.');
+  if (!apiKey) throw new Error('No API key — set one in Settings (\u2699).');
 
   const res = await fetch(`${GT_TRACK}/api/auth/login`, {
     method: 'POST',
@@ -2794,7 +2965,7 @@ function gteRenderRight() {
   if (!_gteCanWrite) {
     const noTok = document.createElement('div');
     noTok.style.cssText = 'padding:20px 14px;color:#4a4a6a;font-size:12px;line-height:1.6;';
-    noTok.textContent = 'Set your game API key in the extension popup to manage your guild listings.';
+    noTok.textContent = 'Set your API key in Settings (\u2699) to manage your guild listings.';
     col.appendChild(noTok);
     return;
   }
