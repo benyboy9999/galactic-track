@@ -10,6 +10,39 @@ router.get('/access', requireAuth, (req, res) => {
   res.json({ access: tag.length > 0, guild_tag: tag });
 });
 
+// ── GET /api/trade/guild ───────────────────────────────────────────────────────
+// Authenticated: returns all listings for the user's guild (read-only view)
+router.get('/guild', requireAuth, async (req, res, next) => {
+  try {
+    const tag = req.user.company_tag || '';
+    if (!tag) return res.json([]);
+    const r = await pool.query(
+      `SELECT tl.id, tl.user_id, tl.company_name, tl.guild_tag, tl.mat_id, tl.mat_name,
+              tl.created_at, u.company_logo,
+              COALESCE(
+                json_agg(
+                  json_build_object(
+                    'id',          ll.id,
+                    'price_type',  ll.price_type,
+                    'price_value', ll.price_value,
+                    'stock_level', ll.stock_level,
+                    'location',    ll.location
+                  ) ORDER BY ll.price_value ASC
+                ) FILTER (WHERE ll.id IS NOT NULL),
+                '[]'
+              ) AS locations
+       FROM trade_listings tl
+       JOIN users u ON u.id = tl.user_id
+       LEFT JOIN trade_listing_locations ll ON ll.listing_id = tl.id
+       WHERE tl.guild_tag = $1
+       GROUP BY tl.id, u.company_logo
+       ORDER BY tl.mat_id ASC, tl.created_at DESC`,
+      [tag]
+    );
+    res.json(r.rows);
+  } catch (err) { next(err); }
+});
+
 // ── GET /api/trade ─────────────────────────────────────────────────────────────
 router.get('/', requireAuth, async (req, res, next) => {
   try {

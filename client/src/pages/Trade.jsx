@@ -282,11 +282,12 @@ const STOCK_OPTIONS = [
 export default function Trade() {
   const { user } = useAuth();
 
-  const [listings,   setListings]   = useState([]);
-  const [allItems,   setAllItems]   = useState([]);
-  const [planets,    setPlanets]    = useState(['Exchange Station']);
-  const [loading,    setLoading]    = useState(true);
-  const [err,        setErr]        = useState('');
+  const [listings,      setListings]      = useState([]);
+  const [guildListings, setGuildListings] = useState([]);
+  const [allItems,      setAllItems]      = useState([]);
+  const [planets,       setPlanets]       = useState(['Exchange Station']);
+  const [loading,       setLoading]       = useState(true);
+  const [err,           setErr]           = useState('');
 
   // Add-listing form
   const [formOpen,      setFormOpen]      = useState(false);
@@ -304,9 +305,10 @@ export default function Trade() {
   const [locForm,            setLocForm]            = useState({ ...DEFAULT_LOC_FORM });
 
   useEffect(() => {
-    Promise.all([api.tradeListings(), api.allItems(), api.gamedata()])
-      .then(([ls, items, gd]) => {
+    Promise.all([api.tradeListings(), api.tradeGuildListings(), api.allItems(), api.gamedata()])
+      .then(([ls, gls, items, gd]) => {
         setListings(ls);
+        setGuildListings(gls);
         setAllItems(items);
         const names = (gd?.systems ?? [])
           .flatMap((s) => s.planets ?? [])
@@ -454,7 +456,7 @@ export default function Trade() {
   const groupedListings = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const map = new Map();
-    for (const l of listings) {
+    for (const l of guildListings) {
       if (!map.has(l.mat_id)) map.set(l.mat_id, { mat_id: l.mat_id, mat_name: l.mat_name, rows: [] });
       map.get(l.mat_id).rows.push(l);
     }
@@ -468,7 +470,7 @@ export default function Trade() {
 
   if (loading) return <div style={{ padding: 32, textAlign: 'center' }}><Spinner /></div>;
 
-  const guildTag = listings[0]?.guild_tag ?? user?.companyTag ?? '';
+  const guildTag = guildListings[0]?.guild_tag ?? listings[0]?.guild_tag ?? user?.companyTag ?? '';
 
   function toggleItem(matId) {
     setExpandedItem((prev) => prev === matId ? null : matId);
@@ -675,7 +677,7 @@ export default function Trade() {
           <div style={{ padding: '8px 12px', borderBottom: '1px solid #1a1a35' }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: '#6b6b8a', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Guild Listings</span>
           </div>
-          {listings.length === 0 ? (
+          {guildListings.length === 0 ? (
             <div style={{ padding: '32px 0', textAlign: 'center', color: '#4a4a6a', fontSize: 14 }}>
               No guild listings yet. Be the first to post one.
             </div>
@@ -724,7 +726,6 @@ export default function Trade() {
 
                     {/* Expanded: sellers + locations */}
                     {isExpanded && group.rows.map((l) => {
-                      const isOwn = checkOwn(l);
                       return (
                         <div key={l.id}>
                           <div style={{

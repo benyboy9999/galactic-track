@@ -138,6 +138,7 @@ export const api = {
   // ── Trade ──────────────────────────────────────────────────────────────────
   tradeAccess:        ()                  => get('/trade/access', true),
   tradeListings:      ()                  => get('/trade', true),
+  tradeGuildListings: ()                  => get('/trade/guild', true),
   tradeAdd:           (body)              => post('/trade', body, true),
   tradeDelete:        (id)                => del(`/trade/${id}`, true),
   tradeAddLocation:    (id, body)          => post(`/trade/${id}/locations`, body, true),

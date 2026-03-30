@@ -211,10 +211,8 @@ function inject(target, listings, gTag) {
         span.appendChild(moreEl);
       }
 
-      if (_settings.showTooltips) {
-        span.addEventListener('mouseenter', () => showTooltip(span, l));
-        span.addEventListener('mouseleave', removeTooltip);
-      }
+      span.addEventListener('mouseenter', () => showTooltip(span, l));
+      span.addEventListener('mouseleave', removeTooltip);
 
       wrap.appendChild(span);
     });
@@ -462,7 +460,6 @@ const DEFAULT_SETTINGS = {
   showWishlist:     true,
   showGuildPrices:  true,
   showCosts:        true,
-  showTooltips:     true,
 };
 
 let _settings = { ...DEFAULT_SETTINGS };
@@ -791,7 +788,7 @@ function buildDetailPanel(base, gamedata) {
       const sectionCart = document.createElement('button');
       sectionCart.innerHTML = '&#128722;';
       sectionCart.title = `Wishlist: ${heading}`;
-      sectionCart.style.cssText = 'background:none;border:none;cursor:pointer;font-size:11px;padding:0;line-height:1;color:#6b6b8a;flex-shrink:0;';
+      sectionCart.style.cssText = `background:none;border:none;cursor:pointer;font-size:11px;padding:0;line-height:1;color:#6b6b8a;flex-shrink:0;display:${_settings.showWishlist ? '' : 'none'};`;
       sectionCart.addEventListener('mouseenter', () => { sectionCart.style.color = COL_OK; });
       sectionCart.addEventListener('mouseleave', () => { if (!sectionCart.disabled) sectionCart.style.color = '#6b6b8a'; });
       sectionCart.addEventListener('click', () => handleSectionWishlist(base, items, cartLabel, sectionCart));
@@ -1528,7 +1525,6 @@ function buildSettingsPanel() {
     { key: 'showGTE',         label: 'Guild Trade' },
     { key: 'showSummary',     label: 'Summary panel' },
     { key: 'showAssets',      label: 'Cash & assets panel' },
-    { key: 'showTooltips',    label: 'Price tooltips' },
     { key: 'showWishlist',    label: '1-click wishlisting' },
   ];
 
@@ -1559,7 +1555,6 @@ function buildSettingsPanel() {
       } else if (key === 'showGuildPrices') {
         if (val) run(); else removeInjection();
       } else {
-        _basesCache = { data: null, ts: 0 };
         document.getElementById(GT_SETTINGS_ID)?.remove();
         _settingsOpen = false;
         loadAndInjectHeader();
