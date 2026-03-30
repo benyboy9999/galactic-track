@@ -13,7 +13,7 @@
 
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Guild Prices",
+    "default_title": "Galactic Track",
     "default_icon": {
       "16": "GTE16.png",
       "48": "GTE48.png",

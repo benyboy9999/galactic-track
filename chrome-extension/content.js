@@ -1555,8 +1555,6 @@ function buildSettingsPanel() {
       } else if (key === 'showGuildPrices') {
         if (val) run(); else removeInjection();
       } else {
-        document.getElementById(GT_SETTINGS_ID)?.remove();
-        _settingsOpen = false;
         loadAndInjectHeader();
       }
     });
