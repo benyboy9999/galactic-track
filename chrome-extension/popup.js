@@ -49,16 +49,18 @@ document.getElementById('key-save').addEventListener('click', () => {
   const val = document.getElementById('key-input').value.trim();
   if (!val) return;
   chrome.storage.local.set({ gtExtApiKey: val }, () => {
-    document.getElementById('key-missing').style.display = 'none';
-    document.getElementById('key-saved').style.display   = 'flex';
+    document.getElementById('key-missing').style.display      = 'none';
+    document.getElementById('key-saved').style.display        = 'flex';
+    document.getElementById('key-refresh-note').style.display = 'block';
   });
 });
 
 document.getElementById('key-clear').addEventListener('click', () => {
   chrome.storage.local.remove('gtExtApiKey', () => {
     document.getElementById('key-input').value = '';
-    document.getElementById('key-saved').style.display   = 'none';
-    document.getElementById('key-missing').style.display = 'block';
+    document.getElementById('key-saved').style.display        = 'none';
+    document.getElementById('key-missing').style.display      = 'block';
+    document.getElementById('key-refresh-note').style.display = 'none';
   });
 });
 

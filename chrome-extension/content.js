@@ -1416,7 +1416,7 @@ function buildSettingsPanel() {
   }
 
   // ── Wishlisting section (collapsible) ─────────────────────────────────────
-  const wishBody = mkCollapsible('Wishlisting');
+  const wishBody = mkCollapsible('Wishlisting', true);
 
   mkNumRow(wishBody, 'Target stock (days)', '#c0c0da', 'targetDays', 0.1, 0.1, true);
 
@@ -2010,6 +2010,10 @@ function toggleSummaryPanel() {
 
   const content = document.createElement('div');
   panel.appendChild(content);
+
+  if (_settings.showCosts && !_priceMap) {
+    fetchMatPrices().then(() => buildSummaryContent(content, _summaryPerBase));
+  }
   buildSummaryContent(content, _summaryPerBase);
 
   document.body.appendChild(panel);
