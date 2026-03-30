@@ -211,8 +211,10 @@ function inject(target, listings, gTag) {
         span.appendChild(moreEl);
       }
 
-      span.addEventListener('mouseenter', () => showTooltip(span, l));
-      span.addEventListener('mouseleave', removeTooltip);
+      if (_settings.showTooltips) {
+        span.addEventListener('mouseenter', () => showTooltip(span, l));
+        span.addEventListener('mouseleave', removeTooltip);
+      }
 
       wrap.appendChild(span);
     });
@@ -459,7 +461,8 @@ const DEFAULT_SETTINGS = {
   showAssets:       true,
   showWishlist:     true,
   showGuildPrices:  true,
-  showCosts:        false,
+  showCosts:        true,
+  showTooltips:     true,
 };
 
 let _settings = { ...DEFAULT_SETTINGS };
@@ -1096,6 +1099,90 @@ async function handleWishlistAll(btn) {
   else           showToast(`\u2713 ${ok} wishlists created`);
 }
 
+// Wishlist-all confirmation modal
+function showWishlistAllModal(onConfirm) {
+  if (!_loadedHeaderBases || !_loadedHeaderGamedata) return;
+  const bases = sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
+  if (!bases.length) return;
+
+  const backdrop = document.createElement('div');
+  backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:2147483640;display:flex;align-items:center;justify-content:center;';
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:#0d0d1f;border:1px solid #2a2a4a;border-radius:10px;padding:20px 22px;width:min(400px,90vw);font-family:system-ui,sans-serif;color:#d8d8f0;box-shadow:0 8px 48px rgba(0,0,0,0.8);';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:15px;font-weight:700;color:#e0e0f0;margin-bottom:14px;';
+  title.textContent = 'Wishlist All Bases';
+  modal.appendChild(title);
+
+  // Bases list
+  const basesLabel = document.createElement('div');
+  basesLabel.style.cssText = 'font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#6b6b8a;margin-bottom:6px;';
+  basesLabel.textContent = `Bases included (${bases.length})`;
+  modal.appendChild(basesLabel);
+
+  const basesList = document.createElement('div');
+  basesList.style.cssText = 'background:#0a0a18;border:1px solid #1a1a30;border-radius:6px;padding:8px 10px;margin-bottom:14px;max-height:140px;overflow-y:auto;';
+  bases.forEach(b => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:7px;padding:2px 0;font-size:12px;';
+    const { col } = baseStatusColour(b, _loadedHeaderGamedata);
+    const dot = document.createElement('span');
+    dot.style.cssText = `width:7px;height:7px;border-radius:50%;background:${col};flex-shrink:0;display:inline-block;`;
+    const name = document.createElement('span');
+    name.style.color = '#c0c0da';
+    name.textContent = b.name;
+    row.append(dot, name);
+    basesList.appendChild(row);
+  });
+  modal.appendChild(basesList);
+
+  // Settings summary
+  const sumLabel = document.createElement('div');
+  sumLabel.style.cssText = 'font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#6b6b8a;margin-bottom:6px;';
+  sumLabel.textContent = 'Wishlist settings';
+  modal.appendChild(sumLabel);
+
+  const summaryBox = document.createElement('div');
+  summaryBox.style.cssText = 'background:#0a0a18;border:1px solid #1a1a30;border-radius:6px;padding:8px 10px;margin-bottom:18px;';
+  const rows = [
+    ['Stock period',    `${_settings.targetDays}d`],
+    ['Current stock',  _settings.includeStock       ? 'Subtracted' : 'Not subtracted'],
+    ['Prod. inputs',   _settings.includeInputs      ? 'Included'   : 'Excluded'],
+    ['Consumables',    _settings.includeConsumables ? 'Included'   : 'Excluded'],
+  ];
+  rows.forEach(([k, v]) => {
+    const r = document.createElement('div');
+    r.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;padding:2px 0;';
+    const kEl = document.createElement('span'); kEl.style.color = '#6b6b8a'; kEl.textContent = k;
+    const vEl = document.createElement('span'); vEl.style.color = '#c0c0da'; vEl.textContent = v;
+    r.append(kEl, vEl);
+    summaryBox.appendChild(r);
+  });
+  modal.appendChild(summaryBox);
+
+  // Buttons
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = 'background:none;border:1px solid #2a2a4a;border-radius:5px;color:#6b6b8a;font-size:12px;padding:6px 14px;cursor:pointer;font-family:inherit;';
+  cancelBtn.addEventListener('click', () => backdrop.remove());
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.textContent = 'Create Wishlists \u2192';
+  confirmBtn.style.cssText = 'background:#166534;border:none;border-radius:5px;color:#22c55e;font-size:12px;padding:6px 14px;cursor:pointer;font-family:inherit;font-weight:600;';
+  confirmBtn.addEventListener('click', () => { backdrop.remove(); onConfirm(); });
+
+  btnRow.append(cancelBtn, confirmBtn);
+  modal.appendChild(btnRow);
+  backdrop.appendChild(modal);
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) backdrop.remove(); });
+  document.body.appendChild(backdrop);
+}
+
 // Delete All Wishlists — fetches then deletes each one
 async function handleDeleteAllWishlists(btn, resetFn) {
   const apiKey = await getExtApiKey();
@@ -1140,7 +1227,7 @@ async function handleDeleteAllWishlists(btn, resetFn) {
 
 // ── Header chip ───────────────────────────────────────────────────────────────
 
-function buildHeaderChip(base, gamedata) {
+function baseStatusColour(base, gamedata) {
   const { inputs, consumables } = calcBaseNeeds(base, gamedata);
   const relevant = [
     ...(_settings.includeInputs      ? inputs      : []),
@@ -1148,7 +1235,11 @@ function buildHeaderChip(base, gamedata) {
   ];
   const allDays  = relevant.map(r => r.days).filter(d => isFinite(d));
   const worstDay = allDays.length ? Math.min(...allDays) : Infinity;
-  const col      = daysColour(worstDay);
+  return { col: daysColour(worstDay), worstDay };
+}
+
+function buildHeaderChip(base, gamedata) {
+  const { col, worstDay } = baseStatusColour(base, gamedata);
   const daysStr  = fmtDays(worstDay);
 
   const chip = document.createElement('div');
@@ -1166,7 +1257,11 @@ function buildHeaderChip(base, gamedata) {
   const cartBtn = document.createElement('button');
   cartBtn.innerHTML = '&#128722;';
   cartBtn.title = 'Create wishlist';
-  cartBtn.style.cssText = `background:none;border:none;cursor:pointer;font-size:11px;padding:0;margin-left:1px;line-height:1;color:inherit;flex-shrink:0;display:${_settings.showWishlist ? '' : 'none'};`;
+  cartBtn.style.cssText = `background:none;border:none;cursor:pointer;font-size:11px;padding:0;margin-left:1px;line-height:1;color:inherit;flex-shrink:0;display:${_settings.showWishlist ? '' : 'none'};transition:transform 0.1s,opacity 0.15s;`;
+  cartBtn.addEventListener('mouseenter', () => { cartBtn.style.opacity = '1'; cartBtn.style.transform = 'scale(1.25)'; });
+  cartBtn.addEventListener('mouseleave', () => { cartBtn.style.opacity = ''; cartBtn.style.transform = ''; });
+  cartBtn.addEventListener('mousedown',  () => { cartBtn.style.transform = 'scale(0.85)'; });
+  cartBtn.addEventListener('mouseup',    () => { cartBtn.style.transform = 'scale(1.25)'; });
   cartBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     handleCreateWishlist(base, gamedata, cartBtn);
@@ -1430,10 +1525,11 @@ function buildSettingsPanel() {
   const featToggles = [
     { key: 'showCosts',       label: 'Show costs / values' },
     { key: 'showGuildPrices', label: 'Guild prices in-game' },
-    { key: 'showGTE',         label: 'Guild Trade (GTE)' },
+    { key: 'showGTE',         label: 'Guild Trade' },
     { key: 'showSummary',     label: 'Summary panel' },
     { key: 'showAssets',      label: 'Cash & assets panel' },
-    { key: 'showWishlist',    label: 'Wishlist buttons' },
+    { key: 'showTooltips',    label: 'Price tooltips' },
+    { key: 'showWishlist',    label: '1-click wishlisting' },
   ];
 
   for (const { key, label } of featToggles) {
@@ -2085,28 +2181,9 @@ async function loadAndInjectHeader() {
     }
 
     if (_settings.showWishlist) {
-      let _wishArmed = false;
-      let _wishTimer = null;
       const wishAllBtn = mkCtrlBtn('&#128722;', 'Create wishlists for all visible bases');
-      const resetWishBtn = () => {
-        _wishArmed = false;
-        clearTimeout(_wishTimer);
-        wishAllBtn.innerHTML = '&#128722;';
-        wishAllBtn.style.fontSize = '13px';
-        setCtrlActive(wishAllBtn, false);
-      };
       wishAllBtn.addEventListener('click', () => {
-        if (!_wishArmed) {
-          _wishArmed = true;
-          wishAllBtn.innerHTML = '&#10003;?';
-          wishAllBtn.style.fontSize = '11px';
-          setCtrlActive(wishAllBtn, true);
-          _wishTimer = setTimeout(resetWishBtn, 4000);
-        } else {
-          clearTimeout(_wishTimer);
-          resetWishBtn();
-          handleWishlistAll(wishAllBtn);
-        }
+        showWishlistAllModal(() => handleWishlistAll(wishAllBtn));
       });
       controls.appendChild(wishAllBtn);
     }
@@ -2234,6 +2311,7 @@ let _gteMyListings  = [];
 let _gteItems       = [];
 let _gtePlanets     = ['Exchange Station'];
 let _gteLoading     = false;
+let _gteNoGuild     = false;
 let _gteErr         = null;
 let _gteExpandedMat = null;
 let _gteCanWrite    = false;
@@ -2463,15 +2541,36 @@ function buildGteLocForm(init, planets, label, onSubmit, onCancel) {
 
 // ── GTE Data loading ──────────────────────────────────────────────────────────
 
+function makeSpinner() {
+  if (!document.getElementById('gt-spin-style')) {
+    const s = document.createElement('style');
+    s.id = 'gt-spin-style';
+    s.textContent = '@keyframes gt-spin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(s);
+  }
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;justify-content:center;align-items:center;padding:48px;';
+  const ring = document.createElement('div');
+  ring.style.cssText = 'width:32px;height:32px;border-radius:50%;border:3px solid #1a1a35;border-top-color:#6366f1;animation:gt-spin 0.7s linear infinite;';
+  wrap.appendChild(ring);
+  return wrap;
+}
+
 async function gteLoadData(forceRefresh = false) {
   if (!forceRefresh && _gteDataLoaded) { gteRenderBoth(); return; }
 
-  _gteLoading = true; _gteErr = null;
+  _gteLoading = true; _gteErr = null; _gteNoGuild = false;
   gteRenderBoth();
 
   try {
     const identity = await resolveIdentity();
     const gTag = identity?.gTag ?? '';
+
+    if (!gTag) {
+      _gteNoGuild = true;
+      _gteDataLoaded = true;
+      return;
+    }
 
     const [publicListings, items, gamedata] = await Promise.all([
       gTag
@@ -2554,10 +2653,11 @@ function gteRenderLeft() {
   function renderGroups() {
     const scrollTop = listArea.scrollTop;
     listArea.innerHTML = '';
-    if (_gteLoading) {
+    if (_gteLoading) { listArea.appendChild(makeSpinner()); return; }
+    if (_gteNoGuild) {
       const d = document.createElement('div');
-      d.style.cssText = 'padding:24px;text-align:center;color:#4a4a6a;';
-      d.textContent = 'Loading…';
+      d.style.cssText = 'padding:32px 20px;color:#4a4a6a;font-size:13px;text-align:center;line-height:1.6;';
+      d.textContent = 'Join a guild to use Guild Trade.';
       listArea.appendChild(d);
       return;
     }
@@ -2689,20 +2789,16 @@ function gteRenderRight() {
   }
   col.appendChild(colHdr);
 
-  // No token — prompt to set one
+  if (_gteLoading) { col.appendChild(makeSpinner()); return; }
+
+  if (_gteNoGuild) { return; } // left column already shows the no-guild message
+
+  // No API key — prompt to set one
   if (!_gteCanWrite) {
     const noTok = document.createElement('div');
     noTok.style.cssText = 'padding:20px 14px;color:#4a4a6a;font-size:12px;line-height:1.6;';
     noTok.textContent = 'Set your game API key in the extension popup to manage your guild listings.';
     col.appendChild(noTok);
-    return;
-  }
-
-  if (_gteLoading) {
-    const ld = document.createElement('div');
-    ld.style.cssText = 'padding:20px;text-align:center;color:#4a4a6a;';
-    ld.textContent = 'Loading…';
-    col.appendChild(ld);
     return;
   }
 
@@ -2964,7 +3060,7 @@ function openGteModal() {
   modalHdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #1a1a35;flex-shrink:0;';
   const titleEl = document.createElement('div');
   titleEl.style.cssText = 'font-size:16px;font-weight:700;color:#e0e0f0;';
-  titleEl.textContent = 'Guild Trade Board';
+  titleEl.textContent = 'Guild Trade';
   const btnGroup = document.createElement('div');
   btnGroup.style.cssText = 'display:flex;align-items:center;gap:4px;';
   const refreshBtn = document.createElement('button');
@@ -3074,7 +3170,7 @@ async function injectGteNavBtn() {
       <circle cx="27" cy="16" r="1.5" fill="#c0c0d4"/>
     `;
     a.appendChild(iconSvg);
-    a.appendChild(document.createTextNode('GTE'));
+    a.appendChild(document.createTextNode('Guild Trade'));
 
     a.addEventListener('mouseenter', () => { iconSvg.style.opacity = '1'; });
     a.addEventListener('mouseleave', () => { iconSvg.style.opacity = '0.55'; });
