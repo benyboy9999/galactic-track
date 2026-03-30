@@ -31,10 +31,10 @@ router.get('/', requireAuth, async (req, res, next) => {
        FROM trade_listings tl
        JOIN users u ON u.id = tl.user_id
        LEFT JOIN trade_listing_locations ll ON ll.listing_id = tl.id
-       WHERE tl.guild_tag = $1
+       WHERE tl.user_id = $1
        GROUP BY tl.id, u.company_logo
        ORDER BY tl.created_at DESC`,
-      [req.user.company_tag]
+      [req.user.id]
     );
     res.json(r.rows);
   } catch (err) { next(err); }
@@ -186,7 +186,7 @@ router.get('/public', checkPublicRateLimit, async (req, res, next) => {
     if (matId) params.push(Number(matId));
 
     const r = await pool.query(
-      `SELECT tl.company_name, tl.mat_id,
+      `SELECT tl.company_name, tl.mat_id, tl.mat_name, tl.created_at,
               -- best (lowest) location — flat fields for backward-compat with published extension
               (SELECT ll2.price_type  FROM trade_listing_locations ll2 WHERE ll2.listing_id = tl.id ORDER BY ll2.price_value ASC LIMIT 1) AS price_type,
               (SELECT ll2.price_value FROM trade_listing_locations ll2 WHERE ll2.listing_id = tl.id ORDER BY ll2.price_value ASC LIMIT 1) AS price_value,

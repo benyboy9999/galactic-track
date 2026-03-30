@@ -40,22 +40,22 @@ function render(enabled, gTag, companyName) {
 
 // ── API Key management ────────────────────────────────────────────────────────
 
-chrome.storage.local.get(['gtApiKey'], ({ gtApiKey }) => {
-  document.getElementById('key-missing').style.display = gtApiKey ? 'none' : 'block';
-  document.getElementById('key-saved').style.display   = gtApiKey ? 'flex' : 'none';
+chrome.storage.local.get(['gtExtApiKey'], ({ gtExtApiKey }) => {
+  document.getElementById('key-missing').style.display = gtExtApiKey ? 'none' : 'block';
+  document.getElementById('key-saved').style.display   = gtExtApiKey ? 'flex' : 'none';
 });
 
 document.getElementById('key-save').addEventListener('click', () => {
   const val = document.getElementById('key-input').value.trim();
   if (!val) return;
-  chrome.storage.local.set({ gtApiKey: val }, () => {
+  chrome.storage.local.set({ gtExtApiKey: val }, () => {
     document.getElementById('key-missing').style.display = 'none';
     document.getElementById('key-saved').style.display   = 'flex';
   });
 });
 
 document.getElementById('key-clear').addEventListener('click', () => {
-  chrome.storage.local.remove('gtApiKey', () => {
+  chrome.storage.local.remove('gtExtApiKey', () => {
     document.getElementById('key-input').value = '';
     document.getElementById('key-saved').style.display   = 'none';
     document.getElementById('key-missing').style.display = 'block';

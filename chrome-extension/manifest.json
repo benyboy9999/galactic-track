@@ -7,8 +7,8 @@
   "permissions": ["storage"],
   "host_permissions": [
     "https://g2.galactictycoons.com/*",
-    "https://api.g2.galactictycoons.com/public/company*",
-    "https://galactic-track.com/api/trade/*"
+    "https://api.g2.galactictycoons.com/public/*",
+    "https://galactic-track.com/api/*"
   ],
 
   "action": {
@@ -35,8 +35,5 @@
     }
   ],
 
-  "web_accessible_resources": [{
-    "resources": ["data/gamedata.json"],
-    "matches": ["*://g2.galactictycoons.com/*"]
-  }]
+  "web_accessible_resources": [{"resources": ["data/gamedata.json", "GTE16.png", "GTE48.png", "GTE128.png"], "matches": ["*://g2.galactictycoons.com/*"]}]
 }
