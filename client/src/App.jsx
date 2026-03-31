@@ -540,6 +540,24 @@ function Nav() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 12, color: '#6b6b8a', whiteSpace: 'nowrap', maxWidth: isMobile ? 80 : 'none', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.companyName}</span>
             <NotificationBell />
+            {!isMobile && (
+              <a
+                href="https://galactic-track.com/extension"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  padding: '4px 9px', background: '#1e1440',
+                  border: '1px solid #4c1d95', borderRadius: 6,
+                  color: '#a78bfa', fontSize: 12, fontWeight: 600,
+                  textDecoration: 'none', whiteSpace: 'nowrap', lineHeight: 1,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#2d1f5e'; e.currentTarget.style.borderColor = '#6d28d9'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = '#1e1440'; e.currentTarget.style.borderColor = '#4c1d95'; }}
+              >
+                ⚙️ Extension
+              </a>
+            )}
             <button
               onClick={() => setSettingsOpen(true)}
               title="Settings"
