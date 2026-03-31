@@ -340,9 +340,10 @@ run();
 const GT_HEADER_ID   = 'gt-prod-header';
 const GT_DETAIL_ID   = 'gt-prod-detail';
 const GT_SPACER_ID   = 'gt-prod-spacer';
-const GT_SETTINGS_ID = 'gt-prod-settings';
-const GT_TOAST_ID    = 'gt-prod-toast';
-const GT_TAB_ID      = 'gt-prod-tab';
+const GT_SETTINGS_ID      = 'gt-prod-settings';
+const GT_CUSTOM_PRICES_ID = 'gt-custom-prices-modal';
+const GT_TOAST_ID         = 'gt-prod-toast';
+const GT_TAB_ID           = 'gt-prod-tab';
 const GT_CASH_ID     = 'gt-cash-panel';
 const GT_SUMMARY_ID  = 'gt-summary-panel';
 const BASES_CACHE_TTL = 5 * 60 * 1000; // 5 min
@@ -387,9 +388,13 @@ const ICON_OVERRIDES = {
   'Hydrogen Fuel':'HydrogenFuelCell','Superconducting Coil':'HyperCoil',
   'SuperCoil':'HyperCoil','Field Cooling System':'FieldCooling',
   'Field Cooling':'FieldCooling','Titanium Carbide Drill':'AdvancedDrill',
-  'TiC Drill':'AdvancedDrill','Molecular Fusion Kit':'WeldingKit2',
+  'TiC Drill':'AdvancedDrill','Molecular Fusion Kit':'WeldingKit2','Fusion Kit':'WeldingKit2',
+  'Cargo Bay':'CargoBaySegment','Cargo Bay Segment':'CargoBaySegment',
+  'Tiridium':'TiridiumAlloy','Tiridium Alloy':'TiridiumAlloy',
+  'Tiridium Plate':'TiridiumHullPlate','Tiridium Hull Plate':'TiridiumHullPlate',
   'Ethanol':'Gasoline','Graphenium Wire':'Superconductors',
-  'Starglass Hull Plate':'QuadraniumHullPlate','Ship Repair Kit':'ShipRepairKit',
+  'Starglass Hull Plate':'QuadraniumHullPlate','Ship Repair Kit':'ShipRepairKit','Repair Kit':'ShipRepairKit',
+  'Silicon Wafer':'SiliconWafer',
   'Lab Suit':'LaboratorySuit','Laboratory Suit':'LaboratorySuit',
   'Lab. Suit':'LaboratorySuit','Chemical Plant':'ChemistryPlant',
   'Micronics Factory':'MicroelectronicsFactory','Quantum Nexus':'QuantumComputingCenter',
@@ -453,6 +458,8 @@ const DEFAULT_SETTINGS = {
   includeInputs:      true,
   includeConsumables: true,
   hiddenBases:        [],
+  priceMode:          'current', // 'current' | 'average'
+  customPrices:       {},        // { [matId]: priceInDollars }
   // Feature visibility
   showGTE:          true,
   showSummary:      true,
@@ -514,16 +521,10 @@ async function fetchBases() {
       const id = stub.id ?? stub.baseId;
       if (!id) return stub; // fallback: use stub as-is
       const full = await requestGTLocalAPI('getBase', { baseId: id });
-      if (full) {
-        console.debug('[GT] getBase sample (first):', full); // temporary — remove once field names confirmed
-        return full;
-      }
+      if (full) return full;
       return stub;
     })
   );
-
-  // Only log once
-  if (detailed[0]) console.debug('[GT] Base fields:', Object.keys(detailed[0]));
 
   _basesCache = { data: detailed, ts: Date.now() };
   return detailed;
@@ -538,7 +539,26 @@ const COMPANY_TTL  = 5 * 60 * 1000;
 async function fetchCompanyData() {
   if (_companyData && Date.now() - _companyDataTs < COMPANY_TTL) return _companyData;
   const local = await requestGTLocalAPI('getMyCompany');
-  if (local?.id) { _companyData = local; _companyDataTs = Date.now(); return local; }
+  if (local?.id) {
+    _companyData = local; _companyDataTs = Date.now();
+    // Local API omits perks — fetch from GT API in background to enrich _companyData.
+    // Only runs once per cache window; a limited key is sufficient.
+    if (!local.perks) {
+      getExtApiKey().then(async apiKey => {
+        if (!apiKey) return;
+        try {
+          const resp = await fetch(`${GT_API}/public/company?apikey=${encodeURIComponent(apiKey)}`);
+          if (!resp.ok) return;
+          const apiData = await resp.json();
+          if (Array.isArray(apiData?.perks)) {
+            _companyData = { ..._companyData, perks: apiData.perks };
+          }
+        } catch { /* non-critical — speed calc falls back to research-only */ }
+      });
+    }
+    return local;
+  }
+  // No local API (not logged in) — fetch directly from GT API
   const apiKey = await getExtApiKey();
   if (!apiKey) return null;
   try {
@@ -610,6 +630,93 @@ async function fetchMatPrices() {
   } catch { return null; }
 }
 
+// ── Average price cache ───────────────────────────────────────────────────────
+
+let _avgPriceMap   = null;
+let _avgPriceMapTs = 0;
+const AVG_PRICE_TTL = 30 * 60 * 1000; // 30 min
+
+async function fetchAvgPrices() {
+  if (_avgPriceMap && Date.now() - _avgPriceMapTs < AVG_PRICE_TTL) return _avgPriceMap;
+  const apiKey = await getExtApiKey();
+  if (!apiKey) return null;
+  try {
+    const resp = await fetch(`${GT_API}/public/exchange/mat-details?apikey=${encodeURIComponent(apiKey)}`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const arr  = data.materials ?? (Array.isArray(data) ? data : null);
+    if (!arr) return null;
+    const map = new Map();
+    for (const m of arr) {
+      const id  = Number(m.id ?? m.matId);
+      const avg = Number(m.avgPrice ?? m.avg ?? 0);
+      if (id && avg > 0) map.set(id, avg / 100);
+    }
+    _avgPriceMap   = map;
+    _avgPriceMapTs = Date.now();
+    return map;
+  } catch { return null; }
+}
+
+// Returns the effective price for a material, respecting custom overrides and priceMode.
+function effectivePrice(matId) {
+  const id     = Number(matId);
+  const custom = _settings.customPrices?.[id];
+  if (custom != null && custom > 0) return custom;
+  if (_settings.priceMode === 'average' && _avgPriceMap?.has(id)) return _avgPriceMap.get(id);
+  return _priceMap?.get(id) ?? 0;
+}
+
+// ── Planet factor ─────────────────────────────────────────────────────────────
+// Returns the planet-specific speed factor for a recipe:
+//   extraction buildings (spec 4): output material abundance / 100
+//   farming buildings    (spec 3): planet fertility / 100
+//   all other buildings           : 1 (no planet effect)
+
+function getPlanetFactor(recipe, planet, gamedata) {
+  if (!planet) return 1;
+  const building = gamedata.buildings.find(b => b.id === recipe.producedIn);
+  if (!building) return 1;
+  if (building.specialization === 4) {
+    const outId = recipe.output?.id;
+    if (!outId) return 1;
+    const mat = planet.mats?.find(m => m.id === outId);
+    return mat ? mat.ab / 100 : 1;
+  }
+  if (building.specialization === 3) {
+    return (planet.fert ?? 100) / 100;
+  }
+  return 1;
+}
+
+// ── Production speed multiplier ───────────────────────────────────────────────
+// Returns the total speed multiplier for a given building specialization type.
+// technology ID === building.specialization; each level = +5% production speed.
+// Perk bonuses (type 7) apply to all building types but are only included when
+// company.perks is available (GT API key path); local API omits perks.
+// When active tasks exist for a building type, their actual cycle times are more
+// accurate than this model — use speedRatioByType first, fall back to this.
+
+function calcSpeedMultiplier(bType, companyData, gamedataPerks) {
+  let bonus = 0;
+
+  // Research: +5% per level, type-specific
+  const tech = (companyData?.technologies ?? []).find(t => t.id === bType);
+  if (tech?.level) bonus += tech.level * 0.05;
+
+  // Perks: bonus type 7 = production speed %, applies to all building types
+  const perkLevels = new Map((companyData?.perks ?? []).map(p => [p.id, p.lvl ?? p.level ?? 0]));
+  for (const perk of (gamedataPerks ?? [])) {
+    const lvl = perkLevels.get(perk.id) ?? 0;
+    if (!lvl) continue;
+    for (const b of (perk.bonuses ?? [])) {
+      if (b.type === 7) bonus += (b.perLevel * lvl) / 100;
+    }
+  }
+
+  return 1 + bonus;
+}
+
 // ── Per-base needs calculation ────────────────────────────────────────────────
 
 function calcBaseNeeds(base, gamedata) {
@@ -619,18 +726,119 @@ function calcBaseNeeds(base, gamedata) {
 
   // Production inputs
   const recipeGroups = new Map(); // rId → { recipe, totalMul, cyclesPerDay }
+
+  // Resolve this base's planet for planet-factor calculations
+  let basePlanet = null;
+  if (base.planetId) {
+    outer: for (const sys of gamedata.systems ?? []) {
+      for (const p of sys.planets ?? []) {
+        if (p?.id === base.planetId) { basePlanet = p; break outer; }
+      }
+    }
+  }
+
+  // Pass 1: active production tasks (currently running)
+  // Also record speed data per building type so Pass 2 can inherit bonuses for queued recipes.
+  // speedDataByType stores { ratio, refPlanetFactor } where ratio = actualCycleMs / rawCycleMs.
+  // Storing the reference planet factor lets us correct for different materials in Pass 2
+  // (e.g. a queued copper extract needing different abundance than the active iron extract).
+  const speedDataByType = new Map(); // bType → { ratio, refPlanetFactor }
   for (const slot of base.buildingSlots ?? []) {
-    if (slot.status !== 2 || !slot.building?.task) continue;
+    if (!slot.building?.task) continue;
     const task   = slot.building.task;
     const recipe = recipeMap.get(task.rId);
     if (!recipe) continue;
-    const cycleMs      = new Date(task.comD) - new Date(task.startDate);
+    const cycleMs = new Date(task.comD) - new Date(task.startDate);
     if (cycleMs <= 0) continue;
     const cyclesPerDay = (24 * 60 * 60 * 1000) / cycleMs;
     if (!recipeGroups.has(task.rId)) {
       recipeGroups.set(task.rId, { recipe, totalMul: 0, cyclesPerDay });
     }
-    recipeGroups.get(task.rId).totalMul += (slot.building.level ?? 1);
+    recipeGroups.get(task.rId).totalMul += (task.mul ?? 1);
+    const bType = recipe.producedIn;
+    if (!speedDataByType.has(bType) && recipe.timeMinutes > 0) {
+      speedDataByType.set(bType, {
+        ratio:           cycleMs / (recipe.timeMinutes * 60 * 1000),
+        refPlanetFactor: getPlanetFactor(recipe, basePlanet, gamedata),
+      });
+    }
+  }
+
+  // Pass 2: reconcile infinite production orders against actual building capacity.
+  //
+  // Buildings between cycles have no active task and are invisible to Pass 1, so Pass 1
+  // under-counts capacity for building types that have queued/cycling infinite orders.
+  //
+  // The game distributes buildings among infinite orders weighted by recipe time, so that
+  // each order produces the same number of cycles per day ("equal throughput per order").
+  // Proof: weight_i = time_i / Σ(time_j)  →  assignedMul_i × (1/time_i) = constant.
+
+  // Collect all infinite orders from productionOrders, grouped by building type
+  const allInfiniteByType = new Map(); // bType → [{ rId, recipe }]
+  for (const order of base.productionOrders ?? []) {
+    if (order.amt !== 65535) continue;
+    const recipe = recipeMap.get(order.rId);
+    if (!recipe?.timeMinutes || recipe.timeMinutes <= 0) continue;
+    const bType = recipe.producedIn;
+    if (!allInfiniteByType.has(bType)) allInfiniteByType.set(bType, []);
+    allInfiniteByType.get(bType).push({ rId: order.rId, recipe });
+  }
+
+  for (const [bType, orders] of allInfiniteByType) {
+    // Only redistribute when there's at least one order not yet running
+    const hasQueued = orders.some(o => !recipeGroups.has(o.rId));
+    if (!hasQueued) continue;
+
+    // Total capacity = all active tasks of this building type from Pass 1.
+    // All buildings of this type are accounted for here — infinite-queue buildings
+    // always have an active task (they restart immediately), so Pass 1 captures
+    // the full capacity even if some are currently running a different recipe.
+    let totalCap = 0;
+    for (const group of recipeGroups.values()) {
+      if (group.recipe.producedIn === bType) totalCap += group.totalMul;
+    }
+    if (totalCap === 0) continue;
+
+    // Weight each order by its recipe time so every order gets equal daily throughput.
+    // Longer recipes need more buildings to keep up — time_i / Σ(time_j across all orders)
+    let totalWeightedTime = 0;
+    for (const { recipe } of orders) totalWeightedTime += recipe.timeMinutes;
+
+    // Aggregate count per rId (e.g. 2 concrete orders → concrete appears twice)
+    const ordersByRId = new Map(); // rId → { recipe, count }
+    for (const { rId, recipe } of orders) {
+      if (!ordersByRId.has(rId)) ordersByRId.set(rId, { recipe, count: 0 });
+      ordersByRId.get(rId).count++;
+    }
+
+    for (const [rId, { recipe, count }] of ordersByRId) {
+      const weight      = (recipe.timeMinutes * count) / totalWeightedTime;
+      const assignedMul = totalCap * weight;
+
+      // Derive cyclesPerDay for recipes not yet running (new Pass 2 entries only).
+      // Active recipes keep their Pass 1 cyclesPerDay (actual timing, fully accurate).
+      if (!recipeGroups.has(rId)) {
+        // Prefer speed data from an active task of the same building type.
+        // Strip out that task's planet factor, apply this recipe's planet factor instead —
+        // handles extraction bases where different materials have different abundances.
+        const sd = speedDataByType.get(bType);
+        let cyclesPerDay;
+        if (sd) {
+          const researchPerkRatio = sd.ratio * sd.refPlanetFactor; // ratio without planet component
+          const planetFactor      = getPlanetFactor(recipe, basePlanet, gamedata);
+          const correctedRatio    = researchPerkRatio / planetFactor;
+          cyclesPerDay = 86400000 / (recipe.timeMinutes * 60 * 1000 * correctedRatio);
+        } else {
+          // No active tasks of this building type — use full technology model
+          const multiplier = calcSpeedMultiplier(bType, _companyData, gamedata.perks)
+                           * getPlanetFactor(recipe, basePlanet, gamedata);
+          cyclesPerDay = 86400000 / (recipe.timeMinutes * 60 * 1000 / multiplier);
+        }
+        recipeGroups.set(rId, { recipe, totalMul: assignedMul, cyclesPerDay });
+      } else {
+        recipeGroups.get(rId).totalMul = assignedMul;
+      }
+    }
   }
 
   const inputs = [];
@@ -670,7 +878,26 @@ function calcBaseNeeds(base, gamedata) {
       matId: out.id,
       name:  matMap.get(out.id)?.sName ?? `mat${out.id}`,
       dailyOutput,
+      inStock: warehouseAmts.get(out.id) ?? 0,
     });
+  }
+
+  // Annotate inputs and consumables with self-sufficiency info
+  const outputMap = new Map(outputs.map(o => [o.matId, o.dailyOutput]));
+  for (const item of [...inputs, ...consumables]) {
+    const produced = outputMap.get(item.matId) ?? 0;
+    if (produced >= item.dailyNeed) {
+      item.selfProduced = true;
+      item.netDailyNeed = 0;
+      item.days = Infinity;
+    } else if (produced > 0) {
+      item.selfProduced = false;
+      item.netDailyNeed = item.dailyNeed - produced;
+      item.days = item.netDailyNeed > 0 ? item.inStock / item.netDailyNeed : Infinity;
+    } else {
+      item.selfProduced = false;
+      item.netDailyNeed = item.dailyNeed;
+    }
   }
 
   return { inputs, consumables, outputs };
@@ -780,7 +1007,6 @@ function buildDetailPanel(base, gamedata) {
 
   function rebuildContent() {
     contentArea.innerHTML = '';
-    const prices = _priceMap;
     const showCosts = _settings.showCosts; // column always visible when toggle is on; shows — if prices missing
     let totalDailyInputCost = 0;
     let totalDailyOutputValue = 0;
@@ -806,72 +1032,160 @@ function buildDetailPanel(base, gamedata) {
 
       let sectionRestockCost = 0;
       let sectionDailyCost   = 0;
+      const sectionItems = []; // for section total tooltip
       for (const r of items) {
-        const col     = daysColour(r.days);
-        const daysStr = fmtDays(r.days);
-        const deficit = Math.max(0, Math.ceil(r.dailyNeed * td - r.inStock));
-        const needStr  = Math.round(r.dailyNeed).toLocaleString() + '/d';
-        const unitPrice = prices?.get(Number(r.matId)) ?? 0;
-        const lineCost  = unitPrice * deficit;
-        const lineDailyCost = unitPrice * r.dailyNeed;
+        const isSelf    = r.selfProduced === true;
+        const isPartial = !isSelf && r.netDailyNeed != null && r.netDailyNeed < r.dailyNeed;
+        const col       = isSelf ? '#3a3a5a' : daysColour(r.days);
+        const daysStr   = fmtDays(r.days);
+        const netNeed   = r.netDailyNeed ?? r.dailyNeed;
+        const deficit   = isSelf ? 0 : Math.max(0, Math.ceil(netNeed * td - r.inStock));
+        const unitPrice = effectivePrice(r.matId);
+        const lineCost  = isSelf ? 0 : unitPrice * deficit;
+        const lineDailyCost = isSelf ? 0 : unitPrice * netNeed;
         sectionRestockCost += lineCost;
         sectionDailyCost   += lineDailyCost;
         totalDailyInputCost += lineDailyCost;
+        sectionItems.push({ r, isSelf, isPartial, netNeed, deficit, col, daysStr, unitPrice });
 
-        // cols: name | need/d | deficit | [cost] | days
-        const cols = showCosts ? '1fr auto auto auto auto' : '1fr auto auto auto';
+        // cols: name | /d | stock | needed | time-left
         const row = document.createElement('div');
-        row.style.cssText = `display:grid;grid-template-columns:${cols};gap:5px;align-items:center;padding:3px 0;border-bottom:1px solid #12122a;`;
+        row.style.cssText = `display:grid;grid-template-columns:1fr auto auto auto auto;gap:4px;align-items:center;padding:3px 0;border-bottom:1px solid #12122a;cursor:default;${isSelf ? 'opacity:0.55;' : ''}`;
 
         const nameSpan = document.createElement('span');
-        nameSpan.style.cssText = 'color:#c0c0da;display:flex;align-items:center;gap:4px;min-width:0;';
+        nameSpan.style.cssText = `color:${isSelf ? '#4a4a6a' : '#c0c0da'};display:flex;align-items:center;gap:4px;min-width:0;`;
         const icon0 = makeIcon(r.name);
         if (icon0) nameSpan.appendChild(icon0);
         const nameText0 = document.createElement('span');
         nameText0.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-        nameText0.textContent = r.name;
+        nameText0.textContent = (isSelf || isPartial ? '\u267b ' : '') + r.name;
         nameSpan.appendChild(nameText0);
 
         const needSpan = document.createElement('span');
-        needSpan.style.cssText = 'color:#6b6b8a;font-size:10px;white-space:nowrap;';
-        needSpan.textContent = needStr;
+        needSpan.style.cssText = 'color:#6b6b8a;font-size:10px;white-space:nowrap;text-align:right;';
+        needSpan.textContent = isSelf ? '\u2014' : Math.round(isPartial ? netNeed : r.dailyNeed).toLocaleString() + '/d';
 
         const deficitSpan = document.createElement('span');
-        deficitSpan.style.cssText = `color:${col};font-size:10px;white-space:nowrap;`;
-        deficitSpan.textContent = `(${deficit > 0 ? deficit.toLocaleString() : '0'})`;
+        deficitSpan.style.cssText = 'color:#6b6b8a;font-size:10px;white-space:nowrap;text-align:right;';
+        deficitSpan.textContent = isSelf ? 'on-planet' : (deficit > 0 ? deficit.toLocaleString() : '0');
+
+        const stockSpan = document.createElement('span');
+        stockSpan.style.cssText = `color:${col};font-size:10px;font-weight:600;white-space:nowrap;text-align:right;`;
+        stockSpan.textContent = isSelf ? '' : Math.round(r.inStock).toLocaleString();
 
         const daysSpan = document.createElement('span');
-        daysSpan.style.cssText = `color:${col};font-size:11px;font-weight:600;min-width:28px;text-align:right;`;
-        daysSpan.textContent = daysStr;
+        daysSpan.style.cssText = `color:${col};font-size:11px;font-weight:600;text-align:right;`;
+        daysSpan.textContent = isSelf ? '' : daysStr;
 
         row.appendChild(nameSpan);
         row.appendChild(needSpan);
         row.appendChild(deficitSpan);
-        if (showCosts) {
-          const costSpan = document.createElement('span');
-          costSpan.style.cssText = 'color:#9090b0;font-size:10px;white-space:nowrap;text-align:right;';
-          costSpan.textContent = lineCost > 0 ? lineCost.toLocaleString(undefined, {maximumFractionDigits:0}) : '\u2014';
-          row.appendChild(costSpan);
-        }
+        row.appendChild(stockSpan);
         row.appendChild(daysSpan);
+
+        // Row hover tooltip: label columns
+        let rowTip = null;
+        row.addEventListener('mouseenter', () => {
+          rowTip = document.createElement('div');
+          rowTip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:5px;padding:6px 9px;font-size:11px;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+          if (isSelf) {
+            const s = document.createElement('span');
+            s.style.color = '#4a4a6a';
+            s.textContent = 'Produced on this base — no import needed';
+            rowTip.appendChild(s);
+          } else {
+            const rows2 = [
+              ['/day needed',   Math.round(isPartial ? netNeed : r.dailyNeed).toLocaleString(), '#6b6b8a'],
+              ['Amount needed', deficit > 0 ? deficit.toLocaleString() : '0',                   '#6b6b8a'],
+              ['Current stock', Math.round(r.inStock).toLocaleString(),                          col],
+              ['Time left',     daysStr,                                                          col],
+            ];
+            if (isPartial) rows2.splice(0, 0, ['Gross /day', Math.round(r.dailyNeed).toLocaleString(), '#4a4a6a']);
+            for (const [lbl, val, vc] of rows2) {
+              const line = document.createElement('div');
+              line.style.cssText = 'display:flex;justify-content:space-between;gap:16px;padding:1px 0;';
+              const l = document.createElement('span'); l.style.color = '#6b6b8a'; l.textContent = lbl;
+              const v = document.createElement('span'); v.style.cssText = `color:${vc};font-weight:600;`; v.textContent = val;
+              line.appendChild(l); line.appendChild(v);
+              rowTip.appendChild(line);
+            }
+          }
+          document.body.appendChild(rowTip);
+        });
+        row.addEventListener('mousemove', (e) => {
+          if (!rowTip) return;
+          const x = Math.min(e.clientX + 12, window.innerWidth  - rowTip.offsetWidth  - 8);
+          const y = Math.min(e.clientY + 12, window.innerHeight - rowTip.offsetHeight - 8);
+          rowTip.style.left = x + 'px'; rowTip.style.top = y + 'px';
+        });
+        row.addEventListener('mouseleave', () => { rowTip?.remove(); rowTip = null; });
+
         contentArea.appendChild(row);
       }
 
       if (showCosts && (sectionRestockCost > 0 || sectionDailyCost > 0)) {
         const totRow = document.createElement('div');
-        totRow.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;gap:8px;padding:3px 0 1px;border-top:1px solid #1a1a2e;margin-top:2px;';
+        totRow.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;gap:8px;padding:3px 0 1px;border-top:1px solid #1a1a2e;margin-top:2px;cursor:default;';
         const totLabel = document.createElement('span');
         totLabel.style.cssText = 'color:#6b6b8a;font-size:10px;';
         totLabel.textContent = 'Section total';
         const restockVal = document.createElement('span');
         restockVal.style.cssText = 'color:#9090b0;font-size:10px;text-align:right;white-space:nowrap;';
-        restockVal.title = 'Restock cost';
         restockVal.textContent = sectionRestockCost > 0 ? `$${Math.round(sectionRestockCost).toLocaleString()}` : '\u2014';
         const dailyVal = document.createElement('span');
         dailyVal.style.cssText = 'color:#6b6b8a;font-size:10px;text-align:right;white-space:nowrap;';
-        dailyVal.title = 'Daily cost';
         dailyVal.textContent = sectionDailyCost > 0 ? `$${Math.round(sectionDailyCost).toLocaleString()}/d` : '\u2014';
         totRow.append(totLabel, restockVal, dailyVal);
+
+        // Hover tooltip: restock cost breakdown — [icon] Material xAmount @ $Price
+        let tip = null;
+        totRow.addEventListener('mouseenter', () => {
+          const restockLines = sectionItems.filter(si => !si.isSelf && si.deficit > 0 && si.unitPrice > 0);
+          if (!restockLines.length) return;
+          tip = document.createElement('div');
+          tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+          const tipTitle = document.createElement('div');
+          tipTitle.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;';
+          tipTitle.textContent = 'Restock cost';
+          tip.appendChild(tipTitle);
+          for (const { r, deficit, unitPrice } of restockLines) {
+            const line = document.createElement('div');
+            line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
+            const left = document.createElement('div');
+            left.style.cssText = 'display:flex;align-items:center;gap:5px;';
+            const ic = makeIcon(r.name, 14);
+            if (ic) left.appendChild(ic);
+            const lbl = document.createElement('span');
+            lbl.style.color = '#c0c0da';
+            lbl.textContent = `${r.name} x${deficit.toLocaleString()}`;
+            left.appendChild(lbl);
+            const val = document.createElement('span');
+            val.style.cssText = 'color:#9090b0;';
+            val.textContent = `@ ${fmtCr(unitPrice)} ($${Math.round(unitPrice * deficit).toLocaleString()})`;
+            line.appendChild(left); line.appendChild(val);
+            tip.appendChild(line);
+          }
+          if (restockLines.length > 1) {
+            const sep = document.createElement('div');
+            sep.style.cssText = 'border-top:1px solid #1a1a30;margin:5px 0 3px;';
+            tip.appendChild(sep);
+            const tot = document.createElement('div');
+            tot.style.cssText = 'display:flex;justify-content:space-between;gap:12px;';
+            const tl = document.createElement('span'); tl.style.color = '#6b6b8a'; tl.textContent = 'Total';
+            const tv = document.createElement('span'); tv.style.cssText = 'color:#b0b0cc;font-weight:600;'; tv.textContent = `$${Math.round(sectionRestockCost).toLocaleString()}`;
+            tot.appendChild(tl); tot.appendChild(tv);
+            tip.appendChild(tot);
+          }
+          document.body.appendChild(tip);
+        });
+        totRow.addEventListener('mousemove', (e) => {
+          if (!tip) return;
+          const x = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8);
+          const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
+          tip.style.left = x + 'px'; tip.style.top = y + 'px';
+        });
+        totRow.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
+
         contentArea.appendChild(totRow);
         totalRestockCost += sectionRestockCost;
       }
@@ -901,6 +1215,7 @@ function buildDetailPanel(base, gamedata) {
     }
 
     // Outputs section
+    const outputItems = []; // for income/net tooltips
     if (outputs.length) {
       const oh = document.createElement('div');
       oh.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin:6px 0 3px;';
@@ -911,13 +1226,14 @@ function buildDetailPanel(base, gamedata) {
       contentArea.appendChild(oh);
 
       for (const r of outputs) {
-        const unitPrice   = prices?.get(Number(r.matId)) ?? 0;
-        const dailyValue  = unitPrice * r.dailyOutput;
+        const unitPrice  = effectivePrice(r.matId);
+        const dailyValue = unitPrice * r.dailyOutput;
         totalDailyOutputValue += dailyValue;
+        outputItems.push({ r, unitPrice, dailyValue });
 
-        const cols = showCosts ? '1fr auto auto' : '1fr auto';
+        const cols = showCosts ? '1fr auto auto auto' : '1fr auto auto';
         const row = document.createElement('div');
-        row.style.cssText = `display:grid;grid-template-columns:${cols};gap:5px;align-items:center;padding:3px 0;border-bottom:1px solid #12122a;`;
+        row.style.cssText = `display:grid;grid-template-columns:${cols};gap:5px;align-items:center;padding:3px 0;border-bottom:1px solid #12122a;cursor:default;`;
 
         const nameSpan = document.createElement('span');
         nameSpan.style.cssText = 'color:#c0c0da;display:flex;align-items:center;gap:4px;min-width:0;';
@@ -932,8 +1248,13 @@ function buildDetailPanel(base, gamedata) {
         qtySpan.style.cssText = 'color:#9090b0;font-size:10px;white-space:nowrap;text-align:right;';
         qtySpan.textContent = Math.round(r.dailyOutput).toLocaleString() + '/d';
 
+        const stockSpan = document.createElement('span');
+        stockSpan.style.cssText = 'color:#7a7a9a;font-size:10px;white-space:nowrap;text-align:right;';
+        stockSpan.textContent = Math.round(r.inStock).toLocaleString();
+
         row.appendChild(nameSpan);
         row.appendChild(qtySpan);
+        row.appendChild(stockSpan);
 
         if (showCosts) {
           const valSpan = document.createElement('span');
@@ -941,13 +1262,84 @@ function buildDetailPanel(base, gamedata) {
           valSpan.textContent = dailyValue > 0 ? fmtCr(dailyValue) + '/d' : '\u2014';
           row.appendChild(valSpan);
         }
+
+        // Row hover tooltip
+        if (showCosts && dailyValue > 0) {
+          let rowTip = null;
+          row.addEventListener('mouseenter', () => {
+            rowTip = document.createElement('div');
+            rowTip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+            const line = document.createElement('div');
+            line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;';
+            const left = document.createElement('div');
+            left.style.cssText = 'display:flex;align-items:center;gap:5px;';
+            const ic = makeIcon(r.name, 14);
+            if (ic) left.appendChild(ic);
+            const lbl = document.createElement('span');
+            lbl.style.color = '#c0c0da';
+            lbl.textContent = `${r.name} x${Math.round(r.dailyOutput).toLocaleString()}/d`;
+            left.appendChild(lbl);
+            const val = document.createElement('span');
+            val.style.color = '#9090b0';
+            val.textContent = `@ ${fmtCr(unitPrice)} (${fmtCr(dailyValue)}/d)`;
+            line.appendChild(left); line.appendChild(val);
+            rowTip.appendChild(line);
+            document.body.appendChild(rowTip);
+          });
+          row.addEventListener('mousemove', (e) => {
+            if (!rowTip) return;
+            const x = Math.min(e.clientX + 12, window.innerWidth  - rowTip.offsetWidth  - 8);
+            const y = Math.min(e.clientY + 12, window.innerHeight - rowTip.offsetHeight - 8);
+            rowTip.style.left = x + 'px'; rowTip.style.top = y + 'px';
+          });
+          row.addEventListener('mouseleave', () => { rowTip?.remove(); rowTip = null; });
+        }
+
         contentArea.appendChild(row);
       }
 
       if (showCosts && totalDailyOutputValue > 0) {
         const totRow = document.createElement('div');
-        totRow.style.cssText = 'display:flex;justify-content:flex-end;padding:3px 0 1px;color:#22c55e;font-size:10px;';
+        totRow.style.cssText = 'display:flex;justify-content:flex-end;padding:3px 0 1px;color:#22c55e;font-size:10px;cursor:default;';
         totRow.textContent = 'Income: ' + fmtCr(totalDailyOutputValue) + '/d';
+
+        // Income total tooltip: breakdown per output
+        if (outputItems.length > 1) {
+          let tip = null;
+          totRow.addEventListener('mouseenter', () => {
+            tip = document.createElement('div');
+            tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+            const tipTitle = document.createElement('div');
+            tipTitle.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;';
+            tipTitle.textContent = 'Daily income';
+            tip.appendChild(tipTitle);
+            for (const { r: or, unitPrice: up, dailyValue: dv } of outputItems) {
+              if (!dv) continue;
+              const line = document.createElement('div');
+              line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
+              const left = document.createElement('div');
+              left.style.cssText = 'display:flex;align-items:center;gap:5px;';
+              const ic = makeIcon(or.name, 14);
+              if (ic) left.appendChild(ic);
+              const lbl = document.createElement('span'); lbl.style.color = '#c0c0da';
+              lbl.textContent = `${or.name} x${Math.round(or.dailyOutput).toLocaleString()}/d`;
+              left.appendChild(lbl);
+              const val = document.createElement('span'); val.style.color = '#9090b0';
+              val.textContent = `@ ${fmtCr(up)} (${fmtCr(dv)}/d)`;
+              line.appendChild(left); line.appendChild(val);
+              tip.appendChild(line);
+            }
+            document.body.appendChild(tip);
+          });
+          totRow.addEventListener('mousemove', (e) => {
+            if (!tip) return;
+            const x = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8);
+            const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
+            tip.style.left = x + 'px'; tip.style.top = y + 'px';
+          });
+          totRow.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
+        }
+
         contentArea.appendChild(totRow);
       }
     }
@@ -955,17 +1347,47 @@ function buildDetailPanel(base, gamedata) {
     // Net profit row (only when showCosts is on and we have some data)
     if (showCosts && (totalDailyOutputValue > 0 || totalDailyInputCost > 0)) {
       const netProfit = totalDailyOutputValue - totalDailyInputCost;
+      const netCol = netProfit >= 0 ? COL_OK : COL_CRIT;
       const netRow = document.createElement('div');
-      netRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:5px 0 2px;border-top:2px solid #1e1e3a;margin-top:4px;';
+      netRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:5px 0 2px;border-top:2px solid #1e1e3a;margin-top:4px;cursor:default;';
       const netLabel = document.createElement('span');
       netLabel.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;';
       netLabel.textContent = 'Net profit';
       const netVal = document.createElement('span');
-      const netCol = netProfit >= 0 ? COL_OK : COL_CRIT;
       netVal.style.cssText = `color:${netCol};font-size:12px;font-weight:700;`;
       netVal.textContent = (netProfit >= 0 ? '+' : '\u2212') + fmtCr(Math.abs(netProfit)) + '/d';
       netRow.appendChild(netLabel);
       netRow.appendChild(netVal);
+
+      // Net profit tooltip: income vs costs breakdown
+      let netTip = null;
+      netRow.addEventListener('mouseenter', () => {
+        netTip = document.createElement('div');
+        netTip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+        const mkLine = (lbl, val, vc) => {
+          const d = document.createElement('div');
+          d.style.cssText = 'display:flex;justify-content:space-between;gap:20px;padding:2px 0;';
+          const l = document.createElement('span'); l.style.color = '#6b6b8a'; l.textContent = lbl;
+          const v = document.createElement('span'); v.style.cssText = `color:${vc};font-weight:600;`; v.textContent = val;
+          d.appendChild(l); d.appendChild(v);
+          return d;
+        };
+        if (totalDailyOutputValue > 0) netTip.appendChild(mkLine('Income', '+' + fmtCr(totalDailyOutputValue) + '/d', COL_OK));
+        if (totalDailyInputCost  > 0) netTip.appendChild(mkLine('Input costs', '\u2212' + fmtCr(totalDailyInputCost) + '/d', COL_CRIT));
+        const sep = document.createElement('div');
+        sep.style.cssText = 'border-top:1px solid #1a1a30;margin:4px 0 2px;';
+        netTip.appendChild(sep);
+        netTip.appendChild(mkLine('Net', (netProfit >= 0 ? '+' : '\u2212') + fmtCr(Math.abs(netProfit)) + '/d', netCol));
+        document.body.appendChild(netTip);
+      });
+      netRow.addEventListener('mousemove', (e) => {
+        if (!netTip) return;
+        const x = Math.min(e.clientX + 12, window.innerWidth  - netTip.offsetWidth  - 8);
+        const y = Math.min(e.clientY + 12, window.innerHeight - netTip.offsetHeight - 8);
+        netTip.style.left = x + 'px'; netTip.style.top = y + 'px';
+      });
+      netRow.addEventListener('mouseleave', () => { netTip?.remove(); netTip = null; });
+
       contentArea.appendChild(netRow);
     }
 
@@ -1006,12 +1428,15 @@ function toggleBaseDetail(base, gamedata) {
 function buildMatList(items) {
   const td = _settings.targetDays;
   return items
-    .map(r => ({
-      id: r.matId,
-      am: _settings.includeStock
-        ? Math.max(0, Math.ceil(r.dailyNeed * td - r.inStock))
-        : Math.ceil(r.dailyNeed * td),
-    }))
+    .map(r => {
+      const need = r.netDailyNeed ?? r.dailyNeed;
+      return {
+        id: r.matId,
+        am: _settings.includeStock
+          ? Math.max(0, Math.ceil(need * td - r.inStock))
+          : Math.ceil(need * td),
+      };
+    })
     .filter(m => m.am > 0);
 }
 
@@ -1706,6 +2131,19 @@ function buildSettingsPanel() {
     panel.appendChild(row);
   }
 
+  // Custom Prices button
+  const sepPrices = document.createElement('div');
+  sepPrices.style.cssText = 'border-top:1px solid #1a1a30;margin:10px 0 8px;';
+  panel.appendChild(sepPrices);
+
+  const customPricesBtn = document.createElement('button');
+  customPricesBtn.textContent = '\u{1F4B2} Custom Prices';
+  customPricesBtn.style.cssText = 'width:100%;background:#1a1a30;border:1px solid #2a2a4a;border-radius:4px;color:#9090b0;font-size:11px;padding:5px 8px;cursor:pointer;text-align:left;transition:color 0.15s,border-color 0.15s;';
+  customPricesBtn.addEventListener('mouseenter', () => { customPricesBtn.style.color = '#d8d8f0'; customPricesBtn.style.borderColor = '#4a4a6a'; });
+  customPricesBtn.addEventListener('mouseleave', () => { customPricesBtn.style.color = '#9090b0'; customPricesBtn.style.borderColor = '#2a2a4a'; });
+  customPricesBtn.addEventListener('click', () => openCustomPricesModal());
+  panel.appendChild(customPricesBtn);
+
   // Visit link
   const sepLink = document.createElement('div');
   sepLink.style.cssText = 'border-top:1px solid #1a1a30;margin:10px 0 8px;';
@@ -1733,6 +2171,215 @@ function toggleSettingsPanel() {
     document.body.appendChild(buildSettingsPanel());
     _settingsOpen = true;
   }
+}
+
+// ── Custom Prices modal ───────────────────────────────────────────────────────
+
+async function openCustomPricesModal() {
+  document.getElementById(GT_CUSTOM_PRICES_ID)?.remove();
+
+  // Kick off avg price fetch in background
+  fetchAvgPrices();
+
+  const gamedata = await loadGamedata();
+  const sellable = (gamedata.materials ?? [])
+    .filter(m => m.cp > 0)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  // Overlay
+  const overlay = document.createElement('div');
+  overlay.id = GT_CUSTOM_PRICES_ID;
+  Object.assign(overlay.style, {
+    position: 'fixed', inset: '0',
+    background: 'rgba(0,0,0,0.72)',
+    zIndex: '2147483646',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontFamily: 'system-ui, sans-serif',
+  });
+
+  // Modal box
+  const modal = document.createElement('div');
+  Object.assign(modal.style, {
+    background: '#0d0d20',
+    border: '1px solid #2a2a4a',
+    borderRadius: '10px',
+    width: '560px',
+    maxWidth: '96vw',
+    maxHeight: '88vh',
+    display: 'flex',
+    flexDirection: 'column',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.7)',
+    overflow: 'hidden',
+    fontSize: '12px',
+    color: '#b0b0cc',
+  });
+
+  // ── Header ───────────────────────────────────────────────────────────────
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 14px 10px;border-bottom:1px solid #1a1a30;flex-shrink:0;gap:8px;flex-wrap:wrap;';
+
+  const titleSpan = document.createElement('span');
+  titleSpan.style.cssText = 'font-size:13px;font-weight:700;color:#d8d8f0;white-space:nowrap;';
+  titleSpan.textContent = 'Custom Prices';
+
+  // Mode selector
+  const modeWrap = document.createElement('div');
+  modeWrap.style.cssText = 'display:flex;align-items:center;gap:3px;background:#1a1a30;border:1px solid #2a2a4a;border-radius:5px;padding:2px;';
+
+  const mkModeBtn = (label, mode) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.dataset.mode = mode;
+    const active = _settings.priceMode === mode;
+    btn.style.cssText = `border:none;border-radius:4px;font-size:11px;padding:3px 8px;cursor:pointer;transition:background 0.15s,color 0.15s;background:${active ? '#2a2a4a' : 'transparent'};color:${active ? '#d8d8f0' : '#6b6b8a'};`;
+    btn.addEventListener('click', () => {
+      _settings.priceMode = mode;
+      saveSettings();
+      modal.querySelectorAll('[data-mode]').forEach(b => {
+        const isActive = b.dataset.mode === mode;
+        b.style.background = isActive ? '#2a2a4a' : 'transparent';
+        b.style.color = isActive ? '#d8d8f0' : '#6b6b8a';
+      });
+    });
+    return btn;
+  };
+  modeWrap.appendChild(mkModeBtn('Current', 'current'));
+  modeWrap.appendChild(mkModeBtn('Average', 'average'));
+
+  // Reset All button
+  const resetBtn = document.createElement('button');
+  resetBtn.textContent = 'Reset All';
+  resetBtn.style.cssText = 'background:none;border:1px solid #3a1a1a;border-radius:4px;color:#ef4444;font-size:11px;padding:3px 8px;cursor:pointer;white-space:nowrap;';
+  resetBtn.addEventListener('click', () => {
+    _settings.customPrices = {};
+    saveSettings();
+    modal.querySelectorAll('input[data-mat-id]').forEach(inp => { inp.value = ''; inp.style.borderColor = '#2a2a4a'; });
+  });
+
+  // Close button
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '\u00d7';
+  closeBtn.style.cssText = 'background:none;border:none;color:#6b6b8a;font-size:18px;cursor:pointer;line-height:1;padding:0 2px;flex-shrink:0;';
+  closeBtn.addEventListener('click', () => overlay.remove());
+
+  hdr.appendChild(titleSpan);
+  hdr.appendChild(modeWrap);
+  hdr.appendChild(resetBtn);
+  hdr.appendChild(closeBtn);
+  modal.appendChild(hdr);
+
+  // ── Search bar ────────────────────────────────────────────────────────────
+  const searchWrap = document.createElement('div');
+  searchWrap.style.cssText = 'padding:8px 14px;border-bottom:1px solid #1a1a30;flex-shrink:0;';
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = 'Search materials\u2026';
+  searchInput.style.cssText = 'width:100%;background:#1a1a30;border:1px solid #2a2a4a;border-radius:5px;color:#d8d8f0;font-size:12px;padding:5px 8px;outline:none;box-sizing:border-box;';
+  searchWrap.appendChild(searchInput);
+  modal.appendChild(searchWrap);
+
+  // ── Column headers ────────────────────────────────────────────────────────
+  const colHdr = document.createElement('div');
+  colHdr.style.cssText = 'display:grid;grid-template-columns:1fr 90px 90px 90px;gap:6px;padding:4px 14px;border-bottom:1px solid #1a1a30;flex-shrink:0;';
+  ['Material', 'Current', 'Average', 'Custom'].forEach((lbl, i) => {
+    const s = document.createElement('span');
+    s.style.cssText = `color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;${i > 0 ? 'text-align:right;' : ''}`;
+    s.textContent = lbl;
+    colHdr.appendChild(s);
+  });
+  modal.appendChild(colHdr);
+
+  // ── Scrollable list ───────────────────────────────────────────────────────
+  const list = document.createElement('div');
+  list.style.cssText = 'overflow-y:auto;flex:1;padding:4px 14px 10px;';
+
+  const buildRows = (filter = '') => {
+    list.innerHTML = '';
+    const q = filter.toLowerCase();
+    for (const mat of sellable) {
+      if (q && !mat.name.toLowerCase().includes(q)) continue;
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 90px 90px;gap:6px;align-items:center;padding:3px 0;border-bottom:1px solid #0f0f22;';
+
+      // Name + icon
+      const nameCell = document.createElement('div');
+      nameCell.style.cssText = 'display:flex;align-items:center;gap:5px;min-width:0;';
+      const ic = makeIcon(mat.name, 14);
+      if (ic) nameCell.appendChild(ic);
+      const nameSpan = document.createElement('span');
+      nameSpan.style.cssText = 'color:#c0c0da;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      nameSpan.textContent = mat.name;
+      nameCell.appendChild(nameSpan);
+
+      // Current price
+      const curCell = document.createElement('span');
+      curCell.style.cssText = 'color:#9090b0;font-size:11px;text-align:right;white-space:nowrap;';
+      const curPrice = _priceMap?.get(mat.id);
+      curCell.textContent = curPrice ? fmtCr(curPrice) : '\u2014';
+
+      // Average price (loaded async — fill in when ready)
+      const avgCell = document.createElement('span');
+      avgCell.style.cssText = 'color:#9090b0;font-size:11px;text-align:right;white-space:nowrap;';
+      avgCell.dataset.avgFor = mat.id;
+      const avgPrice = _avgPriceMap?.get(mat.id);
+      avgCell.textContent = avgPrice ? fmtCr(avgPrice) : '\u2014';
+
+      // Custom price input
+      const customInp = document.createElement('input');
+      customInp.type = 'number';
+      customInp.min = '0';
+      customInp.step = '0.01';
+      customInp.placeholder = '\u2014';
+      customInp.dataset.matId = mat.id;
+      const existingCustom = _settings.customPrices?.[mat.id];
+      if (existingCustom > 0) customInp.value = existingCustom;
+      customInp.style.cssText = 'width:100%;background:#1a1a30;border:1px solid #2a2a4a;border-radius:4px;color:#d8d8f0;font-size:11px;padding:2px 5px;text-align:right;outline:none;box-sizing:border-box;';
+      customInp.addEventListener('change', () => {
+        const v = parseFloat(customInp.value);
+        if (!_settings.customPrices) _settings.customPrices = {};
+        if (isFinite(v) && v > 0) {
+          _settings.customPrices[mat.id] = v;
+          customInp.style.borderColor = '#6366f1';
+        } else {
+          delete _settings.customPrices[mat.id];
+          customInp.value = '';
+          customInp.style.borderColor = '#2a2a4a';
+        }
+        saveSettings();
+      });
+      if (existingCustom > 0) customInp.style.borderColor = '#6366f1';
+
+      row.appendChild(nameCell);
+      row.appendChild(curCell);
+      row.appendChild(avgCell);
+      row.appendChild(customInp);
+      list.appendChild(row);
+    }
+  };
+
+  buildRows();
+  modal.appendChild(list);
+
+  // Fill avg prices once loaded
+  const avgPollInterval = setInterval(() => {
+    if (!_avgPriceMap) return;
+    clearInterval(avgPollInterval);
+    modal.querySelectorAll('[data-avg-for]').forEach(cell => {
+      const id = Number(cell.dataset.avgFor);
+      const avg = _avgPriceMap.get(id);
+      cell.textContent = avg ? fmtCr(avg) : '\u2014';
+    });
+  }, 400);
+
+  searchInput.addEventListener('input', () => buildRows(searchInput.value));
+
+  // Close on overlay click
+  overlay.addEventListener('click', e => { if (e.target === overlay) { clearInterval(avgPollInterval); overlay.remove(); } });
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  searchInput.focus();
 }
 
 // Cached references for live chip updates
@@ -1815,7 +2462,7 @@ async function openCashPanel() {
   document.body.appendChild(panel);
   _cashOpen = true;
 
-  const [company, prices] = await Promise.all([fetchCompanyData(), fetchMatPrices()]);
+  const [company] = await Promise.all([fetchCompanyData(), fetchMatPrices()]);
   loading.remove();
 
   // Cash balance — game API returns cents, divide by 100
@@ -1829,7 +2476,7 @@ async function openCashPanel() {
   // Base inventory value
   const bases = sortBases(_loadedHeaderBases ?? []);
   let totalInv = 0;
-  if (bases.length && prices) {
+  if (bases.length && _priceMap) {
     const subTitle = document.createElement('div');
     subTitle.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:4px 0 4px;';
     subTitle.textContent = 'Base Inventory';
@@ -1837,15 +2484,63 @@ async function openCashPanel() {
 
     for (const base of bases) {
       let val = 0;
+      const breakdown = []; // { name, qty, price, lineVal }
       if (_loadedHeaderGamedata) {
         const { outputs } = calcBaseNeeds(base, _loadedHeaderGamedata);
         const warehouseAmts = new Map((base.warehouse?.mats ?? []).map(m => [Number(m.id), m.am ?? 0]));
         for (const out of outputs) {
-          val += (warehouseAmts.get(Number(out.matId)) ?? 0) * (prices.get(Number(out.matId)) ?? 0);
+          const qty   = warehouseAmts.get(Number(out.matId)) ?? 0;
+          const price = effectivePrice(out.matId);
+          const lineVal = qty * price;
+          val += lineVal;
+          if (qty > 0 && price > 0) breakdown.push({ name: out.name, qty, price, lineVal });
         }
       }
       totalInv += val;
-      panel.appendChild(mkRow(base.name, fmtCr(val)));
+
+      const row = mkRow(base.name, fmtCr(val));
+
+      if (breakdown.length) {
+        row.style.cursor = 'default';
+        let tip = null;
+        row.addEventListener('mouseenter', () => {
+          tip = document.createElement('div');
+          tip.style.cssText = [
+            'position:fixed', 'z-index:2147483647',
+            'background:#0d0d20', 'border:1px solid #2a2a4a', 'border-radius:6px',
+            'padding:8px 10px', 'font-size:11px', 'color:#b0b0cc',
+            'pointer-events:none', 'white-space:nowrap',
+            'box-shadow:0 4px 12px rgba(0,0,0,0.6)',
+          ].join(';');
+          for (const item of breakdown) {
+            const line = document.createElement('div');
+            line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
+            const left = document.createElement('div');
+            left.style.cssText = 'display:flex;align-items:center;gap:5px;';
+            const icon = makeIcon(item.name, 14);
+            if (icon) left.appendChild(icon);
+            const lbl = document.createElement('span');
+            lbl.style.color = '#c0c0da';
+            lbl.textContent = `${item.name} x${item.qty.toLocaleString()}`;
+            left.appendChild(lbl);
+            const val2 = document.createElement('span');
+            val2.style.cssText = 'color:#9090b0;white-space:nowrap;';
+            val2.textContent = `@ ${fmtCr(item.price)} ($${Math.round(item.lineVal).toLocaleString()})`;
+            line.appendChild(left); line.appendChild(val2);
+            tip.appendChild(line);
+          }
+          document.body.appendChild(tip);
+        });
+        row.addEventListener('mousemove', (e) => {
+          if (!tip) return;
+          const x = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8);
+          const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
+          tip.style.left = x + 'px'; tip.style.top = y + 'px';
+        });
+        row.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
+      }
+
+      panel.appendChild(row);
     }
     panel.appendChild(mkSep());
   }
@@ -1853,7 +2548,7 @@ async function openCashPanel() {
   // Exchange listings (active sell orders)
   let exchangeListingsVal = 0;
   const listings = company?.exchangeListings ?? company?.listings ?? company?.exchange?.listings ?? [];
-  if (listings.length && prices) {
+  if (listings.length && _priceMap) {
     const exTitle = document.createElement('div');
     exTitle.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:4px 0 4px;';
     exTitle.textContent = 'Exchange Listings';
@@ -1861,52 +2556,181 @@ async function openCashPanel() {
     for (const l of listings) {
       const matId = Number(l.matId ?? l.id);
       const qty   = l.qty ?? l.amount ?? l.am ?? 0;
-      const val   = qty * (prices.get(matId) ?? 0);
+      const val   = qty * effectivePrice(matId);
       exchangeListingsVal += val;
       const name  = l.matName ?? l.name ?? `mat${matId}`;
-      panel.appendChild(mkRow(name, qty.toLocaleString() + ' × ' + fmtCr(prices.get(matId) ?? 0)));
+      panel.appendChild(mkRow(name, qty.toLocaleString() + ' × ' + fmtCr(effectivePrice(matId))));
     }
     panel.appendChild(mkRow('Listings total', fmtCr(exchangeListingsVal), COL_OK));
     panel.appendChild(mkSep());
   }
 
-  // Exchange warehouse — output items only
+  // Exchange warehouse — all items
   let exchangeWarehouseVal = 0;
-  const exchWarehouseMats = company?.exchangeWarehouse?.mats
-    ?? company?.exchange?.warehouse?.mats
-    ?? company?.exchangeWarehouses?.[0]?.mats
-    ?? [];
-  if (exchWarehouseMats.length && prices && _loadedHeaderGamedata) {
-    // Collect all output matIds across all bases
-    const outputMatIds = new Set();
-    for (const base of (_loadedHeaderBases ?? [])) {
-      const { outputs } = calcBaseNeeds(base, _loadedHeaderGamedata);
-      outputs.forEach(o => outputMatIds.add(Number(o.matId)));
+  const warehouseId = company?.exWhId;
+  const exchWarehouse = warehouseId ? await requestGTLocalAPI('getWarehouse', { warehouseId }) : null;
+  const exchWarehouseMats = exchWarehouse?.mats ?? [];
+  if (exchWarehouseMats.length && _priceMap) {
+    const valued = exchWarehouseMats
+      .map(m => {
+        const matId   = Number(m.id);
+        const qty     = m.am ?? 0;
+        const price   = effectivePrice(matId);
+        const lineVal = qty * price;
+        const name    = _loadedHeaderGamedata?.materials?.find(mat => mat.id === matId)?.sName ?? `mat${matId}`;
+        return { matId, qty, price, lineVal, name };
+      })
+      .filter(m => m.qty > 0)
+      .sort((a, b) => b.lineVal - a.lineVal);
+
+    if (valued.length) {
+      valued.forEach(m => { exchangeWarehouseVal += m.lineVal; });
+
+      const row = mkRow('Exchange Warehouse', fmtCr(exchangeWarehouseVal));
+      row.style.cursor = 'default';
+      let tip = null;
+      row.addEventListener('mouseenter', () => {
+        tip = document.createElement('div');
+        tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+        for (const m of valued) {
+          const line = document.createElement('div');
+          line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
+          const left = document.createElement('div');
+          left.style.cssText = 'display:flex;align-items:center;gap:5px;';
+          const ic = makeIcon(m.name, 14);
+          if (ic) left.appendChild(ic);
+          const lbl = document.createElement('span'); lbl.style.color = '#c0c0da';
+          lbl.textContent = `${m.name} x${m.qty.toLocaleString()}`;
+          left.appendChild(lbl);
+          const val = document.createElement('span'); val.style.color = '#9090b0';
+          val.textContent = m.price > 0 ? `@ ${fmtCr(m.price)} ($${Math.round(m.lineVal).toLocaleString()})` : m.qty.toLocaleString();
+          line.appendChild(left); line.appendChild(val);
+          tip.appendChild(line);
+        }
+        document.body.appendChild(tip);
+      });
+      row.addEventListener('mousemove', (e) => {
+        if (!tip) return;
+        const x = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8);
+        const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
+        tip.style.left = x + 'px'; tip.style.top = y + 'px';
+      });
+      row.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
+      panel.appendChild(row);
+      panel.appendChild(mkSep());
     }
-    const exchOutputMats = exchWarehouseMats.filter(m => outputMatIds.has(Number(m.id)));
-    if (exchOutputMats.length) {
-      const exwTitle = document.createElement('div');
-      exwTitle.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:4px 0 4px;';
-      exwTitle.textContent = 'Exchange Warehouse';
-      panel.appendChild(exwTitle);
-      for (const m of exchOutputMats) {
-        const matId = Number(m.id);
-        const val   = (m.am ?? 0) * (prices.get(matId) ?? 0);
-        exchangeWarehouseVal += val;
-        const matInfo = _loadedHeaderGamedata.materials?.find(mat => mat.id === matId);
-        panel.appendChild(mkRow(matInfo?.sName ?? `mat${matId}`, fmtCr(val)));
+  }
+
+  // Ship cargo
+  let shipCargoVal = 0;
+  const ships = company?.ships ?? [];
+  if (ships.length && _priceMap) {
+    // Fetch all ship warehouses in parallel
+    const shipData = (await Promise.all(
+      ships.map(async s => {
+        const wh = s.warehouseId ? await requestGTLocalAPI('getWarehouse', { warehouseId: s.warehouseId }) : null;
+        const mats = (wh?.mats ?? [])
+          .map(m => {
+            const matId   = Number(m.id);
+            const qty     = m.am ?? 0;
+            const price   = effectivePrice(matId);
+            const lineVal = qty * price;
+            const name    = _loadedHeaderGamedata?.materials?.find(mat => mat.id === matId)?.sName ?? `mat${matId}`;
+            return { matId, qty, price, lineVal, name };
+          })
+          .filter(m => m.qty > 0)
+          .sort((a, b) => b.lineVal - a.lineVal);
+        const total = mats.reduce((s, m) => s + m.lineVal, 0);
+        return { ship: s, mats, total };
+      })
+    )).filter(d => d.mats.length > 0);
+
+    if (shipData.length) {
+      shipCargoVal = shipData.reduce((s, d) => s + d.total, 0);
+
+      // Header row — clickable to expand/collapse
+      let expanded = false;
+      const hdrRow = document.createElement('div');
+      hdrRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;';
+      const hdrLeft = document.createElement('div');
+      hdrLeft.style.cssText = 'display:flex;align-items:center;gap:5px;';
+      const arrow = document.createElement('span');
+      arrow.style.cssText = 'color:#6b6b8a;font-size:10px;';
+      arrow.textContent = '\u25be';
+      const hdrLbl = document.createElement('span');
+      hdrLbl.style.color = '#c0c0da';
+      hdrLbl.textContent = 'Ship Cargo';
+      hdrLeft.appendChild(arrow); hdrLeft.appendChild(hdrLbl);
+      const hdrVal = document.createElement('span');
+      hdrVal.style.cssText = 'color:#9090b0;font-size:11px;';
+      hdrVal.textContent = fmtCr(shipCargoVal);
+      hdrRow.appendChild(hdrLeft); hdrRow.appendChild(hdrVal);
+
+      // Ship rows container (hidden by default)
+      const shipList = document.createElement('div');
+      shipList.style.display = 'none';
+
+      for (const { ship, mats, total: shipTotal } of shipData) {
+        const shipRow = document.createElement('div');
+        shipRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:2px 0 2px 12px;cursor:default;border-bottom:1px solid #12122a;';
+        const sLbl = document.createElement('span');
+        sLbl.style.cssText = 'color:#9090b0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        sLbl.textContent = ship.name;
+        const sVal = document.createElement('span');
+        sVal.style.cssText = 'color:#9090b0;font-size:11px;white-space:nowrap;';
+        sVal.textContent = fmtCr(shipTotal);
+        shipRow.appendChild(sLbl); shipRow.appendChild(sVal);
+
+        // Hover tooltip: cargo breakdown
+        let tip = null;
+        shipRow.addEventListener('mouseenter', () => {
+          tip = document.createElement('div');
+          tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+          for (const m of mats) {
+            const line = document.createElement('div');
+            line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
+            const left = document.createElement('div');
+            left.style.cssText = 'display:flex;align-items:center;gap:5px;';
+            const ic = makeIcon(m.name, 14);
+            if (ic) left.appendChild(ic);
+            const lbl = document.createElement('span'); lbl.style.color = '#c0c0da';
+            lbl.textContent = `${m.name} x${m.qty.toLocaleString()}`;
+            left.appendChild(lbl);
+            const val = document.createElement('span'); val.style.color = '#9090b0';
+            val.textContent = m.price > 0 ? `@ ${fmtCr(m.price)} ($${Math.round(m.lineVal).toLocaleString()})` : m.qty.toLocaleString();
+            line.appendChild(left); line.appendChild(val);
+            tip.appendChild(line);
+          }
+          document.body.appendChild(tip);
+        });
+        shipRow.addEventListener('mousemove', (e) => {
+          if (!tip) return;
+          const x = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8);
+          const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
+          tip.style.left = x + 'px'; tip.style.top = y + 'px';
+        });
+        shipRow.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
+        shipList.appendChild(shipRow);
       }
-      panel.appendChild(mkRow('Exchange warehouse total', fmtCr(exchangeWarehouseVal), COL_OK));
+
+      hdrRow.addEventListener('click', () => {
+        expanded = !expanded;
+        shipList.style.display = expanded ? 'block' : 'none';
+        arrow.textContent = expanded ? '\u25b4' : '\u25be';
+      });
+
+      panel.appendChild(hdrRow);
+      panel.appendChild(shipList);
       panel.appendChild(mkSep());
     }
   }
 
   const cashVal = typeof cashNum === 'number' ? cashNum : 0;
-  const total   = cashVal + totalInv + exchangeListingsVal + exchangeWarehouseVal;
+  const total   = cashVal + totalInv + exchangeListingsVal + exchangeWarehouseVal + shipCargoVal;
   if (total > 0) {
     panel.appendChild(mkRow('Total', fmtCr(total), '#d8d8f0'));
   }
-  if (!prices) {
+  if (!_priceMap) {
     const note = document.createElement('div');
     note.style.cssText = 'color:#6b6b8a;font-size:10px;margin-top:6px;font-style:italic;';
     note.textContent = 'Inventory values need prices — enable costs in settings.';
@@ -1935,15 +2759,52 @@ function buildSummaryContent(container, perBase) {
   if (!_loadedHeaderBases || !_loadedHeaderGamedata) return;
 
   const bases = sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
-  const prices = _priceMap;
+
+  const attachTip = (el, buildFn) => {
+    let tip = null;
+    el.style.cursor = 'default';
+    el.addEventListener('mouseenter', () => {
+      tip = buildFn();
+      if (tip) document.body.appendChild(tip);
+    });
+    el.addEventListener('mousemove', (e) => {
+      if (!tip) return;
+      const x = Math.max(8, e.clientX - tip.offsetWidth - 12);
+      const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
+      tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    });
+    el.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
+  };
+
+  const mkTipEl = () => {
+    const t = document.createElement('div');
+    t.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+    return t;
+  };
+
+  const mkTipLine = (lbl, val, vc) => {
+    const d = document.createElement('div');
+    d.style.cssText = 'display:flex;justify-content:space-between;gap:16px;padding:1px 0;';
+    const l = document.createElement('span'); l.style.color = '#6b6b8a'; l.textContent = lbl;
+    const v = document.createElement('span'); v.style.cssText = `color:${vc};font-weight:600;`; v.textContent = val;
+    d.appendChild(l); d.appendChild(v);
+    return d;
+  };
+
+  const mkTipSep = () => {
+    const s = document.createElement('div');
+    s.style.cssText = 'border-top:1px solid #1a1a30;margin:4px 0 2px;';
+    return s;
+  };
 
   const renderInputRows = (items, parent) => {
     items.forEach(r => {
-      const col = daysColour(r.days);
+      const col    = daysColour(r.days);
+      const daysStr = fmtDays(r.days);
       const deficit = Math.max(0, Math.ceil(r.dailyNeed * _settings.targetDays - r.inStock));
 
       const row = document.createElement('div');
-      row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto auto;gap:5px;align-items:center;padding:2px 0;border-bottom:1px solid #12122a;';
+      row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto auto auto;gap:4px;align-items:center;padding:2px 0;border-bottom:1px solid #12122a;';
 
       const nameSpan = document.createElement('span');
       nameSpan.style.cssText = 'color:#c0c0da;display:flex;align-items:center;gap:4px;min-width:0;';
@@ -1955,26 +2816,41 @@ function buildSummaryContent(container, perBase) {
       nameSpan.appendChild(nt);
 
       const needSpan = document.createElement('span');
-      needSpan.style.cssText = 'color:#6b6b8a;font-size:10px;white-space:nowrap;';
+      needSpan.style.cssText = 'color:#6b6b8a;font-size:10px;white-space:nowrap;text-align:right;';
       needSpan.textContent = Math.round(r.dailyNeed).toLocaleString() + '/d';
 
+      const stockSpan = document.createElement('span');
+      stockSpan.style.cssText = 'color:#7a7a9a;font-size:10px;white-space:nowrap;text-align:right;';
+      stockSpan.textContent = Math.round(r.inStock).toLocaleString();
+
       const defSpan = document.createElement('span');
-      defSpan.style.cssText = `color:${col};font-size:10px;white-space:nowrap;`;
-      defSpan.textContent = `(${deficit > 0 ? deficit.toLocaleString() : '0'})`;
+      defSpan.style.cssText = `color:${col};font-size:10px;white-space:nowrap;text-align:right;`;
+      defSpan.textContent = deficit > 0 ? deficit.toLocaleString() : '0';
 
       const daysSpan = document.createElement('span');
       daysSpan.style.cssText = `color:${col};font-size:11px;font-weight:600;text-align:right;`;
-      daysSpan.textContent = fmtDays(r.days);
+      daysSpan.textContent = daysStr;
 
       row.appendChild(nameSpan); row.appendChild(needSpan);
-      row.appendChild(defSpan);  row.appendChild(daysSpan);
+      row.appendChild(stockSpan); row.appendChild(defSpan); row.appendChild(daysSpan);
+
+      attachTip(row, () => {
+        const t = mkTipEl();
+        t.appendChild(mkTipLine('/day needed',    Math.round(r.dailyNeed).toLocaleString(), '#6b6b8a'));
+        t.appendChild(mkTipLine('Current stock',  Math.round(r.inStock).toLocaleString(),   '#7a7a9a'));
+        t.appendChild(mkTipLine('Amount needed',  deficit > 0 ? deficit.toLocaleString() : '0', col));
+        t.appendChild(mkTipLine('Time left',      daysStr, col));
+        return t;
+      });
+
       parent.appendChild(row);
     });
   };
 
   const renderOutputRows = (items, parent) => {
     items.forEach(r => {
-      const dailyVal = prices ? (prices.get(Number(r.matId)) ?? 0) * r.dailyOutput : 0;
+      const unitPrice = _priceMap ? effectivePrice(r.matId) : 0;
+      const dailyVal  = unitPrice * r.dailyOutput;
       const row = document.createElement('div');
       row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;gap:5px;align-items:center;padding:2px 0;border-bottom:1px solid #12122a;';
 
@@ -1996,6 +2872,27 @@ function buildSummaryContent(container, perBase) {
       valSpan.textContent = dailyVal > 0 ? fmtCr(dailyVal) + '/d' : '\u2014';
 
       row.appendChild(nameSpan); row.appendChild(qtySpan); row.appendChild(valSpan);
+
+      if (dailyVal > 0) {
+        attachTip(row, () => {
+          const t = mkTipEl();
+          const line = document.createElement('div');
+          line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;';
+          const left = document.createElement('div');
+          left.style.cssText = 'display:flex;align-items:center;gap:5px;';
+          const tic = makeIcon(r.name, 14);
+          if (tic) left.appendChild(tic);
+          const lbl = document.createElement('span'); lbl.style.color = '#c0c0da';
+          lbl.textContent = `${r.name} x${Math.round(r.dailyOutput).toLocaleString()}/d`;
+          left.appendChild(lbl);
+          const val = document.createElement('span'); val.style.color = '#9090b0';
+          val.textContent = `@ ${fmtCr(unitPrice)} (${fmtCr(dailyVal)}/d)`;
+          line.appendChild(left); line.appendChild(val);
+          t.appendChild(line);
+          return t;
+        });
+      }
+
       parent.appendChild(row);
     });
   };
@@ -2008,13 +2905,17 @@ function buildSummaryContent(container, perBase) {
   };
 
   const renderInputTotals = (items, parent) => {
-    if (!prices || !items.length) return;
+    if (!_priceMap || !items.length) return;
     const td = _settings.targetDays;
     let restockCost = 0, dailyCost = 0;
+    const restockLines = [];
     items.forEach(r => {
-      const p = prices.get(Number(r.matId)) ?? 0;
-      restockCost += p * Math.max(0, Math.ceil(r.dailyNeed * td - r.inStock));
+      const p      = effectivePrice(r.matId);
+      const def    = Math.max(0, Math.ceil(r.dailyNeed * td - r.inStock));
+      const lineCost = p * def;
+      restockCost += lineCost;
       dailyCost   += p * r.dailyNeed;
+      if (def > 0 && p > 0) restockLines.push({ r, deficit: def, unitPrice: p, lineCost });
     });
     if (!restockCost && !dailyCost) return;
     const row = document.createElement('div');
@@ -2024,14 +2925,66 @@ function buildSummaryContent(container, perBase) {
     lbl.textContent = 'Total';
     const rv = document.createElement('span');
     rv.style.cssText = 'color:#9090b0;font-size:10px;text-align:right;white-space:nowrap;';
-    rv.title = 'Restock cost';
     rv.textContent = restockCost > 0 ? `$${Math.round(restockCost).toLocaleString()}` : '\u2014';
     const dv = document.createElement('span');
     dv.style.cssText = 'color:#6b6b8a;font-size:10px;text-align:right;white-space:nowrap;';
-    dv.title = 'Daily cost';
     dv.textContent = dailyCost > 0 ? `$${Math.round(dailyCost).toLocaleString()}/d` : '\u2014';
     row.append(lbl, rv, dv);
+
+    if (restockLines.length) {
+      attachTip(row, () => {
+        const t = mkTipEl();
+        const hdr = document.createElement('div');
+        hdr.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;';
+        hdr.textContent = 'Restock cost';
+        t.appendChild(hdr);
+        for (const { r, deficit, unitPrice, lineCost } of restockLines) {
+          const line = document.createElement('div');
+          line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
+          const left = document.createElement('div');
+          left.style.cssText = 'display:flex;align-items:center;gap:5px;';
+          const tic = makeIcon(r.name, 14);
+          if (tic) left.appendChild(tic);
+          const ll = document.createElement('span'); ll.style.color = '#c0c0da';
+          ll.textContent = `${r.name} x${deficit.toLocaleString()}`;
+          left.appendChild(ll);
+          const val = document.createElement('span'); val.style.color = '#9090b0';
+          val.textContent = `@ ${fmtCr(unitPrice)} ($${Math.round(lineCost).toLocaleString()})`;
+          line.appendChild(left); line.appendChild(val);
+          t.appendChild(line);
+        }
+        if (restockLines.length > 1) {
+          t.appendChild(mkTipSep());
+          t.appendChild(mkTipLine('Total', `$${Math.round(restockCost).toLocaleString()}`, '#b0b0cc'));
+        }
+        return t;
+      });
+    }
+
     parent.appendChild(row);
+  };
+
+  const mkNetProfitRow = (parent, dailyIncome, dailyCost, styleStr) => {
+    const net    = dailyIncome - dailyCost;
+    const netCol = net >= 0 ? COL_OK : COL_CRIT;
+    const nr = document.createElement('div');
+    nr.style.cssText = styleStr;
+    const nl = document.createElement('span');
+    nl.style.cssText = 'color:#6b6b8a;font-size:10px;';
+    nl.textContent = 'Net profit';
+    const nv = document.createElement('span');
+    nv.style.cssText = `color:${netCol};font-size:11px;font-weight:700;`;
+    nv.textContent = (net >= 0 ? '+' : '\u2212') + fmtCr(Math.abs(net)) + '/d';
+    nr.appendChild(nl); nr.appendChild(nv);
+    attachTip(nr, () => {
+      const t = mkTipEl();
+      if (dailyIncome > 0) t.appendChild(mkTipLine('Income',      '+' + fmtCr(dailyIncome) + '/d', COL_OK));
+      if (dailyCost   > 0) t.appendChild(mkTipLine('Input costs', '\u2212' + fmtCr(dailyCost) + '/d', COL_CRIT));
+      t.appendChild(mkTipSep());
+      t.appendChild(mkTipLine('Net', (net >= 0 ? '+' : '\u2212') + fmtCr(Math.abs(net)) + '/d', netCol));
+      return t;
+    });
+    parent.appendChild(nr);
   };
 
   if (perBase) {
@@ -2055,21 +3008,10 @@ function buildSummaryContent(container, perBase) {
         container.appendChild(empty);
       }
       // Per-base net profit
-      if (prices && (eligible.length || outputs.length)) {
-        const dailyIncome = outputs.reduce((s, r) => s + (prices.get(Number(r.matId)) ?? 0) * r.dailyOutput, 0);
-        const dailyCost   = eligible.reduce((s, r) => s + (prices.get(Number(r.matId)) ?? 0) * r.dailyNeed, 0);
-        const net = dailyIncome - dailyCost;
-        const netCol = net >= 0 ? COL_OK : COL_CRIT;
-        const nr = document.createElement('div');
-        nr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:4px 0 2px;border-top:1px solid #1e1e3a;margin-top:3px;';
-        const nl = document.createElement('span');
-        nl.style.cssText = 'color:#6b6b8a;font-size:10px;';
-        nl.textContent = 'Net profit';
-        const nv = document.createElement('span');
-        nv.style.cssText = `color:${netCol};font-size:11px;font-weight:700;`;
-        nv.textContent = (net >= 0 ? '+' : '\u2212') + fmtCr(Math.abs(net)) + '/d';
-        nr.appendChild(nl); nr.appendChild(nv);
-        container.appendChild(nr);
+      if (_priceMap && (eligible.length || outputs.length)) {
+        const dailyIncome = outputs.reduce((s, r) => s + effectivePrice(r.matId) * r.dailyOutput, 0);
+        const dailyCost   = eligible.reduce((s, r) => s + effectivePrice(r.matId) * r.dailyNeed, 0);
+        mkNetProfitRow(container, dailyIncome, dailyCost, 'display:flex;justify-content:space-between;align-items:center;padding:4px 0 2px;border-top:1px solid #1e1e3a;margin-top:3px;');
       }
     }
   } else {
@@ -2099,27 +3041,16 @@ function buildSummaryContent(container, perBase) {
     const aggOutputs = [...outputsMap.values()];
     let totalDailyValue = 0;
     let totalDailyInputCost = 0;
-    if (prices) {
-      aggOutputs.forEach(r => { totalDailyValue += (prices.get(Number(r.matId)) ?? 0) * r.dailyOutput; });
-      aggInputs.forEach(r => { totalDailyInputCost += (prices.get(Number(r.matId)) ?? 0) * r.dailyNeed; });
+    if (_priceMap) {
+      aggOutputs.forEach(r => { totalDailyValue     += effectivePrice(r.matId) * r.dailyOutput; });
+      aggInputs.forEach(r => { totalDailyInputCost  += effectivePrice(r.matId) * r.dailyNeed; });
     }
 
     if (aggInputs.length)  { mkSection('All Inputs', container);  renderInputRows(aggInputs, container); renderInputTotals(aggInputs, container); }
     if (aggOutputs.length) { mkSection('All Outputs', container); renderOutputRows(aggOutputs, container); }
 
     if (totalDailyValue > 0 || totalDailyInputCost > 0) {
-      const netProfit = totalDailyValue - totalDailyInputCost;
-      const netCol = netProfit >= 0 ? COL_OK : COL_CRIT;
-      const tot = document.createElement('div');
-      tot.style.cssText = `display:flex;justify-content:space-between;align-items:center;padding:5px 0 2px;border-top:2px solid #1e1e3a;margin-top:4px;`;
-      const totLabel = document.createElement('span');
-      totLabel.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;';
-      totLabel.textContent = 'Net profit';
-      const totVal = document.createElement('span');
-      totVal.style.cssText = `color:${netCol};font-size:12px;font-weight:700;`;
-      totVal.textContent = (netProfit >= 0 ? '+' : '\u2212') + fmtCr(Math.abs(netProfit)) + '/d';
-      tot.appendChild(totLabel); tot.appendChild(totVal);
-      container.appendChild(tot);
+      mkNetProfitRow(container, totalDailyValue, totalDailyInputCost, 'display:flex;justify-content:space-between;align-items:center;padding:5px 0 2px;border-top:2px solid #1e1e3a;margin-top:4px;');
     }
     if (!aggInputs.length && !aggOutputs.length) {
       const empty = document.createElement('div');
@@ -2218,12 +3149,31 @@ async function loadAndInjectHeader() {
     badge.title = 'Galactic Track Extension';
     chipArea.appendChild(badge);
 
+    const apiKey = await getExtApiKey();
     const sorted = sortBases(bases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
-    if (sorted.length) {
+
+    const hint = document.createElement('span');
+    hint.style.cssText = 'color:#3a3a5a;font-size:11px;padding:0 4px;white-space:nowrap;';
+
+    if (!apiKey) {
+      // No key yet — prompt user
+      hint.textContent = 'Submit an API key in ⚙ Settings to view your bases';
+      chipArea.appendChild(hint);
+    } else if (!Array.isArray(_companyData?.perks)) {
+      // Key present but perk data not yet loaded — wait then inject chips
+      hint.textContent = 'Loading…';
+      chipArea.appendChild(hint);
+      const pollPerks = setInterval(async () => {
+        if (!Array.isArray(_companyData?.perks)) return;
+        clearInterval(pollPerks);
+        hint.remove();
+        const s = sortBases(_loadedHeaderBases ?? []).filter(b => !_settings.hiddenBases.includes(String(b.id)));
+        for (const base of s) chipArea.insertBefore(buildHeaderChip(base, gamedata), overflowBadge);
+        syncOverflowBadge();
+      }, 500);
+    } else if (sorted.length) {
       for (const base of sorted) chipArea.appendChild(buildHeaderChip(base, gamedata));
     } else {
-      const hint = document.createElement('span');
-      hint.style.cssText = 'color:#3a3a5a;font-size:11px;padding:0 4px;white-space:nowrap;';
       hint.textContent = 'No bases found — make sure you are logged into the game';
       chipArea.appendChild(hint);
     }
@@ -2414,7 +3364,7 @@ async function loadAndInjectHeader() {
     if (!_outsideClickBound) {
       _outsideClickBound = true;
       document.addEventListener('click', (e) => {
-        const extIds = [GT_HEADER_ID, GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID, GT_TAB_ID, GT_TOAST_ID];
+        const extIds = [GT_HEADER_ID, GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID, GT_TAB_ID, GT_TOAST_ID, GT_CUSTOM_PRICES_ID];
         const inExt = extIds.some(id => document.getElementById(id)?.contains(e.target));
         if (!inExt && (_detailBaseId || _settingsOpen || _cashOpen || _summaryOpen)) {
           document.getElementById(GT_DETAIL_ID)?.remove();   _detailBaseId = null;
@@ -2434,6 +3384,7 @@ async function loadAndInjectHeader() {
     if (enabled !== false) {
       loadSprite();
       loadAndInjectHeader();
+      fetchCompanyData(); // warm cache + pull perks from GT API in background
       watchGteNav();
       // Retry header injection until the game's local API is ready (SPA may load after content script)
       let retries = 0;
@@ -2456,6 +3407,7 @@ chrome.storage.onChanged.addListener((changes) => {
     removeProductionUI();
     document.getElementById(GT_SETTINGS_ID)?.remove();
     document.getElementById(GT_TOAST_ID)?.remove();
+    document.getElementById(GT_CUSTOM_PRICES_ID)?.remove();
     document.getElementById(GTE_MODAL_ID)?.remove();
     document.getElementById(GTE_NAV_ID)?.remove();
     _settingsOpen = false;
