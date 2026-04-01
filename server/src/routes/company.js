@@ -11,11 +11,9 @@ let companiesCacheExpiry = 0;
 
 async function getCompanies() {
   if (companiesCache && Date.now() < companiesCacheExpiry) return companiesCache;
+  await pool.query(`REFRESH MATERIALIZED VIEW CONCURRENTLY distinct_companies`).catch(() => {});
   const r = await pool.query(
-    `SELECT DISTINCT ON (company_id) company_id, company_name
-     FROM tracker_events
-     WHERE company_id IS NOT NULL
-     ORDER BY company_id, company_name ASC`
+    `SELECT company_id, company_name FROM distinct_companies ORDER BY company_name ASC`
   );
   companiesCache = r.rows;
   companiesCacheExpiry = Date.now() + 30 * 60 * 1000;
