@@ -40,8 +40,7 @@ router.get('/search', requireAuth, async (req, res, next) => {
 router.get('/timeline', requireAuth, async (req, res, next) => {
   try {
     const hours = Math.min(Number(req.query.hours) || 24, 720);
-    const isDevOrAdmin = req.user.role === 'admin' || req.user.company_id === '0';
-    const companyId = isDevOrAdmin && req.query.companyId
+    const companyId = req.query.companyId
       ? parseInt(req.query.companyId, 10)
       : parseInt(req.user.company_id, 10);
 
@@ -93,8 +92,7 @@ router.get('/timeline', requireAuth, async (req, res, next) => {
 // Returns recent tracker_events for a company across all tracked items.
 router.get('/events', requireAuth, async (req, res, next) => {
   try {
-    const isDevOrAdmin = req.user.role === 'admin' || req.user.company_id === '0';
-    const companyId = isDevOrAdmin && req.query.companyId
+    const companyId = req.query.companyId
       ? parseInt(req.query.companyId, 10)
       : parseInt(req.user.company_id, 10);
 
@@ -138,8 +136,7 @@ router.get('/summary', requireAuth, async (req, res, next) => {
     const dateParam = req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
       ? req.query.date : null;
 
-    const isDevOrAdmin = req.user.role === 'admin' || req.user.company_id === '0';
-    const companyId = isDevOrAdmin && req.query.companyId
+    const companyId = req.query.companyId
       ? parseInt(req.query.companyId, 10)
       : parseInt(req.user.company_id, 10);
 
@@ -435,7 +432,7 @@ router.get('/summary', requireAuth, async (req, res, next) => {
     let companyName = req.user.company_name;
     let companyLogo = req.user.company_logo ?? null;
     let companyTag  = req.user.company_tag  ?? '';
-    if (isDevOrAdmin && req.query.companyId) {
+    if (req.query.companyId) {
       const [nameRow, userRow] = await Promise.all([
         pool.query(`SELECT company_name FROM tracker_events WHERE company_id = $1 LIMIT 1`, [companyId]),
         pool.query(`SELECT company_logo, company_tag FROM users WHERE company_id = $1 LIMIT 1`, [String(companyId)]),
