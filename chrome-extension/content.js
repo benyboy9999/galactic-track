@@ -2,6 +2,10 @@ const GT_TRACK = 'https://galactic-track.com';
 const GT_API   = 'https://api.g2.galactictycoons.com';
 const INJECT_ID  = 'gt-guild-row';
 const TOOLTIP_ID = 'gt-tooltip';
+const GT_PANEL_WISHLIST_ID     = 'gt-panel-wishlist';
+const GT_PANEL_WISHLIST_BTN_ID = 'gt-panel-wishlist-btn';
+const GT_FLIGHT_ID             = 'gt-flight-panel';
+const SERVER_SHIP_SPEED        = 4;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -344,69 +348,98 @@ const GT_SETTINGS_ID      = 'gt-prod-settings';
 const GT_CUSTOM_PRICES_ID = 'gt-custom-prices-modal';
 const GT_TOAST_ID         = 'gt-prod-toast';
 const GT_TAB_ID           = 'gt-prod-tab';
-const GT_CASH_ID     = 'gt-cash-panel';
-const GT_SUMMARY_ID  = 'gt-summary-panel';
+const GT_CASH_ID          = 'gt-cash-panel';
+const GT_SUMMARY_ID       = 'gt-summary-panel';
+const GT_WISHLIST_ALL_ID  = 'gt-wishlist-all-panel';
 const BASES_CACHE_TTL = 5 * 60 * 1000; // 5 min
 
 // ── SVG sprite / material icons ───────────────────────────────────────────────
 
-const GT_SPRITE_ID = 'gt-sprite-container';
-let _spriteLoaded  = false;
+let _spriteUrl  = null;
+const _pendingIconUses = []; // <use> elements created before _spriteUrl was known
 
-async function loadSprite() {
-  if (_spriteLoaded || document.getElementById(GT_SPRITE_ID)) { _spriteLoaded = true; return; }
+function _resolveSpriteUrl(url) {
+  if (_spriteUrl) return;
+  _spriteUrl = url.split('#')[0]; // strip fragment — we append our own #iconId
+  // Retroactively fill in any icons already in the DOM
+  for (const use of _pendingIconUses) {
+    const id = use.getAttribute('data-gt-icon');
+    if (id) use.setAttribute('href', `${url}#${id}`);
+  }
+  _pendingIconUses.length = 0;
+}
+
+function loadSprite() {
+  if (_spriteUrl) return;
   try {
-    const resp = await fetch('https://galactic-track.com/api/gamedata/sprite');
-    if (!resp.ok) return;
-    const svg  = await resp.text();
-    const doc  = new DOMParser().parseFromString(svg, 'image/svg+xml');
-    const svgRoot = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svgRoot.style.display = 'none';
-    doc.querySelectorAll('symbol').forEach(s => svgRoot.appendChild(document.importNode(s, true)));
-    const wrap = document.createElement('div');
-    wrap.id = GT_SPRITE_ID;
-    wrap.style.cssText = 'display:none;position:absolute;width:0;height:0;overflow:hidden;';
-    wrap.appendChild(svgRoot);
-    document.body.insertBefore(wrap, document.body.firstChild);
-    _spriteLoaded = true;
-  } catch { /* icons gracefully absent */ }
+    // PerformanceObserver with buffered:true fires immediately for already-loaded
+    // resources AND watches for future loads — covers both timing scenarios.
+    const obs = new PerformanceObserver(list => {
+      for (const e of list.getEntries()) {
+        if (/\/assets\/sprite-[A-Za-z0-9_-]+\.svg/.test(e.name)) {
+          _resolveSpriteUrl(e.name);
+          obs.disconnect();
+          return;
+        }
+      }
+    });
+    obs.observe({ type: 'resource', buffered: true });
+  } catch { /* PerformanceObserver unavailable */ }
 }
 
 const ICON_OVERRIDES = {
-  'Cows':'Cow','Chickens':'Chicken','Iron':'IronBar','Copper':'CopperBar',
-  'Rations':'BasicRations','Fine Rations':'FineRations','Exosuit':'BasicExosuit',
-  'Tools':'BasicTools','Advanced Tools':'AdvancedTools','Adv. Tools':'AdvancedTools',
-  'Construction Kit':'BasicConstructionKit','Prefab Kit':'BasicPrefabKit',
-  'Modern Prefab Kit':'ModernPrefabKit','Advanced Prefab Kit':'AdvancedPrefabKit',
+  // From materialIcon.ts (canonical)
+  'Ale':'Ale',
   'Amenities':'BasicAmenities','Advanced Amenities':'AdvancedAmenities',
-  'Hull Plate':'BasicHullPlate','Pump':'BasicPump','Assembly Plant':'BasicAssemblyPlant',
-  'Truss':'ReinforcedTruss','Linear FTL Emitter':'BasicFTLEmitter',
-  'Copper Wire':'CopperWiring','Consumer Electronics':'Electronics',
-  'Electric Motor':'Motor','Artificial Intelligence':'AI','AI':'AI',
-  'Advanced Processing Unit':'APU','APU':'APU','Nanites':'Nanobots',
   'Bio-Nutrient Blend':'NutrientBlend','Nutrient Blend':'NutrientBlend',
-  'Hydrogen Fuel':'HydrogenFuelCell','Superconducting Coil':'HyperCoil',
-  'SuperCoil':'HyperCoil','Field Cooling System':'FieldCooling',
-  'Field Cooling':'FieldCooling','Titanium Carbide Drill':'AdvancedDrill',
-  'TiC Drill':'AdvancedDrill','Molecular Fusion Kit':'WeldingKit2','Fusion Kit':'WeldingKit2',
+  'Chickens':'Chicken','Cows':'Cow',
+  'Copper':'CopperBar','Copper Wire':'CopperWiring',
+  'Electric Motor':'Motor',
+  'Ethanol':'Gasoline',
+  'Hull Plate':'BasicHullPlate',
+  'Iron':'IronBar',
+  'Prefab Kit':'BasicPrefabKit','Modern Prefab Kit':'ModernPrefabKit','Advanced Prefab Kit':'AdvancedPrefabKit',
+  'Field Cooling System':'FieldCooling','Field Cooling':'FieldCooling',
+  'TiC Drill':'AdvancedDrill','Titanium Carbide Drill':'AdvancedDrill',
+  'APU':'APU','Advanced Processing Unit':'APU',
+  'Advanced Tools':'AdvancedTools','Adv. Tools':'AdvancedTools',
+  'AI':'AI','Artificial Intelligence':'AI',
+  'Research':'ResearchData','Research Data':'ResearchData',
+  'Advanced Research':'AdvancedResearchData','Advanced Research Data':'AdvancedResearchData',
+  'Adv. Research Data':'AdvancedResearchData',
+  'Apex Research':'ApexResearchData','Apex Research Data':'ApexResearchData',
+  'Quantum Research':'QuantumResearchData','Quantum Research Data':'QuantumResearchData',
+  'Graphenium Wire':'Superconductors',
+  'SuperCoil':'HyperCoil','Superconducting Coil':'HyperCoil',
+  'Starglass Hull Plate':'QuadraniumHullPlate',
+  'Molecular Fusion Kit':'WeldingKit2',
+  'Hydrogen Fuel':'HydrogenFuelCell',
+  'Ship Repair Kit':'ShipRepairKit',
+  'Linear FTL Emitter':'BasicFTLEmitter',
+  'Quantum FTL Emitter':'AdvancedFTLEmitter',
+  'Extra-dimensional FTL Emitter':'SuperiorFTLEmitter',
+  'Shuttle Bridge':'BasicShipBridge','Hauler Bridge':'AdvancedShipBridge','Freighter Bridge':'T4ShipBridge',
+  'Starlifter Structural Elements':'T4ShipElements',
+  'Construction Kit':'BasicConstructionKit',
+  'Consumer Electronics':'Electronics',
+  'Truss':'ReinforcedTruss',
+  'Rations':'BasicRations','Fine Rations':'FineRations',
+  'Tools':'BasicTools',
+  'Exosuit':'BasicExosuit',
+  'Nanites':'Nanobots',
+  'Pump':'BasicPump',
+  'Lab Suit':'LaboratorySuit','Laboratory Suit':'LaboratorySuit','Lab. Suit':'LaboratorySuit',
+  'Assembly Plant':'BasicAssemblyPlant',
+  'Chemical Plant':'ChemistryPlant',
+  'Micronics Factory':'MicroelectronicsFactory',
+  'Quantum Nexus':'QuantumComputingCenter',
+  // Extension extras
+  'Fusion Kit':'WeldingKit2',
   'Cargo Bay':'CargoBaySegment','Cargo Bay Segment':'CargoBaySegment',
   'Tiridium':'TiridiumAlloy','Tiridium Alloy':'TiridiumAlloy',
   'Tiridium Plate':'TiridiumHullPlate','Tiridium Hull Plate':'TiridiumHullPlate',
-  'Ethanol':'Gasoline','Graphenium Wire':'Superconductors',
-  'Starglass Hull Plate':'QuadraniumHullPlate','Ship Repair Kit':'ShipRepairKit','Repair Kit':'ShipRepairKit',
   'Silicon Wafer':'SiliconWafer',
-  'Lab Suit':'LaboratorySuit','Laboratory Suit':'LaboratorySuit',
-  'Lab. Suit':'LaboratorySuit','Chemical Plant':'ChemistryPlant',
-  'Micronics Factory':'MicroelectronicsFactory','Quantum Nexus':'QuantumComputingCenter',
-  'Research':'ResearchData','Research Data':'ResearchData',
-  'Advanced Research':'AdvancedResearchData','Advanced Research Data':'AdvancedResearchData',
-  'Adv. Research Data':'AdvancedResearchData','Apex Research':'ApexResearchData',
-  'Apex Research Data':'ApexResearchData','Quantum Research':'QuantumResearchData',
-  'Quantum Research Data':'QuantumResearchData',
-  'Quantum FTL Emitter':'AdvancedFTLEmitter',
-  'Extra-dimensional FTL Emitter':'SuperiorFTLEmitter',
-  'Shuttle Bridge':'BasicShipBridge','Hauler Bridge':'AdvancedShipBridge',
-  'Freighter Bridge':'T4ShipBridge','Starlifter Structural Elements':'T4ShipElements',
+  'Repair Kit':'ShipRepairKit',
   'Medicine Shipment':'Pack_Medicine','Food Shipment':'Pack_Food',
   'Ship Parts Shipment':'Pack_ShipParts','Defense systems pack':'Pack_Defense',
   'Habitats Shipment':'Pack_Habitats',
@@ -421,13 +454,17 @@ function toIconId(name) {
 }
 
 function makeIcon(matName, size = 14) {
-  if (!_spriteLoaded) return null;
   const id = toIconId(matName);
   if (!id) return null;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.style.cssText = `width:${size}px;height:${size}px;vertical-align:middle;flex-shrink:0;display:inline-block;`;
   const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-  use.setAttribute('href', `#${id}`);
+  if (_spriteUrl) {
+    use.setAttribute('href', `${_spriteUrl}#${id}`);
+  } else {
+    use.setAttribute('data-gt-icon', id);
+    _pendingIconUses.push(use);
+  }
   svg.appendChild(use);
   return svg;
 }
@@ -468,6 +505,7 @@ const DEFAULT_SETTINGS = {
   showGuildPrices:  true,
   showCosts:        true,
   showTooltips:     true,
+  showFlights:      true,
 };
 
 let _settings = { ...DEFAULT_SETTINGS };
@@ -483,6 +521,48 @@ async function loadSettings() {
 
 function saveSettings() {
   chrome.storage.local.set({ gtSettings: _settings });
+}
+
+// ── Panel Wishlist state & storage ────────────────────────────────────────────
+
+let _panelWishlistOpen = false;
+
+function loadPanelWishlist() {
+  return new Promise(resolve => {
+    chrome.storage.local.get(['gtPanelWishlist'], ({ gtPanelWishlist }) => resolve(gtPanelWishlist ?? {}));
+  });
+}
+function savePanelWishlist(data) {
+  chrome.storage.local.set({ gtPanelWishlist: data });
+}
+async function addToPanelWishlist(base, mats) {
+  // mats: [{id, am}]  — names resolved from _loadedHeaderGamedata
+  const data = await loadPanelWishlist();
+  const key  = String(base.id);
+  if (!data[key]) data[key] = { baseName: base.name, items: [] };
+  for (const m of mats) {
+    const matName = _loadedHeaderGamedata?.materials?.find(x => x.id === m.id)?.sName ?? `mat${m.id}`;
+    const existing = data[key].items.find(i => i.id === m.id);
+    if (existing) existing.am += m.am;
+    else data[key].items.push({ id: m.id, name: matName, am: m.am });
+  }
+  savePanelWishlist(data);
+}
+async function clearPanelItem(baseId, matId) {
+  const data = await loadPanelWishlist();
+  const key  = String(baseId);
+  if (!data[key]) return;
+  data[key].items = data[key].items.filter(i => i.id !== matId);
+  if (!data[key].items.length) delete data[key];
+  savePanelWishlist(data);
+}
+async function clearPanelBase(baseId) {
+  const data = await loadPanelWishlist();
+  delete data[String(baseId)];
+  savePanelWishlist(data);
+}
+function clearPanelAll() {
+  savePanelWishlist({});
 }
 
 // ── Gamedata loader ───────────────────────────────────────────────────────────
@@ -530,20 +610,53 @@ async function fetchBases() {
   return detailed;
 }
 
+// ── Guild data cache ──────────────────────────────────────────────────────────
+
+let _guildData   = null;
+let _guildDataTs = 0;
+const GUILD_TTL  = 60 * 60 * 1000; // 1 hour
+
+async function fetchGuildData() {
+  if (_guildData && Date.now() - _guildDataTs < GUILD_TTL) return _guildData;
+  const apiKey = await getExtApiKey();
+  if (!apiKey) return null;
+  try {
+    const r = await fetch(`${GT_API}/public/guild?apikey=${encodeURIComponent(apiKey)}`);
+    if (!r.ok) return null;
+    _guildData   = await r.json();
+    _guildDataTs = Date.now();
+    return _guildData;
+  } catch { return null; }
+}
+
 // ── Company data cache ────────────────────────────────────────────────────────
 
-let _companyData   = null;
-let _companyDataTs = 0;
-const COMPANY_TTL  = 5 * 60 * 1000;
+let _companyData    = null;
+let _companyDataTs  = 0;
+let _perksLoaded    = false;
+let _guildLoaded    = false;
+const COMPANY_TTL   = 5 * 60 * 1000;
 
+// Refresh local API data only — no GT API / API key calls.
+async function refreshLocalCompanyData() {
+  const local = await requestGTLocalAPI('getMyCompany');
+  if (local?.id) {
+    // Preserve already-loaded perks across local refreshes
+    const perks = _companyData?.perks;
+    _companyData   = perks ? { ...local, perks } : local;
+    _companyDataTs = Date.now();
+  }
+}
+
+// Full fetch — local API + perks from GT API (on first load / explicit refresh only).
 async function fetchCompanyData() {
   if (_companyData && Date.now() - _companyDataTs < COMPANY_TTL) return _companyData;
   const local = await requestGTLocalAPI('getMyCompany');
   if (local?.id) {
     _companyData = local; _companyDataTs = Date.now();
-    // Local API omits perks — fetch from GT API in background to enrich _companyData.
-    // Only runs once per cache window; a limited key is sufficient.
-    if (!local.perks) {
+    // Perks and guild data fetched once per page load — never on the periodic timer.
+    if (!_perksLoaded) {
+      _perksLoaded = true;
       getExtApiKey().then(async apiKey => {
         if (!apiKey) return;
         try {
@@ -555,6 +668,10 @@ async function fetchCompanyData() {
           }
         } catch { /* non-critical — speed calc falls back to research-only */ }
       });
+    }
+    if (!_guildLoaded) {
+      _guildLoaded = true;
+      fetchGuildData().catch(() => {});
     }
     return local;
   }
@@ -630,6 +747,37 @@ async function fetchMatPrices() {
   } catch { return null; }
 }
 
+// Fetch a single material's current lowest sell price via mat-details/{id}.
+// Merges result into _priceMap so effectivePrice() picks it up.
+const _matDetailFetching = new Set();
+async function fetchMatDetailPrice(matId) {
+  const id = Number(matId);
+  if (!id) return 0;
+  if (_priceMap?.has(id)) return _priceMap.get(id);
+  if (_matDetailFetching.has(id)) return 0;
+  _matDetailFetching.add(id);
+  const apiKey = await getExtApiKey();
+  if (!apiKey) { _matDetailFetching.delete(id); return 0; }
+  try {
+    const r = await fetch(`${GT_API}/public/exchange/mat-details/${id}?apikey=${encodeURIComponent(apiKey)}`);
+    if (!r.ok) { _matDetailFetching.delete(id); return 0; }
+    const detail = await r.json();
+    // detail may be { sellOrders: [{unitPrice,...},...] } or { minPrice, ... }
+    const orders = detail.sellOrders ?? detail.orders ?? [];
+    let price = 0;
+    if (orders.length) {
+      price = Math.min(...orders.map(o => Number(o.unitPrice ?? o.price ?? 0)).filter(p => p > 0));
+    }
+    if (!price) price = Number(detail.minPrice ?? detail.currentPrice ?? detail.avgPrice ?? 0);
+    if (price > 0) {
+      if (!_priceMap) _priceMap = new Map();
+      _priceMap.set(id, price);
+    }
+    _matDetailFetching.delete(id);
+    return price;
+  } catch { _matDetailFetching.delete(id); return 0; }
+}
+
 // ── Average price cache ───────────────────────────────────────────────────────
 
 let _avgPriceMap   = null;
@@ -659,12 +807,13 @@ async function fetchAvgPrices() {
 }
 
 // Returns the effective price for a material, respecting custom overrides and priceMode.
+// Falls back to average price when current price is unavailable (e.g. not on exchange mat-prices).
 function effectivePrice(matId) {
   const id     = Number(matId);
   const custom = _settings.customPrices?.[id];
   if (custom != null && custom > 0) return custom;
   if (_settings.priceMode === 'average' && _avgPriceMap?.has(id)) return _avgPriceMap.get(id);
-  return _priceMap?.get(id) ?? 0;
+  return _priceMap?.get(id) ?? _avgPriceMap?.get(id) ?? 0;
 }
 
 // ── Planet factor ─────────────────────────────────────────────────────────────
@@ -714,7 +863,207 @@ function calcSpeedMultiplier(bType, companyData, gamedataPerks) {
     }
   }
 
-  return 1 + bonus;
+  // Starting bonus (new company age multiplier) — multiplicative on top of research/perk bonuses
+  const startMult = companyStartingBonus(companyData?.fDate);
+
+  return (1 + bonus) * startMult;
+}
+
+// ── Company age / starting bonus ─────────────────────────────────────────────
+
+function companyStartingBonus(fDate) {
+  if (!fDate) return 1;
+  const ageHours = (Date.now() - new Date(fDate)) / 3600000;
+  if (ageHours <   4) return 5;
+  if (ageHours <  12) return 4;
+  if (ageHours <  36) return 3;
+  if (ageHours <  96) return 2;
+  if (ageHours < 240) return 1.5;
+  if (ageHours < 336) return 1.2;
+  return 1;
+}
+
+// ── Flight calculation helpers ────────────────────────────────────────────────
+
+function getSystemForPlanet(gamedata, planetId) {
+  for (const sys of gamedata.systems ?? []) {
+    if ((sys.planets ?? []).some(p => p?.id === planetId)) return sys;
+  }
+  return null;
+}
+
+function getPlanetById(gamedata, planetId) {
+  for (const sys of gamedata.systems ?? []) {
+    const p = (sys.planets ?? []).find(p => p?.id === planetId);
+    if (p) return p;
+  }
+  return null;
+}
+
+function systemDistance(sysA, sysB) {
+  const dx = sysA.x - sysB.x, dy = sysA.y - sysB.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function fmtFlightTime(hours) {
+  if (hours < 1) return `${Math.round(hours * 60)}m`;
+  const h = Math.floor(hours), m = Math.round((hours - h) * 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+// ── Ship configuration derivation ─────────────────────────────────────────────
+
+function roundHalfUp(x) {
+  return Math.floor(x + 0.5);
+}
+
+function applyShielding(weight, level) {
+  // level: 1=None, 2=Light(+1.5%), 3=Heavy(+7%)
+  if (level === 2) return weight * 1.015;
+  if (level === 3) return weight * 1.07;
+  return weight;
+}
+
+// Derives the full ship configuration from blueprint fields.
+// Returns { reactorCount, reactorEfficiency, weightEmpty, fuelCapacity }
+function calcShipConfig(blueprint, emitter, reactor) {
+  const emitterCount = blueprint.emittersCount;
+  const cargoCapacity = blueprint.cargoCapacity;
+  const tankType     = blueprint.tankType ?? 1;   // 1=Small, 2=Medium, 3=Large
+  const heatLevel    = blueprint.heatShielding ?? 1;
+  const radLevel     = blueprint.radiationShielding ?? 1;
+
+  // ── Reactor count (energy draw with diminishing returns after 4) ──
+  const energyDraw = emitterCount * (emitter.energyDraw ?? 10);
+  let reactorCount = 0;
+  let remaining    = energyDraw;
+  let dimSteps     = 0;
+  while (remaining > 0) {
+    const contrib = reactorCount < 4
+      ? 1.0
+      : Math.max(Math.pow(0.965, ++dimSteps), 0.35);
+    remaining -= reactor.energy * contrib;
+    reactorCount++;
+  }
+  if (reactorCount === 0) reactorCount = 1;
+
+  // Efficiency = energy actually used / total energy capacity
+  const energyGenerated = energyDraw - remaining; // remaining is ≤0 at loop exit
+  const reactorEfficiency = energyGenerated / (reactorCount * reactor.energy);
+
+  // ── Empty weight ──
+  const cargoBays  = Math.ceil(cargoCapacity / 100);
+  const baseWeight = 20
+    + 25 * cargoBays
+    + emitterCount * emitter.weight
+    + reactorCount * reactor.weight
+    + reactorCount * reactor.weight * 0.175 * tankType;
+  const weightEmpty = roundHalfUp(applyShielding(applyShielding(baseWeight, heatLevel), radLevel));
+
+  // ── Fuel capacity ──
+  const fuelCapacity = Math.round(reactor.fuelCapacity * reactorCount * tankType * 0.5);
+
+  return { reactorCount, reactorEfficiency, weightEmpty, fuelCapacity };
+}
+
+// ── Flight calculation ─────────────────────────────────────────────────────────
+
+// Extract flight-relevant perk bonuses from companyData.
+// Returns { cargoCapPct, degradationPct, fuelSavingPct, speedPct }
+function calcFlightPerks(companyData, gamedataPerks) {
+  const perkLevels = new Map((companyData?.perks ?? []).map(p => [p.id, p.lvl ?? p.level ?? 0]));
+  let cargoCapPct = 0, degradationPct = 0, fuelSavingPct = 0, speedPct = 0;
+  for (const perk of (gamedataPerks ?? [])) {
+    const lvl = perkLevels.get(perk.id) ?? 0;
+    if (!lvl) continue;
+    for (const b of (perk.bonuses ?? [])) {
+      if (b.type === 11) cargoCapPct    += b.perLevel * lvl;  // cargo capacity %
+      if (b.type === 12) degradationPct += b.perLevel * lvl;  // ship degradation %
+      if (b.type === 13) fuelSavingPct  += b.perLevel * lvl;  // fuel consumption %
+      if (b.type === 27) speedPct        += b.perLevel * lvl;  // ship speed % (Haul and Crawl)
+    }
+  }
+  return { cargoCapPct, degradationPct, fuelSavingPct, speedPct };
+}
+
+// Returns { timeHours, fuelUsed, weightRatio, powerFraction, tankCapacity, weightEmpty, condWear }
+// pf: explicit power fraction (0.2–1.0). opts: { fuelSavingMult, degradationMult }
+function calcFlight(distance, ship, cargoWeight, emitter, reactor, speedMult, pf, opts = {}) {
+  const { fuelSavingMult = 1, degradationMult = 1 } = opts;
+  const blueprint    = ship.blueprint;
+  const emitterCount = blueprint.emittersCount;
+
+  const { weightEmpty, fuelCapacity } = calcShipConfig(blueprint, emitter, reactor);
+  const tankCapacity = fuelCapacity;
+
+  const effectiveFuelCons = reactor.fuelConsumption * fuelSavingMult;
+
+  // If no explicit pf, use max power within fuel limit
+  const fuelDenom   = distance > 0 ? distance * emitterCount * effectiveFuelCons : Infinity;
+  const maxPFByFuel = fuelDenom > 0 ? Math.sqrt(tankCapacity / fuelDenom) : 1.0;
+  const powerFraction = pf !== undefined
+    ? Math.max(0.2, Math.min(pf, 1.0))
+    : Math.min(maxPFByFuel, 1.0);
+
+  const ftlCapacity = emitterCount * (emitter.fieldCapacity ?? 1000) * powerFraction;
+  const totalWeight = weightEmpty + cargoWeight;
+  const weightRatio = totalWeight > 0 ? ftlCapacity / totalWeight : 1;
+
+  let accel, maxSpd;
+  if (weightRatio >= 1) {
+    accel  = emitter.acceleration * weightRatio;
+    maxSpd = emitter.maxSpeed * (1 + (weightRatio - 1) * 0.15);
+  } else {
+    accel  = emitter.acceleration * Math.pow(weightRatio, 1.7);
+    maxSpd = emitter.maxSpeed * (1 - Math.pow(1 - weightRatio, 1.3));
+  }
+
+  const accelTime = maxSpd / accel;
+  const accelDist = (accel * accelTime * accelTime) / 2;
+  const baseTime  = distance <= accelDist
+    ? Math.sqrt(2 * distance / accel)
+    : accelTime + (distance - accelDist) / maxSpd;
+
+  const condMult  = Math.min((ship.condition ?? 1) + 0.2, 1.0);
+  const timeHours = baseTime / condMult / SERVER_SHIP_SPEED / speedMult;
+
+  const fuelUsed = Math.min(
+    distance * emitterCount * effectiveFuelCons * powerFraction * powerFraction,
+    tankCapacity
+  );
+
+  // Condition wear ≈ 1% per flight hour × degradation multiplier
+  const condWear = Math.min(timeHours * 0.01 * degradationMult, ship.condition ?? 1);
+
+  return { timeHours, fuelUsed, weightRatio, maxSpeed: maxSpd, accel, powerFraction, tankCapacity, weightEmpty, condWear };
+}
+
+// Finds pf (0.2–1.0) that minimises (fuelCost + repairCost) × time / effectiveCargo.
+// opts must include: fuelPrice, repairKitPrice, repairKitsTotal, effectiveCargo, fuelSavingMult, degradationMult
+// If no price data is available, returns the fuel-constrained max pf (fastest trip).
+function findOptimalFlightPF(distance, ship, cargoWeight, emitter, reactor, speedMult, opts) {
+  const { fuelPrice = 0, repairKitPrice = 0, repairKitsTotal = 0, effectiveCargo = 1 } = opts;
+
+  // No cost data — optimize purely for speed (highest pf within fuel limits)
+  if (fuelPrice <= 0 && repairKitPrice <= 0) {
+    for (let step = 80; step >= 0; step--) {
+      const pf = 0.20 + step * 0.01;
+      const r  = calcFlight(distance, ship, cargoWeight, emitter, reactor, speedMult, pf, opts);
+      if (r.fuelUsed <= r.tankCapacity) return pf;
+    }
+    return 1.0;
+  }
+
+  let bestPF = 1.0, bestScore = Infinity;
+  for (let step = 0; step <= 80; step++) {
+    const pf = 0.20 + step * 0.01;
+    const r  = calcFlight(distance, ship, cargoWeight, emitter, reactor, speedMult, pf, opts);
+    const fuelCost   = r.fuelUsed * (fuelPrice > 0 ? fuelPrice : 0);
+    const repairCost = repairKitsTotal * r.condWear * (repairKitPrice > 0 ? repairKitPrice : 0);
+    const score      = (fuelCost + repairCost) * r.timeHours / Math.max(effectiveCargo, 1);
+    if (score < bestScore) { bestScore = score; bestPF = pf; }
+  }
+  return bestPF;
 }
 
 // ── Per-base needs calculation ────────────────────────────────────────────────
@@ -941,10 +1290,13 @@ function removeProductionUI() {
   document.getElementById(GT_TAB_ID)?.remove();
   document.getElementById(GT_CASH_ID)?.remove();
   document.getElementById(GT_SUMMARY_ID)?.remove();
+  document.getElementById(GT_FLIGHT_ID)?.remove();
+  document.getElementById(GT_PANEL_WISHLIST_BTN_ID)?.remove();
   _detailBaseId = null;
   _headerCollapsed = false;
   _cashOpen = false;
   _summaryOpen = false;
+  _flightOpen = false;
 }
 
 // ── Detail panel (drops below header when a chip is clicked) ──────────────────
@@ -1016,9 +1368,7 @@ function buildDetailPanel(base, gamedata) {
 
       const hRow = document.createElement('div');
       hRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin:6px 0 3px;';
-      const h = document.createElement('span');
-      h.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;';
-      h.textContent = heading;
+      const h = mkLabel(heading);
       const sectionCart = document.createElement('button');
       sectionCart.innerHTML = '&#128722;';
       sectionCart.title = `Wishlist: ${heading}`;
@@ -1138,32 +1488,12 @@ function buildDetailPanel(base, gamedata) {
         totRow.append(totLabel, restockVal, dailyVal);
 
         // Hover tooltip: restock cost breakdown — [icon] Material xAmount @ $Price
-        let tip = null;
-        totRow.addEventListener('mouseenter', () => {
+        attachTooltip(totRow, tip => {
           const restockLines = sectionItems.filter(si => !si.isSelf && si.deficit > 0 && si.unitPrice > 0);
-          if (!restockLines.length) return;
-          tip = document.createElement('div');
-          tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
-          const tipTitle = document.createElement('div');
-          tipTitle.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;';
-          tipTitle.textContent = 'Restock cost';
-          tip.appendChild(tipTitle);
+          if (!restockLines.length) return false;
+          tip.appendChild(mkTipTitle('Restock cost'));
           for (const { r, deficit, unitPrice } of restockLines) {
-            const line = document.createElement('div');
-            line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
-            const left = document.createElement('div');
-            left.style.cssText = 'display:flex;align-items:center;gap:5px;';
-            const ic = makeIcon(r.name, 14);
-            if (ic) left.appendChild(ic);
-            const lbl = document.createElement('span');
-            lbl.style.color = '#c0c0da';
-            lbl.textContent = `${r.name} x${deficit.toLocaleString()}`;
-            left.appendChild(lbl);
-            const val = document.createElement('span');
-            val.style.cssText = 'color:#9090b0;';
-            val.textContent = `@ ${fmtCr(unitPrice)} ($${Math.round(unitPrice * deficit).toLocaleString()})`;
-            line.appendChild(left); line.appendChild(val);
-            tip.appendChild(line);
+            tip.appendChild(mkIconLine(r.name, `${r.name} x${deficit.toLocaleString()}`, `@ ${fmtCr(unitPrice)} ($${Math.round(unitPrice * deficit).toLocaleString()})`));
           }
           if (restockLines.length > 1) {
             const sep = document.createElement('div');
@@ -1176,15 +1506,7 @@ function buildDetailPanel(base, gamedata) {
             tot.appendChild(tl); tot.appendChild(tv);
             tip.appendChild(tot);
           }
-          document.body.appendChild(tip);
         });
-        totRow.addEventListener('mousemove', (e) => {
-          if (!tip) return;
-          const x = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8);
-          const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
-          tip.style.left = x + 'px'; tip.style.top = y + 'px';
-        });
-        totRow.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
 
         contentArea.appendChild(totRow);
         totalRestockCost += sectionRestockCost;
@@ -1219,9 +1541,7 @@ function buildDetailPanel(base, gamedata) {
     if (outputs.length) {
       const oh = document.createElement('div');
       oh.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin:6px 0 3px;';
-      const ohLabel = document.createElement('span');
-      ohLabel.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;';
-      ohLabel.textContent = 'Outputs / day';
+      const ohLabel = mkLabel('Outputs / day');
       oh.appendChild(ohLabel);
       contentArea.appendChild(oh);
 
@@ -1305,39 +1625,13 @@ function buildDetailPanel(base, gamedata) {
 
         // Income total tooltip: breakdown per output
         if (outputItems.length > 1) {
-          let tip = null;
-          totRow.addEventListener('mouseenter', () => {
-            tip = document.createElement('div');
-            tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
-            const tipTitle = document.createElement('div');
-            tipTitle.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;';
-            tipTitle.textContent = 'Daily income';
-            tip.appendChild(tipTitle);
+          attachTooltip(totRow, tip => {
+            tip.appendChild(mkTipTitle('Daily income'));
             for (const { r: or, unitPrice: up, dailyValue: dv } of outputItems) {
               if (!dv) continue;
-              const line = document.createElement('div');
-              line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
-              const left = document.createElement('div');
-              left.style.cssText = 'display:flex;align-items:center;gap:5px;';
-              const ic = makeIcon(or.name, 14);
-              if (ic) left.appendChild(ic);
-              const lbl = document.createElement('span'); lbl.style.color = '#c0c0da';
-              lbl.textContent = `${or.name} x${Math.round(or.dailyOutput).toLocaleString()}/d`;
-              left.appendChild(lbl);
-              const val = document.createElement('span'); val.style.color = '#9090b0';
-              val.textContent = `@ ${fmtCr(up)} (${fmtCr(dv)}/d)`;
-              line.appendChild(left); line.appendChild(val);
-              tip.appendChild(line);
+              tip.appendChild(mkIconLine(or.name, `${or.name} x${Math.round(or.dailyOutput).toLocaleString()}/d`, `@ ${fmtCr(up)} (${fmtCr(dv)}/d)`));
             }
-            document.body.appendChild(tip);
           });
-          totRow.addEventListener('mousemove', (e) => {
-            if (!tip) return;
-            const x = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8);
-            const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
-            tip.style.left = x + 'px'; tip.style.top = y + 'px';
-          });
-          totRow.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
         }
 
         contentArea.appendChild(totRow);
@@ -1350,9 +1644,7 @@ function buildDetailPanel(base, gamedata) {
       const netCol = netProfit >= 0 ? COL_OK : COL_CRIT;
       const netRow = document.createElement('div');
       netRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:5px 0 2px;border-top:2px solid #1e1e3a;margin-top:4px;cursor:default;';
-      const netLabel = document.createElement('span');
-      netLabel.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;';
-      netLabel.textContent = 'Net profit';
+      const netLabel = mkLabel('Net profit');
       const netVal = document.createElement('span');
       netVal.style.cssText = `color:${netCol};font-size:12px;font-weight:700;`;
       netVal.textContent = (netProfit >= 0 ? '+' : '\u2212') + fmtCr(Math.abs(netProfit)) + '/d';
@@ -1488,17 +1780,22 @@ async function handleSectionWishlist(base, items, label, btn) {
 }
 
 // Wishlist All — one wishlist per visible base
-// opts: { bases, includeInputs, includeConsumables, includeStock } — all optional, fall back to _settings
+// opts: { bases, includeInputs, includeConsumables, includeStock, addToPanel, panelOnly }
 async function handleWishlistAll(btn, opts = {}) {
-  const apiKey = await getExtApiKey();
-  if (!apiKey) { showToast('Extended API key needed \u2014 set in Settings', false); return; }
+  const panelOnly  = opts.panelOnly  ?? false;
+  const addToPanel = opts.addToPanel ?? false;
+
+  if (!panelOnly) {
+    const apiKey = await getExtApiKey();
+    if (!apiKey) { showToast('Extended API key needed \u2014 set in Settings', false); return; }
+  }
   if (!_loadedHeaderBases || !_loadedHeaderGamedata) return;
 
-  const bases         = opts.bases         ?? sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
-  const inclInputs    = opts.includeInputs      ?? _settings.includeInputs;
+  const bases           = opts.bases             ?? sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
+  const inclInputs      = opts.includeInputs      ?? _settings.includeInputs;
   const inclConsumables = opts.includeConsumables ?? _settings.includeConsumables;
-  const inclStock     = opts.includeStock   ?? _settings.includeStock;
-  const td            = _settings.targetDays;
+  const inclStock       = opts.includeStock       ?? _settings.includeStock;
+  const td              = opts.targetDays         ?? _settings.targetDays;
 
   if (!bases.length) return;
 
@@ -1507,6 +1804,7 @@ async function handleWishlistAll(btn, opts = {}) {
   btn.style.color = COL_LOW;
 
   let ok = 0, fail = 0, skip = 0;
+  let addedToPanel = false;
   for (const base of bases) {
     const { inputs, consumables } = calcBaseNeeds(base, _loadedHeaderGamedata);
     const eligible = [
@@ -1522,16 +1820,29 @@ async function handleWishlistAll(btn, opts = {}) {
       }))
       .filter(m => m.am > 0);
     if (!mats.length) { skip++; continue; }
-    try {
-      const resp = await fetch(
-        `${GT_API}/public/wishlist/create?apikey=${encodeURIComponent(apiKey)}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: `${base.name} \u2014 ${td}d restock`, mats }) }
-      );
-      if (resp.status === 403) { showToast('Extended API Key required for Wishlisting', false); break; }
-      if (!resp.ok) throw new Error();
+
+    // Add to extension panel wishlist
+    if (panelOnly || addToPanel) {
+      await addToPanelWishlist(base, mats);
+      addedToPanel = true;
+    }
+
+    // Add to game wishlist (unless panel only)
+    if (!panelOnly) {
+      const apiKey = await getExtApiKey();
+      try {
+        const resp = await fetch(
+          `${GT_API}/public/wishlist/create?apikey=${encodeURIComponent(apiKey)}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: `${base.name} \u2014 ${td}d restock`, mats }) }
+        );
+        if (resp.status === 403) { showToast('Extended API Key required for Wishlisting', false); break; }
+        if (!resp.ok) throw new Error();
+        ok++;
+      } catch { fail++; }
+    } else {
       ok++;
-    } catch { fail++; }
+    }
   }
 
   btn.disabled = false;
@@ -1539,40 +1850,54 @@ async function handleWishlistAll(btn, opts = {}) {
   btn.textContent = origText;
   setTimeout(() => { btn.style.color = ''; }, 3000);
 
-  if (fail)      showToast(`${ok} wishlists created, ${fail} failed`, false);
-  else if (skip) showToast(`\u2713 ${ok} wishlists created (${skip} bases already stocked)`);
-  else           showToast(`\u2713 ${ok} wishlists created`);
+  if (addedToPanel) {
+    // Refresh or open panel
+    const existing = document.getElementById(GT_PANEL_WISHLIST_ID);
+    if (existing) {
+      loadPanelWishlist().then(data => _renderPanelWishlistContent(existing, data));
+    } else {
+      openPanelWishlist();
+    }
+  }
+
+  if (panelOnly) {
+    if (skip) showToast(`\u2713 ${ok} bases added to panel (${skip} already stocked)`);
+    else      showToast(`\u2713 ${ok} bases added to panel wishlist`);
+  } else if (fail) showToast(`${ok} wishlists created, ${fail} failed`, false);
+  else if (skip)   showToast(`\u2713 ${ok} wishlists created (${skip} bases already stocked)`);
+  else             showToast(`\u2713 ${ok} wishlists created`);
 }
 
-// Wishlist-all confirmation modal
+// Wishlist-all panel
 // onConfirm receives opts: { bases, includeInputs, includeConsumables, includeStock }
 function showWishlistAllModal(onConfirm) {
   if (!_loadedHeaderBases || !_loadedHeaderGamedata) return;
+  const existing = document.getElementById(GT_WISHLIST_ALL_ID);
+  if (existing) { existing.remove(); _wishlistAllOpen = false; return; }
+
   const allBases = sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
   if (!allBases.length) return;
 
+  closeAllPanels();
+
   // Local state — does not affect _settings
   const localState = {
+    targetDays:         _settings.targetDays,
     includeInputs:      _settings.includeInputs,
     includeConsumables: _settings.includeConsumables,
     includeStock:       _settings.includeStock,
+    addToPanel:         false,
+    panelOnly:          false,
   };
   const localBasesOn = new Set(allBases.map(b => String(b.id)));
 
-  const backdrop = document.createElement('div');
-  backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:2147483640;display:flex;align-items:center;justify-content:center;';
-
-  const modal = document.createElement('div');
-  modal.style.cssText = 'background:#0d0d1f;border:1px solid #2a2a4a;border-radius:10px;padding:20px 22px;width:min(400px,90vw);font-family:system-ui,sans-serif;color:#d8d8f0;box-shadow:0 8px 48px rgba(0,0,0,0.8);';
-
-  const title = document.createElement('div');
-  title.style.cssText = 'font-size:15px;font-weight:700;color:#e0e0f0;margin-bottom:14px;';
-  title.textContent = 'Wishlist All Bases';
-  modal.appendChild(title);
+  const modal = mkPanelBase(GT_WISHLIST_ALL_ID, true);
+  modal.style.width = '300px';
+  modal.appendChild(mkPanelTitle('Wishlist All Bases'));
+  _wishlistAllOpen = true;
 
   // ── Bases section ──────────────────────────────────────────────────────────
-  const basesLabel = document.createElement('div');
-  basesLabel.style.cssText = 'font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#6b6b8a;margin-bottom:6px;';
+  const basesLabel = mkLabel('', 'margin-bottom:6px;');
   modal.appendChild(basesLabel);
 
   const updateBasesLabel = () => {
@@ -1603,20 +1928,28 @@ function showWishlistAllModal(onConfirm) {
   modal.appendChild(basesList);
 
   // ── Settings section ───────────────────────────────────────────────────────
-  const sumLabel = document.createElement('div');
-  sumLabel.style.cssText = 'font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#6b6b8a;margin-bottom:6px;';
-  sumLabel.textContent = 'Wishlist settings';
+  const sumLabel = mkLabel('Wishlist settings', 'margin-bottom:6px;');
   modal.appendChild(sumLabel);
 
   const settingsBox = document.createElement('div');
-  settingsBox.style.cssText = 'background:#0a0a18;border:1px solid #1a1a30;border-radius:6px;padding:6px 10px;margin-bottom:18px;';
+  settingsBox.style.cssText = 'background:#0a0a18;border:1px solid #1a1a30;border-radius:6px;padding:6px 10px;margin-bottom:10px;';
 
-  // Stock period — read-only, just show the value
+  // Stock period — editable for this wishlist run only
   const stockPeriodRow = document.createElement('div');
   stockPeriodRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;border-bottom:1px solid #12122a;';
   const spLabel = document.createElement('span'); spLabel.style.color = '#6b6b8a'; spLabel.textContent = 'Stock period';
-  const spVal   = document.createElement('span'); spVal.style.color   = '#c0c0da'; spVal.textContent   = `${_settings.targetDays}d`;
-  stockPeriodRow.append(spLabel, spVal);
+  const spInput = document.createElement('input');
+  spInput.type = 'number'; spInput.min = '1'; spInput.max = '365'; spInput.step = '1';
+  spInput.value = localState.targetDays;
+  spInput.style.cssText = 'width:48px;background:#1a1a30;border:1px solid #2a2a4a;border-radius:4px;color:#c0c0da;font-size:11px;padding:2px 4px;text-align:right;font-family:inherit;';
+  spInput.addEventListener('input', () => {
+    const v = parseInt(spInput.value, 10);
+    if (v > 0) localState.targetDays = v;
+  });
+  const spSuffix = document.createElement('span'); spSuffix.style.cssText = 'color:#6b6b8a;margin-left:3px;'; spSuffix.textContent = 'd';
+  const spRight = document.createElement('div'); spRight.style.cssText = 'display:flex;align-items:center;gap:0;';
+  spRight.append(spInput, spSuffix);
+  stockPeriodRow.append(spLabel, spRight);
   settingsBox.appendChild(stockPeriodRow);
 
   const toggleRows = [
@@ -1624,15 +1957,41 @@ function showWishlistAllModal(onConfirm) {
     { label: 'Production inputs',      key: 'includeInputs' },
     { label: 'Worker consumables',     key: 'includeConsumables' },
   ];
-  toggleRows.forEach(({ label, key }, i) => {
+  toggleRows.forEach(({ label, key }) => {
     const row = document.createElement('div');
-    const isLast = i === toggleRows.length - 1;
-    row.style.cssText = `display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;${isLast ? '' : 'border-bottom:1px solid #12122a;'}`;
+    row.style.cssText = `display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;border-bottom:1px solid #12122a;`;
     const lbl = document.createElement('span'); lbl.style.color = '#6b6b8a'; lbl.textContent = label;
     const tog = buildMiniToggle(localState[key], val => { localState[key] = val; });
     row.append(lbl, tog);
     settingsBox.appendChild(row);
   });
+
+  // Panel wishlist toggles (mutually exclusive)
+  let addToPanelTog, panelOnlyTog;
+  const panelRows = [
+    { label: 'Add to panel',  key: 'addToPanel' },
+    { label: 'Panel only',    key: 'panelOnly'  },
+  ];
+  panelRows.forEach(({ label, key }, idx) => {
+    const row = document.createElement('div');
+    const isLast = idx === panelRows.length - 1;
+    row.style.cssText = `display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;${isLast ? '' : 'border-bottom:1px solid #12122a;'}`;
+    const lbl = document.createElement('span'); lbl.style.color = '#9090b0'; lbl.textContent = label;
+    const tog = buildMiniToggle(false, val => {
+      localState[key] = val;
+      // Mutually exclusive: turning one on turns the other off
+      if (val) {
+        const otherKey = key === 'addToPanel' ? 'panelOnly' : 'addToPanel';
+        const otherTog = key === 'addToPanel' ? panelOnlyTog : addToPanelTog;
+        localState[otherKey] = false;
+        otherTog?._setOff?.();
+      }
+    });
+    if (key === 'addToPanel') addToPanelTog = tog; else panelOnlyTog = tog;
+    row.append(lbl, tog);
+    settingsBox.appendChild(row);
+  });
+
   modal.appendChild(settingsBox);
 
   // ── Buttons ────────────────────────────────────────────────────────────────
@@ -1642,26 +2001,28 @@ function showWishlistAllModal(onConfirm) {
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = 'Cancel';
   cancelBtn.style.cssText = 'background:none;border:1px solid #2a2a4a;border-radius:5px;color:#6b6b8a;font-size:12px;padding:6px 14px;cursor:pointer;font-family:inherit;';
-  cancelBtn.addEventListener('click', () => backdrop.remove());
+  cancelBtn.addEventListener('click', () => { modal.remove(); _wishlistAllOpen = false; });
 
   const confirmBtn = document.createElement('button');
   confirmBtn.textContent = 'Create Wishlists \u2192';
   confirmBtn.style.cssText = 'background:#166534;border:none;border-radius:5px;color:#22c55e;font-size:12px;padding:6px 14px;cursor:pointer;font-family:inherit;font-weight:600;';
   confirmBtn.addEventListener('click', () => {
-    backdrop.remove();
+    modal.remove();
+    _wishlistAllOpen = false;
     onConfirm({
       bases:              allBases.filter(b => localBasesOn.has(String(b.id))),
+      targetDays:         localState.targetDays,
       includeInputs:      localState.includeInputs,
       includeConsumables: localState.includeConsumables,
       includeStock:       localState.includeStock,
+      addToPanel:         localState.addToPanel,
+      panelOnly:          localState.panelOnly,
     });
   });
 
   btnRow.append(cancelBtn, confirmBtn);
   modal.appendChild(btnRow);
-  backdrop.appendChild(modal);
-  backdrop.addEventListener('click', e => { if (e.target === backdrop) backdrop.remove(); });
-  document.body.appendChild(backdrop);
+  document.body.appendChild(modal);
 }
 
 // Delete All Wishlists — fetches then deletes each one
@@ -1788,6 +2149,14 @@ function buildMiniToggle(initialValue, onChange) {
   track.appendChild(knob);
   label.appendChild(input);
   label.appendChild(track);
+
+  // Programmatic off — used for mutually-exclusive toggle pairs
+  label._setOff = () => {
+    input.checked = false;
+    applyTrack(false);
+    applyKnob(false);
+  };
+
   return label;
 }
 
@@ -1807,9 +2176,7 @@ function buildSettingsPanel() {
   });
 
   // Title
-  const title = document.createElement('div');
-  title.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;';
-  title.textContent = 'Settings';
+  const title = mkLabel('Settings', 'margin-bottom:6px;');
   panel.appendChild(title);
 
   // ── API Key section ───────────────────────────────────────────────────────
@@ -1819,9 +2186,7 @@ function buildSettingsPanel() {
   const keyHeaderRow = document.createElement('div');
   keyHeaderRow.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:5px;';
 
-  const keyLabel = document.createElement('span');
-  keyLabel.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;';
-  keyLabel.textContent = 'API Key';
+  const keyLabel = mkLabel('API Key');
 
   const keyHelp = document.createElement('span');
   keyHelp.textContent = '?';
@@ -1903,9 +2268,7 @@ function buildSettingsPanel() {
     const hdr = document.createElement('div');
     hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 0 4px;cursor:pointer;';
 
-    const lbl = document.createElement('span');
-    lbl.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;';
-    lbl.textContent = labelText;
+    const lbl = mkLabel(labelText);
 
     const arrow = document.createElement('span');
     arrow.style.cssText = 'color:#6b6b8a;font-size:10px;';
@@ -2006,9 +2369,7 @@ function buildSettingsPanel() {
     const expRow = document.createElement('div');
     expRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:7px 0 5px;cursor:pointer;';
 
-    const expLabel = document.createElement('span');
-    expLabel.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;';
-    expLabel.textContent = `Bases (${_loadedHeaderBases.length})`;
+    const expLabel = mkLabel(`Bases (${_loadedHeaderBases.length})`);
 
     const expArrow = document.createElement('span');
     expArrow.style.cssText = 'color:#6b6b8a;font-size:10px;';
@@ -2080,9 +2441,7 @@ function buildSettingsPanel() {
   sepFeat.style.cssText = 'border-top:1px solid #1a1a30;margin:8px 0 0;';
   panel.appendChild(sepFeat);
 
-  const featTitle = document.createElement('div');
-  featTitle.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;padding:7px 0 5px;';
-  featTitle.textContent = 'Feature Visibility';
+  const featTitle = mkLabel('Feature Visibility', 'padding:7px 0 5px;');
   panel.appendChild(featTitle);
 
   const featToggles = [
@@ -2093,6 +2452,7 @@ function buildSettingsPanel() {
     { key: 'showSummary',     label: 'Summary panel' },
     { key: 'showAssets',      label: 'Cash & assets panel' },
     { key: 'showWishlist',    label: '1-click wishlisting' },
+    { key: 'showFlights',     label: 'Flight calculator' },
   ];
 
   for (const { key, label } of featToggles) {
@@ -2441,13 +2801,730 @@ function mkRow(label, value, valueCol) {
   return r;
 }
 
+function attachTooltip(el, buildFn) {
+  let tip = null;
+  el.addEventListener('mouseenter', () => {
+    tip = document.createElement('div');
+    tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+    if (buildFn(tip) === false) { tip = null; return; }
+    document.body.appendChild(tip);
+  });
+  el.addEventListener('mousemove', (e) => {
+    if (!tip) return;
+    tip.style.left = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8) + 'px';
+    tip.style.top  = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8) + 'px';
+  });
+  el.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
+}
+
+function mkLabel(text, extra) {
+  const d = document.createElement('div');
+  d.style.cssText = `color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;${extra ?? ''}`;
+  d.textContent = text;
+  return d;
+}
+
+function mkTipTitle(text) {
+  const d = document.createElement('div');
+  d.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;';
+  d.textContent = text;
+  return d;
+}
+
+// Creates a flex row: [icon] qtyStr (left)   valStr (right)
+function mkIconLine(name, qtyStr, valStr) {
+  const line = document.createElement('div');
+  line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
+  const left = document.createElement('div');
+  left.style.cssText = 'display:flex;align-items:center;gap:5px;';
+  const ic = makeIcon(name, 14);
+  if (ic) left.appendChild(ic);
+  const lbl = document.createElement('span');
+  lbl.style.color = '#c0c0da';
+  lbl.textContent = qtyStr;
+  left.appendChild(lbl);
+  line.appendChild(left);
+  if (valStr) {
+    const val = document.createElement('span');
+    val.style.cssText = 'color:#9090b0;white-space:nowrap;';
+    val.textContent = valStr;
+    line.appendChild(val);
+  }
+  return line;
+}
+
+// ── Flight panel ──────────────────────────────────────────────────────────────
+
+let _flightOpen = false;
+
+function openFlightPanel() {
+  closeAllPanels();
+  const gamedata  = _loadedHeaderGamedata;
+  const company   = _companyData;
+  const ships     = company?.ships ?? [];
+  const guildData = _guildData;
+
+  const panel = mkPanelBase(GT_FLIGHT_ID, true);
+  panel.appendChild(mkPanelTitle('Flight Calculator'));
+
+  if (!gamedata || !ships.length) {
+    const msg = document.createElement('div');
+    msg.style.cssText = 'color:#6b6b8a;font-style:italic;font-size:11px;';
+    msg.textContent = ships.length ? 'Gamedata not loaded.' : 'No ships found.';
+    panel.appendChild(msg);
+    document.body.appendChild(panel);
+    _flightOpen = true;
+    return;
+  }
+
+  const emitterMap = new Map((gamedata.shipEmitters ?? []).map(e => [e.type, e]));
+  const reactorMap = new Map((gamedata.shipReactors ?? []).map(r => [r.type, r]));
+  const matMap     = new Map((gamedata.materials    ?? []).map(m => [m.id, m]));
+
+  // Flat list of all planets with their coords for search
+  const allPlanets = [];
+  for (const sys of gamedata.systems ?? []) {
+    for (const p of sys.planets ?? []) {
+      if (p?.name) allPlanets.push(p);
+    }
+  }
+
+  const startBonus = companyStartingBonus(company?.fDate);
+
+  // Guild Flight Center level → +3% speed per level (may update async if _guildData not yet loaded)
+  let flightCenterLevel = (guildData?.projects ?? []).find(p => p.type === 3)?.level ?? 0;
+  let guildSpeedBonus   = 1 + flightCenterLevel * 0.03;
+
+  // Perk multipliers
+  const flightPerks     = calcFlightPerks(company, gamedata.perks);
+  const fuelSavingMult  = 1 + flightPerks.fuelSavingPct / 100;
+  const degradationMult = 1 + flightPerks.degradationPct / 100;
+  const perkSpeedMult   = 1 + flightPerks.speedPct / 100;
+
+  // Combined speed multiplier: starting bonus × guild flight center × perk speed
+  let totalSpeedMult = startBonus * guildSpeedBonus * perkSpeedMult;
+
+  const REPAIR_KIT_MAT_ID = 113;
+
+  // ── Ship list ──────────────────────────────────────────────────────────────
+  const shipLabel = mkLabel('Select Ship', 'margin-bottom:4px;');
+  panel.appendChild(shipLabel);
+
+  let selectedShip = null;
+  let selectedCargoWeight = 0;
+
+  // Sort ships: docked first (alphabetical), then in-flight (alphabetical)
+  const sortedShips = [...ships].sort((a, b) => {
+    const af = !!a.flight, bf = !!b.flight;
+    if (af !== bf) return af ? 1 : -1;
+    return (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true });
+  });
+
+  const shipSelect = document.createElement('select');
+  shipSelect.style.cssText = 'width:100%;background:#0a0a18;border:1px solid #2a2a4a;border-radius:4px;color:#c0c0da;font-size:11px;padding:5px 8px;font-family:inherit;box-sizing:border-box;margin-bottom:8px;cursor:pointer;';
+
+  const placeholderOpt = document.createElement('option');
+  placeholderOpt.value = '';
+  placeholderOpt.textContent = 'Choose a ship…';
+  placeholderOpt.disabled = true;
+  placeholderOpt.selected = true;
+  shipSelect.appendChild(placeholderOpt);
+
+  for (const ship of sortedShips) {
+    const inFlight = !!ship.flight;
+    const planet   = getPlanetById(gamedata, ship.pId);
+    const locName  = planet?.name ?? `ID ${ship.pId}`;
+    const opt = document.createElement('option');
+    opt.value = ship.id ?? ship.name;
+    opt.textContent = inFlight ? `${ship.name} ✈  (${locName})` : `${ship.name}  (${locName})`;
+    opt.disabled = inFlight;
+    opt.dataset.shipName = ship.name;
+    shipSelect.appendChild(opt);
+  }
+
+  shipSelect.addEventListener('change', async () => {
+    const ship = sortedShips.find(s => (s.id ?? s.name) == shipSelect.value);
+    if (!ship) return;
+    selectedShip = ship;
+    selectedCargoWeight = 0;
+    if (ship.warehouseId) {
+      const wh = await requestGTLocalAPI('getWarehouse', { warehouseId: ship.warehouseId });
+      for (const m of wh?.mats ?? []) {
+        const mat = matMap.get(Number(m.id));
+        selectedCargoWeight += (m.am ?? 0) * (mat?.weight ?? 0);
+      }
+    }
+    updateInfo();
+    recalc();
+  });
+
+  panel.appendChild(shipSelect);
+  panel.appendChild(mkSep());
+
+  // ── Ship info ──────────────────────────────────────────────────────────────
+  const infoBox = document.createElement('div');
+  infoBox.style.cssText = 'margin-bottom:8px;display:none;';
+
+  const infoRows = {};
+  for (const key of ['location','fuel','cargo','condition','bonus']) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;padding:1px 0;';
+    const lbl = document.createElement('span'); lbl.style.color = '#6b6b8a';
+    const val = document.createElement('span'); val.style.color = '#c0c0da';
+    row.appendChild(lbl); row.appendChild(val);
+    infoBox.appendChild(row);
+    infoRows[key] = { lbl, val };
+  }
+  infoRows.location.lbl.textContent  = 'Location';
+  infoRows.fuel.lbl.textContent      = 'Fuel';
+  infoRows.cargo.lbl.textContent     = 'Cargo';
+  infoRows.condition.lbl.textContent = 'Condition';
+  infoRows.bonus.lbl.textContent     = 'Speed bonus';
+
+  function updateInfo() {
+    if (!selectedShip) { infoBox.style.display = 'none'; return; }
+    infoBox.style.display = '';
+    const planet  = getPlanetById(gamedata, selectedShip.pId);
+    const bp      = selectedShip.blueprint;
+    const emitter = emitterMap.get(bp.emitterType);
+    const reactor = reactorMap.get(bp.reactorType);
+    const cfg     = (emitter && reactor) ? calcShipConfig(bp, emitter, reactor) : null;
+    const tankCap = cfg?.fuelCapacity ?? selectedShip.fuelCapacity ?? 0;
+    infoRows.location.val.textContent  = planet?.name ?? `ID ${selectedShip.pId}`;
+    infoRows.fuel.val.textContent      = `${(selectedShip.fuel ?? 0).toLocaleString()} / ${tankCap.toLocaleString()}`;
+    const effectiveCap = Math.round((bp.cargoCapacity ?? 0) * (1 + flightPerks.cargoCapPct / 100));
+    infoRows.cargo.val.textContent     = `${Math.round(selectedCargoWeight).toLocaleString()} / ${effectiveCap.toLocaleString()} t`;
+    infoRows.condition.val.textContent = `${Math.round((selectedShip.condition ?? 1) * 100)}%`;
+    const totalBonusPct = Math.round((totalSpeedMult - 1) * 100);
+    infoRows.bonus.val.textContent = totalBonusPct !== 0 ? `+${totalBonusPct}%` : 'None';
+  }
+
+  panel.appendChild(infoBox);
+
+  // ── Destination search ─────────────────────────────────────────────────────
+  const destLabel = mkLabel('Destination', 'margin-bottom:4px;');
+  panel.appendChild(destLabel);
+
+  const destWrap = document.createElement('div');
+  destWrap.style.cssText = 'position:relative;margin-bottom:8px;';
+
+  const destInput = document.createElement('input');
+  destInput.type = 'text';
+  destInput.placeholder = 'Search planet\u2026';
+  destInput.style.cssText = 'width:100%;background:#0a0a18;border:1px solid #2a2a4a;border-radius:4px;color:#c0c0da;font-size:11px;padding:5px 8px;font-family:inherit;box-sizing:border-box;';
+
+  const destDropdown = document.createElement('div');
+  destDropdown.style.cssText = 'position:absolute;top:100%;left:0;right:0;background:#0d0d20;border:1px solid #2a2a4a;border-top:none;border-radius:0 0 4px 4px;max-height:150px;overflow-y:auto;z-index:10;display:none;';
+
+  let selectedDestPlanet = null;
+
+  destInput.addEventListener('input', () => {
+    const q = destInput.value.trim().toLowerCase();
+    destDropdown.innerHTML = '';
+    selectedDestPlanet = null;
+    recalc();
+    if (!q) { destDropdown.style.display = 'none'; return; }
+
+    const matches = allPlanets.filter(p => p.name.toLowerCase().includes(q)).slice(0, 25);
+    if (!matches.length) { destDropdown.style.display = 'none'; return; }
+
+    destDropdown.style.display = '';
+    for (const planet of matches) {
+      const opt = document.createElement('div');
+      opt.style.cssText = 'padding:4px 8px;font-size:11px;color:#c0c0da;cursor:pointer;';
+      opt.textContent = planet.name;
+      opt.addEventListener('mouseenter', () => { opt.style.background = '#111128'; });
+      opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
+      opt.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        destInput.value = planet.name;
+        selectedDestPlanet = planet;
+        destDropdown.style.display = 'none';
+        recalc();
+      });
+      destDropdown.appendChild(opt);
+    }
+  });
+  destInput.addEventListener('blur', () => { setTimeout(() => { destDropdown.style.display = 'none'; }, 150); });
+
+  destWrap.appendChild(destInput);
+  destWrap.appendChild(destDropdown);
+  panel.appendChild(destWrap);
+  panel.appendChild(mkSep());
+
+  // ── Results ────────────────────────────────────────────────────────────────
+  const resultsBox = document.createElement('div');
+  resultsBox.style.cssText = 'display:none;';
+
+  // "Best Flight" header
+  const bestHeader = mkLabel('Best Flight', 'margin-bottom:6px;');
+  resultsBox.appendChild(bestHeader);
+
+  // Slider visual
+  const sliderBlock = document.createElement('div');
+  sliderBlock.style.cssText = 'margin-bottom:8px;';
+
+  const sliderLabelRow = document.createElement('div');
+  sliderLabelRow.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px;';
+  const sliderEffLabel = document.createElement('span'); sliderEffLabel.style.color = '#6b6b8a'; sliderEffLabel.textContent = 'Efficiency';
+  const sliderEffVal   = document.createElement('span'); sliderEffVal.style.cssText = 'color:#c0c0da;font-weight:600;';
+  const sliderPowLabel = document.createElement('span'); sliderPowLabel.style.color = '#6b6b8a'; sliderPowLabel.textContent = 'Power';
+  const sliderPowVal   = document.createElement('span'); sliderPowVal.style.cssText = 'color:#c0c0da;font-weight:600;';
+  sliderLabelRow.appendChild(sliderEffLabel);
+  sliderLabelRow.appendChild(sliderEffVal);
+  sliderLabelRow.appendChild(sliderPowLabel);
+  sliderLabelRow.appendChild(sliderPowVal);
+
+  const sliderTrack = document.createElement('div');
+  sliderTrack.style.cssText = 'position:relative;height:6px;background:#1a1a30;border-radius:3px;overflow:visible;';
+
+  const sliderFill  = document.createElement('div');
+  sliderFill.style.cssText = 'position:absolute;top:0;left:0;height:100%;border-radius:3px;transition:width .15s;background:#6d28d9;';
+
+  const sliderThumb = document.createElement('div');
+  sliderThumb.style.cssText = 'position:absolute;top:50%;width:10px;height:10px;border-radius:50%;background:#6d28d9;transform:translate(-50%,-50%);transition:left .15s;border:2px solid #0a0a18;';
+
+  const sliderEndLabels = document.createElement('div');
+  sliderEndLabels.style.cssText = 'display:flex;justify-content:space-between;font-size:9px;color:#3a3a5a;margin-top:3px;';
+  sliderEndLabels.innerHTML = '<span>Eff ◀</span><span>▶ Pwr</span>';
+
+  sliderTrack.appendChild(sliderFill);
+  sliderTrack.appendChild(sliderThumb);
+  sliderBlock.appendChild(sliderLabelRow);
+  sliderBlock.appendChild(sliderTrack);
+  sliderBlock.appendChild(sliderEndLabels);
+  resultsBox.appendChild(sliderBlock);
+
+  // Stat rows: distance, time, total cost, cost/ton, fuel, durability
+  const resultRows = {};
+  for (const key of ['distance','time','totalCost','costPerTon','fuel','durability']) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;padding:1px 0;';
+    const lbl = document.createElement('span'); lbl.style.color = '#6b6b8a';
+    const val = document.createElement('span'); val.style.cssText = 'color:#c0c0da;text-align:right;cursor:default;';
+    row.appendChild(lbl); row.appendChild(val);
+    resultsBox.appendChild(row);
+    resultRows[key] = { lbl, val };
+  }
+  resultRows.distance.lbl.textContent   = 'Distance';
+  resultRows.time.lbl.textContent       = 'Travel time';
+  resultRows.totalCost.lbl.textContent  = 'Total cost';
+  resultRows.costPerTon.lbl.textContent = 'Cost per ton';
+  resultRows.fuel.lbl.textContent       = 'Fuel used';
+  resultRows.durability.lbl.textContent = 'Durability lost';
+
+  const fuelWarning = document.createElement('div');
+  fuelWarning.style.cssText = `color:${COL_CRIT};font-size:11px;padding:4px 0;display:none;font-weight:600;`;
+  fuelWarning.textContent = '⚠ Insufficient fuel for this journey';
+
+  panel.appendChild(resultsBox);
+  panel.appendChild(fuelWarning);
+
+  function recalc() {
+    if (!selectedShip || !selectedDestPlanet) { resultsBox.style.display = 'none'; fuelWarning.style.display = 'none'; return; }
+
+    const srcPlanet = getPlanetById(gamedata, selectedShip.pId);
+    if (!srcPlanet) { resultsBox.style.display = 'none'; return; }
+
+    // Planet-level distance; raw coords are in units of 1/45 ly
+    const dx   = srcPlanet.x - selectedDestPlanet.x;
+    const dy   = srcPlanet.y - selectedDestPlanet.y;
+    const dist = Math.sqrt(dx * dx + dy * dy) / 45;
+
+    const bp      = selectedShip.blueprint;
+    const emitter = emitterMap.get(bp.emitterType);
+    const reactor = reactorMap.get(bp.reactorType);
+    if (!emitter || !reactor) { resultsBox.style.display = 'none'; return; }
+
+    const cfg             = calcShipConfig(selectedShip.blueprint, emitter, reactor);
+    const { weightEmpty } = cfg;
+    const repairKitsTotal = Math.ceil(weightEmpty / 10);
+    const fuelPrice       = effectivePrice(reactor.fuelId);
+    const repairKitPrice  = effectivePrice(REPAIR_KIT_MAT_ID);
+    const fuelMat         = matMap.get(reactor.fuelId);
+    const effectiveCargo  = selectedShip.blueprint.cargoCapacity * (1 + flightPerks.cargoCapPct / 100);
+
+    const flightOpts = { fuelSavingMult, degradationMult, fuelPrice, repairKitPrice, repairKitsTotal, effectiveCargo };
+
+    console.group('[GT Flight] recalc debug');
+    console.log('Blueprint:', JSON.parse(JSON.stringify(selectedShip.blueprint)));
+    console.log('Emitter:', emitter);
+    console.log('Reactor:', reactor);
+    console.log('Derived config:', cfg);
+    console.log('Distance (ly):', dist.toFixed(3));
+    console.log('Cargo weight (t):', selectedCargoWeight, '| effectiveCargo:', effectiveCargo);
+    console.log('totalSpeedMult:', totalSpeedMult, '| startBonus:', startBonus, '| guildSpeedBonus:', guildSpeedBonus, '| perkSpeedMult:', perkSpeedMult);
+    console.log('fuelPrice:', fuelPrice, '| fuelId:', reactor.fuelId, '| repairKitPrice:', repairKitPrice, '| repairKitsTotal:', repairKitsTotal);
+    console.log('flightPerks:', flightPerks);
+    console.groupEnd();
+
+    // Find pf that minimises (fuelCost + repairCost) × time / cargo
+    const optPF = findOptimalFlightPF(dist, selectedShip, selectedCargoWeight, emitter, reactor, totalSpeedMult, flightOpts);
+    console.log('[GT Flight] optPF:', optPF.toFixed(2));
+
+    const flightResult = calcFlight(
+      dist, selectedShip, selectedCargoWeight, emitter, reactor, totalSpeedMult, optPF, flightOpts
+    );
+    const { timeHours, fuelUsed, weightRatio, powerFraction, condWear, tankCapacity } = flightResult;
+    console.log('[GT Flight] result:', { timeHours: timeHours.toFixed(3), fuelUsed: fuelUsed.toFixed(2), weightRatio: weightRatio.toFixed(3), powerFraction: powerFraction.toFixed(2), condWear: condWear.toFixed(4), tankCapacity });
+
+    const fuelCost       = fuelUsed * fuelPrice;
+    const repairKitsUsed = repairKitsTotal * condWear;
+    const repairCost     = repairKitsUsed * repairKitPrice;
+    const totalCost      = fuelCost + repairCost;
+    const hasFuel        = (selectedShip.fuel ?? 0) >= Math.ceil(fuelUsed);
+    const condWearPct    = (condWear * 100).toFixed(1);
+    const costPerTon     = effectiveCargo > 0 ? totalCost / effectiveCargo : 0;
+
+    // Slider: efficiency = 120 − power, sliderPos = (power−20)/80
+    const powerPct  = Math.round(powerFraction * 100);
+    const effPct    = 120 - powerPct;
+    const sliderPos = Math.max(0, Math.min(1, (powerPct - 20) / 80));
+    sliderEffVal.textContent = `${effPct}%`;
+    sliderPowVal.textContent = `${powerPct}%`;
+    sliderFill.style.width   = `${sliderPos * 100}%`;
+    sliderThumb.style.left   = `${sliderPos * 100}%`;
+
+    resultRows.distance.val.textContent   = `${dist.toFixed(1)} ly`;
+    resultRows.time.val.textContent       = fmtFlightTime(timeHours);
+    resultRows.totalCost.val.textContent  = totalCost > 0 ? fmtCr(totalCost) : '—';
+    resultRows.costPerTon.val.textContent = costPerTon > 0 ? fmtCr(costPerTon) : '—';
+
+    // Fuel row with hover tooltip
+    resultRows.fuel.val.style.color   = hasFuel ? '#c0c0da' : COL_CRIT;
+    resultRows.fuel.val.textContent   = `${Math.ceil(fuelUsed).toLocaleString()} / ${tankCapacity.toLocaleString()} ${fuelMat?.sName ?? ''}`;
+    resultRows.fuel.val.title         = fuelPrice > 0
+      ? `${fuelMat?.sName ?? 'Fuel'} × ${Math.ceil(fuelUsed).toLocaleString()} = ${fmtCr(fuelCost)}`
+      : '';
+
+    // Durability row with hover tooltip
+    resultRows.durability.val.textContent = `${condWearPct}%`;
+    resultRows.durability.val.title       = repairKitPrice > 0
+      ? `Repair Kit × ${Math.ceil(repairKitsUsed).toLocaleString()} = ${fmtCr(repairCost)}`
+      : '';
+
+    fuelWarning.style.display = hasFuel ? 'none' : '';
+    resultsBox.style.display  = '';
+  }
+
+  document.body.appendChild(panel);
+  _flightOpen = true;
+
+  // Ensure price and guild data are loaded, then re-run recalc.
+  // avg prices cover all materials (fuel, repair kits, etc.).
+  const pendingFetches = [];
+  if (!_priceMap)    pendingFetches.push(fetchMatPrices());
+  if (!_avgPriceMap) pendingFetches.push(fetchAvgPrices());
+  if (!_guildData)   pendingFetches.push(fetchGuildData());
+  if (pendingFetches.length) {
+    Promise.all(pendingFetches).then(() => {
+      // Update guild-derived values now that data has arrived
+      const latestFCLevel = (_guildData?.projects ?? []).find(p => p.type === 3)?.level ?? 0;
+      if (latestFCLevel !== flightCenterLevel) {
+        flightCenterLevel = latestFCLevel;
+        guildSpeedBonus   = 1 + flightCenterLevel * 0.03;
+        totalSpeedMult    = startBonus * guildSpeedBonus * perkSpeedMult;
+      }
+      recalc();
+    }).catch(() => {});
+  }
+}
+
+function toggleFlightPanel() {
+  if (_flightOpen) { document.getElementById(GT_FLIGHT_ID)?.remove(); _flightOpen = false; }
+  else openFlightPanel();
+}
+
 let _cashOpen = false;
 
 function closeAllPanels() {
-  document.getElementById(GT_DETAIL_ID)?.remove();   _detailBaseId = null;
-  document.getElementById(GT_SETTINGS_ID)?.remove(); _settingsOpen = false;
-  document.getElementById(GT_CASH_ID)?.remove();     _cashOpen     = false;
-  document.getElementById(GT_SUMMARY_ID)?.remove();  _summaryOpen  = false;
+  document.getElementById(GT_DETAIL_ID)?.remove();        _detailBaseId    = null;
+  document.getElementById(GT_SETTINGS_ID)?.remove();      _settingsOpen    = false;
+  document.getElementById(GT_CASH_ID)?.remove();          _cashOpen        = false;
+  document.getElementById(GT_SUMMARY_ID)?.remove();       _summaryOpen     = false;
+  document.getElementById(GT_FLIGHT_ID)?.remove();        _flightOpen      = false;
+  document.getElementById(GT_WISHLIST_ALL_ID)?.remove();  _wishlistAllOpen = false;
+}
+
+// ── Panel Wishlist ─────────────────────────────────────────────────────────────
+
+async function _showImportWishlistPicker(panel) {
+  // Remove existing picker if open (toggle)
+  const existing = panel.querySelector('[data-wl-picker]');
+  if (existing) { existing.remove(); return; }
+
+  const picker = document.createElement('div');
+  picker.setAttribute('data-wl-picker', '1');
+  picker.style.cssText = 'margin:0 10px 6px;background:#0a0a18;border:1px solid #2a2a4a;border-radius:6px;overflow:hidden;';
+
+  const loading = document.createElement('div');
+  loading.style.cssText = 'color:#6b6b8a;font-size:11px;padding:8px 10px;font-style:italic;';
+  loading.textContent = 'Loading\u2026';
+  picker.appendChild(loading);
+
+  // Insert picker right after the header (index 0)
+  panel.children[0].after(picker);
+
+  const lists = await requestGTLocalAPI('getWishlists');
+  loading.remove();
+
+  const arr = lists?.wishlists ?? (Array.isArray(lists) ? lists : null);
+  if (!arr?.length) {
+    const none = document.createElement('div');
+    none.style.cssText = 'color:#6b6b8a;font-size:11px;padding:8px 10px;';
+    none.textContent = 'No wishlists found.';
+    picker.appendChild(none);
+    return;
+  }
+
+  // Filter out client-only empty wishlists and planet wishlists with no mats
+  const usable = arr.filter(w => !w.isClientOnly && w.mats?.length);
+
+  if (!usable.length) {
+    const none = document.createElement('div');
+    none.style.cssText = 'color:#6b6b8a;font-size:11px;padding:8px 10px;';
+    none.textContent = 'No wishlists with items found.';
+    picker.appendChild(none);
+    return;
+  }
+
+  const matMap = new Map(((_loadedHeaderGamedata?.materials) ?? []).map(m => [m.id, m.sName ?? `mat${m.id}`]));
+
+  for (const wl of usable) {
+    const label = wl.title ?? `Wishlist #${wl.id}`;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:5px 10px;cursor:pointer;border-bottom:1px solid #12122a;font-size:11px;';
+    row.addEventListener('mouseenter', () => { row.style.background = '#111128'; });
+    row.addEventListener('mouseleave', () => { row.style.background = ''; });
+
+    const nameLbl = document.createElement('span');
+    nameLbl.style.cssText = 'color:#c0c0da;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    nameLbl.textContent = label;
+
+    const countLbl = document.createElement('span');
+    countLbl.style.cssText = 'color:#6b6b8a;font-size:10px;margin-left:6px;white-space:nowrap;';
+    countLbl.textContent = `${wl.mats.length} items`;
+
+    row.appendChild(nameLbl);
+    row.appendChild(countLbl);
+
+    row.addEventListener('click', async () => {
+      picker.remove();
+      const key = `wl_${wl.id}`;
+      const data = await loadPanelWishlist();
+      if (!data[key]) data[key] = { baseName: label, items: [] };
+      for (const m of wl.mats) {
+        const id   = Number(m.id ?? m.matId);
+        const am   = Number(m.am ?? m.amount ?? 0);
+        const name = matMap.get(id) ?? `mat${id}`;
+        const existing2 = data[key].items.find(i => i.id === id);
+        if (existing2) existing2.am += am;
+        else data[key].items.push({ id, name, am });
+      }
+      savePanelWishlist(data);
+      _renderPanelWishlistContent(panel, data);
+    });
+
+    picker.appendChild(row);
+  }
+}
+
+function _renderPanelWishlistContent(panel, data) {
+  // Remove existing content below header
+  const header = panel.querySelector('[data-pwh]');
+  while (panel.lastChild !== header) panel.removeChild(panel.lastChild);
+
+  const keys = Object.keys(data);
+
+  if (!keys.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'color:#6b6b8a;font-style:italic;font-size:11px;padding:6px 12px 10px;';
+    empty.textContent = 'No items \u2014 use Wishlist All or + to import.';
+    panel.appendChild(empty);
+    _updatePanelWishlistBtn();
+    return;
+  }
+
+  // Clear all button
+  const clearAllBtn = document.createElement('div');
+  clearAllBtn.style.cssText = 'margin:0 10px 4px;padding:4px 8px;background:#12122a;border:1px solid #1a1a30;border-radius:4px;color:#6b6b8a;font-size:10px;text-align:center;cursor:pointer;';
+  clearAllBtn.textContent = 'Clear All';
+  clearAllBtn.addEventListener('mouseenter', () => { clearAllBtn.style.color = '#ef4444'; clearAllBtn.style.borderColor = '#ef4444'; });
+  clearAllBtn.addEventListener('mouseleave', () => { clearAllBtn.style.color = '#6b6b8a'; clearAllBtn.style.borderColor = '#1a1a30'; });
+  clearAllBtn.addEventListener('click', () => { clearPanelAll(); _renderPanelWishlistContent(panel, {}); });
+  panel.appendChild(clearAllBtn);
+
+  for (const key of keys) {
+    const entry = data[key];
+
+    // Base header
+    const baseRow = document.createElement('div');
+    baseRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px 3px;position:relative;';
+    const baseLbl = mkLabel(entry.baseName);
+    const clearBaseBtn = document.createElement('span');
+    clearBaseBtn.style.cssText = 'color:#6b6b8a;font-size:11px;cursor:pointer;opacity:0;transition:opacity 0.15s;';
+    clearBaseBtn.textContent = '×';
+    clearBaseBtn.title = 'Clear base';
+    baseRow.addEventListener('mouseenter', () => { clearBaseBtn.style.opacity = '1'; });
+    baseRow.addEventListener('mouseleave', () => { clearBaseBtn.style.opacity = '0'; });
+    clearBaseBtn.addEventListener('click', async () => {
+      await clearPanelBase(key);
+      const fresh = await loadPanelWishlist();
+      _renderPanelWishlistContent(panel, fresh);
+    });
+    baseRow.appendChild(baseLbl);
+    baseRow.appendChild(clearBaseBtn);
+    panel.appendChild(baseRow);
+
+    // Items
+    for (const item of entry.items) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:5px;padding:3px 12px;position:relative;';
+      row.addEventListener('mouseenter', () => { row.style.background = '#111128'; clearBtn.style.opacity = '1'; });
+      row.addEventListener('mouseleave', () => { row.style.background = ''; clearBtn.style.opacity = '0'; });
+
+      const ic = makeIcon(item.name, 14);
+      if (ic) row.appendChild(ic);
+
+      const nameLbl = document.createElement('span');
+      nameLbl.style.cssText = 'flex:1;font-size:11px;color:#c0c0da;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      nameLbl.textContent = item.name;
+
+      const amtLbl = document.createElement('span');
+      amtLbl.style.cssText = 'font-size:11px;color:#9090b0;white-space:nowrap;';
+      amtLbl.textContent = `x${item.am.toLocaleString()}`;
+
+      const clearBtn = document.createElement('span');
+      clearBtn.style.cssText = 'color:#6b6b8a;font-size:11px;cursor:pointer;opacity:0;transition:opacity 0.15s;margin-left:2px;flex-shrink:0;';
+      clearBtn.textContent = '×';
+      clearBtn.title = 'Remove';
+      clearBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await clearPanelItem(key, item.id);
+        const fresh = await loadPanelWishlist();
+        _renderPanelWishlistContent(panel, fresh);
+      });
+
+      row.appendChild(nameLbl);
+      row.appendChild(amtLbl);
+      row.appendChild(clearBtn);
+      panel.appendChild(row);
+    }
+
+    // Divider
+    const sep = document.createElement('div');
+    sep.style.cssText = 'height:1px;background:#12122a;margin:4px 10px;';
+    panel.appendChild(sep);
+  }
+
+  _updatePanelWishlistBtn();
+}
+
+function _updatePanelWishlistBtn() {
+  const btn = document.getElementById(GT_PANEL_WISHLIST_BTN_ID);
+  if (!btn) return;
+  loadPanelWishlist().then(data => {
+    const count = Object.values(data).reduce((s, b) => s + b.items.length, 0);
+    btn.style.display = _panelWishlistOpen ? 'none' : '';
+    const badge = btn.querySelector('[data-badge]');
+    if (badge) {
+      badge.textContent = count > 0 ? count : '';
+      badge.style.display = count > 0 ? '' : 'none';
+    }
+  });
+}
+
+async function openPanelWishlist() {
+  if (_panelWishlistOpen) return;
+  _panelWishlistOpen = true;
+
+  const data = await loadPanelWishlist();
+  const savedPos = await new Promise(r => chrome.storage.local.get(['gtPanelWishlistPos'], ({ gtPanelWishlistPos }) => r(gtPanelWishlistPos ?? null)));
+
+  const panel = document.createElement('div');
+  panel.id = GT_PANEL_WISHLIST_ID;
+  panel.style.cssText = [
+    'position:fixed',
+    savedPos ? `left:${savedPos.x}px;top:${savedPos.y}px` : 'right:270px;top:80px',
+    'width:260px',
+    'max-height:70vh',
+    'overflow-y:auto',
+    'background:#0d0d20',
+    'border:1px solid #1a1a38',
+    'border-radius:8px',
+    'font-family:system-ui,sans-serif',
+    'font-size:12px',
+    'color:#d8d8f0',
+    'box-shadow:0 4px 24px rgba(0,0,0,0.7)',
+    'z-index:2147483641',
+    'user-select:none',
+  ].join(';');
+
+  // Header (drag handle)
+  const hdr = document.createElement('div');
+  hdr.setAttribute('data-pwh', '1');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid #1a1a38;cursor:grab;background:#0a0a18;border-radius:8px 8px 0 0;flex-shrink:0;';
+
+  const titleLbl = document.createElement('span');
+  titleLbl.style.cssText = 'flex:1;font-size:12px;font-weight:600;color:#d8d8f0;';
+  titleLbl.textContent = 'Wishlist Panel';
+
+  const importHdrBtn = document.createElement('span');
+  importHdrBtn.style.cssText = 'cursor:pointer;font-size:16px;color:#6b6b8a;padding:0 2px;line-height:1;font-weight:400;';
+  importHdrBtn.textContent = '+';
+  importHdrBtn.title = 'Import wishlist';
+  importHdrBtn.addEventListener('click', (e) => { e.stopPropagation(); _showImportWishlistPicker(panel); });
+  importHdrBtn.addEventListener('mouseenter', () => { importHdrBtn.style.color = '#a78bfa'; });
+  importHdrBtn.addEventListener('mouseleave', () => { importHdrBtn.style.color = '#6b6b8a'; });
+
+  const closeBtn = document.createElement('span');
+  closeBtn.style.cssText = 'cursor:pointer;font-size:14px;color:#6b6b8a;padding:0 2px;line-height:1;';
+  closeBtn.textContent = '\u00d7';
+  closeBtn.title = 'Close';
+  closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePanelWishlist(); });
+
+  hdr.appendChild(titleLbl);
+  hdr.appendChild(importHdrBtn);
+  hdr.appendChild(closeBtn);
+  panel.appendChild(hdr);
+
+  // Drag logic
+  let dragOffX = 0, dragOffY = 0;
+  function onDragMove(e) {
+    panel.style.left  = (e.clientX - dragOffX) + 'px';
+    panel.style.top   = (e.clientY - dragOffY) + 'px';
+    panel.style.right = 'auto';
+  }
+  function onDragUp() {
+    document.removeEventListener('mousemove', onDragMove);
+    document.removeEventListener('mouseup',   onDragUp);
+    hdr.style.cursor = 'grab';
+    chrome.storage.local.set({ gtPanelWishlistPos: { x: panel.offsetLeft, y: panel.offsetTop } });
+  }
+  hdr.addEventListener('mousedown', (e) => {
+    if (e.target === closeBtn || e.target === importHdrBtn) return;
+    dragOffX = e.clientX - panel.getBoundingClientRect().left;
+    dragOffY = e.clientY - panel.getBoundingClientRect().top;
+    hdr.style.cursor = 'grabbing';
+    document.addEventListener('mousemove', onDragMove);
+    document.addEventListener('mouseup',   onDragUp);
+  });
+
+  document.body.appendChild(panel);
+  _panelWishlistOpen = true;
+  _renderPanelWishlistContent(panel, data);
+  _updatePanelWishlistBtn();
+}
+
+function closePanelWishlist() {
+  document.getElementById(GT_PANEL_WISHLIST_ID)?.remove();
+  _panelWishlistOpen = false;
+  _updatePanelWishlistBtn();
+}
+
+function togglePanelWishlist() {
+  if (_panelWishlistOpen) closePanelWishlist();
+  else openPanelWishlist();
 }
 
 async function openCashPanel() {
@@ -2477,9 +3554,7 @@ async function openCashPanel() {
   const bases = sortBases(_loadedHeaderBases ?? []);
   let totalInv = 0;
   if (bases.length && _priceMap) {
-    const subTitle = document.createElement('div');
-    subTitle.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:4px 0 4px;';
-    subTitle.textContent = 'Base Inventory';
+    const subTitle = mkLabel('Base Inventory', 'margin:4px 0 4px;');
     panel.appendChild(subTitle);
 
     for (const base of bases) {
@@ -2502,42 +3577,11 @@ async function openCashPanel() {
 
       if (breakdown.length) {
         row.style.cursor = 'default';
-        let tip = null;
-        row.addEventListener('mouseenter', () => {
-          tip = document.createElement('div');
-          tip.style.cssText = [
-            'position:fixed', 'z-index:2147483647',
-            'background:#0d0d20', 'border:1px solid #2a2a4a', 'border-radius:6px',
-            'padding:8px 10px', 'font-size:11px', 'color:#b0b0cc',
-            'pointer-events:none', 'white-space:nowrap',
-            'box-shadow:0 4px 12px rgba(0,0,0,0.6)',
-          ].join(';');
+        attachTooltip(row, tip => {
           for (const item of breakdown) {
-            const line = document.createElement('div');
-            line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
-            const left = document.createElement('div');
-            left.style.cssText = 'display:flex;align-items:center;gap:5px;';
-            const icon = makeIcon(item.name, 14);
-            if (icon) left.appendChild(icon);
-            const lbl = document.createElement('span');
-            lbl.style.color = '#c0c0da';
-            lbl.textContent = `${item.name} x${item.qty.toLocaleString()}`;
-            left.appendChild(lbl);
-            const val2 = document.createElement('span');
-            val2.style.cssText = 'color:#9090b0;white-space:nowrap;';
-            val2.textContent = `@ ${fmtCr(item.price)} ($${Math.round(item.lineVal).toLocaleString()})`;
-            line.appendChild(left); line.appendChild(val2);
-            tip.appendChild(line);
+            tip.appendChild(mkIconLine(item.name, `${item.name} x${item.qty.toLocaleString()}`, `@ ${fmtCr(item.price)} ($${Math.round(item.lineVal).toLocaleString()})`));
           }
-          document.body.appendChild(tip);
         });
-        row.addEventListener('mousemove', (e) => {
-          if (!tip) return;
-          const x = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8);
-          const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
-          tip.style.left = x + 'px'; tip.style.top = y + 'px';
-        });
-        row.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
       }
 
       panel.appendChild(row);
@@ -2549,9 +3593,7 @@ async function openCashPanel() {
   let exchangeListingsVal = 0;
   const listings = company?.exchangeListings ?? company?.listings ?? company?.exchange?.listings ?? [];
   if (listings.length && _priceMap) {
-    const exTitle = document.createElement('div');
-    exTitle.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:4px 0 4px;';
-    exTitle.textContent = 'Exchange Listings';
+    const exTitle = mkLabel('Exchange Listings', 'margin:4px 0 4px;');
     panel.appendChild(exTitle);
     for (const l of listings) {
       const matId = Number(l.matId ?? l.id);
@@ -2588,34 +3630,12 @@ async function openCashPanel() {
 
       const row = mkRow('Exchange Warehouse', fmtCr(exchangeWarehouseVal));
       row.style.cursor = 'default';
-      let tip = null;
-      row.addEventListener('mouseenter', () => {
-        tip = document.createElement('div');
-        tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+      attachTooltip(row, tip => {
         for (const m of valued) {
-          const line = document.createElement('div');
-          line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
-          const left = document.createElement('div');
-          left.style.cssText = 'display:flex;align-items:center;gap:5px;';
-          const ic = makeIcon(m.name, 14);
-          if (ic) left.appendChild(ic);
-          const lbl = document.createElement('span'); lbl.style.color = '#c0c0da';
-          lbl.textContent = `${m.name} x${m.qty.toLocaleString()}`;
-          left.appendChild(lbl);
-          const val = document.createElement('span'); val.style.color = '#9090b0';
-          val.textContent = m.price > 0 ? `@ ${fmtCr(m.price)} ($${Math.round(m.lineVal).toLocaleString()})` : m.qty.toLocaleString();
-          line.appendChild(left); line.appendChild(val);
-          tip.appendChild(line);
+          const valStr = m.price > 0 ? `@ ${fmtCr(m.price)} ($${Math.round(m.lineVal).toLocaleString()})` : null;
+          tip.appendChild(mkIconLine(m.name, `${m.name} x${m.qty.toLocaleString()}`, valStr));
         }
-        document.body.appendChild(tip);
       });
-      row.addEventListener('mousemove', (e) => {
-        if (!tip) return;
-        const x = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8);
-        const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
-        tip.style.left = x + 'px'; tip.style.top = y + 'px';
-      });
-      row.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
       panel.appendChild(row);
       panel.appendChild(mkSep());
     }
@@ -2682,34 +3702,12 @@ async function openCashPanel() {
         shipRow.appendChild(sLbl); shipRow.appendChild(sVal);
 
         // Hover tooltip: cargo breakdown
-        let tip = null;
-        shipRow.addEventListener('mouseenter', () => {
-          tip = document.createElement('div');
-          tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+        attachTooltip(shipRow, tip => {
           for (const m of mats) {
-            const line = document.createElement('div');
-            line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
-            const left = document.createElement('div');
-            left.style.cssText = 'display:flex;align-items:center;gap:5px;';
-            const ic = makeIcon(m.name, 14);
-            if (ic) left.appendChild(ic);
-            const lbl = document.createElement('span'); lbl.style.color = '#c0c0da';
-            lbl.textContent = `${m.name} x${m.qty.toLocaleString()}`;
-            left.appendChild(lbl);
-            const val = document.createElement('span'); val.style.color = '#9090b0';
-            val.textContent = m.price > 0 ? `@ ${fmtCr(m.price)} ($${Math.round(m.lineVal).toLocaleString()})` : m.qty.toLocaleString();
-            line.appendChild(left); line.appendChild(val);
-            tip.appendChild(line);
+            const valStr = m.price > 0 ? `@ ${fmtCr(m.price)} ($${Math.round(m.lineVal).toLocaleString()})` : null;
+            tip.appendChild(mkIconLine(m.name, `${m.name} x${m.qty.toLocaleString()}`, valStr));
           }
-          document.body.appendChild(tip);
         });
-        shipRow.addEventListener('mousemove', (e) => {
-          if (!tip) return;
-          const x = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8);
-          const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
-          tip.style.left = x + 'px'; tip.style.top = y + 'px';
-        });
-        shipRow.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
         shipList.appendChild(shipRow);
       }
 
@@ -2751,8 +3749,9 @@ function toggleCashPanel() {
 
 // ── Summary panel ─────────────────────────────────────────────────────────────
 
-let _summaryOpen     = false;
-let _summaryPerBase  = false;
+let _summaryOpen      = false;
+let _summaryPerBase   = false;
+let _wishlistAllOpen  = false;
 
 function buildSummaryContent(container, perBase) {
   container.innerHTML = '';
@@ -2876,19 +3875,7 @@ function buildSummaryContent(container, perBase) {
       if (dailyVal > 0) {
         attachTip(row, () => {
           const t = mkTipEl();
-          const line = document.createElement('div');
-          line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;';
-          const left = document.createElement('div');
-          left.style.cssText = 'display:flex;align-items:center;gap:5px;';
-          const tic = makeIcon(r.name, 14);
-          if (tic) left.appendChild(tic);
-          const lbl = document.createElement('span'); lbl.style.color = '#c0c0da';
-          lbl.textContent = `${r.name} x${Math.round(r.dailyOutput).toLocaleString()}/d`;
-          left.appendChild(lbl);
-          const val = document.createElement('span'); val.style.color = '#9090b0';
-          val.textContent = `@ ${fmtCr(unitPrice)} (${fmtCr(dailyVal)}/d)`;
-          line.appendChild(left); line.appendChild(val);
-          t.appendChild(line);
+          t.appendChild(mkIconLine(r.name, `${r.name} x${Math.round(r.dailyOutput).toLocaleString()}/d`, `@ ${fmtCr(unitPrice)} (${fmtCr(dailyVal)}/d)`));
           return t;
         });
       }
@@ -2898,10 +3885,7 @@ function buildSummaryContent(container, perBase) {
   };
 
   const mkSection = (label, parent) => {
-    const h = document.createElement('div');
-    h.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:8px 0 3px;';
-    h.textContent = label;
-    parent.appendChild(h);
+    parent.appendChild(mkLabel(label, 'margin:8px 0 3px;'));
   };
 
   const renderInputTotals = (items, parent) => {
@@ -2934,24 +3918,9 @@ function buildSummaryContent(container, perBase) {
     if (restockLines.length) {
       attachTip(row, () => {
         const t = mkTipEl();
-        const hdr = document.createElement('div');
-        hdr.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;';
-        hdr.textContent = 'Restock cost';
-        t.appendChild(hdr);
+        t.appendChild(mkTipTitle('Restock cost'));
         for (const { r, deficit, unitPrice, lineCost } of restockLines) {
-          const line = document.createElement('div');
-          line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;';
-          const left = document.createElement('div');
-          left.style.cssText = 'display:flex;align-items:center;gap:5px;';
-          const tic = makeIcon(r.name, 14);
-          if (tic) left.appendChild(tic);
-          const ll = document.createElement('span'); ll.style.color = '#c0c0da';
-          ll.textContent = `${r.name} x${deficit.toLocaleString()}`;
-          left.appendChild(ll);
-          const val = document.createElement('span'); val.style.color = '#9090b0';
-          val.textContent = `@ ${fmtCr(unitPrice)} ($${Math.round(lineCost).toLocaleString()})`;
-          line.appendChild(left); line.appendChild(val);
-          t.appendChild(line);
+          t.appendChild(mkIconLine(r.name, `${r.name} x${deficit.toLocaleString()}`, `@ ${fmtCr(unitPrice)} ($${Math.round(lineCost).toLocaleString()})`));
         }
         if (restockLines.length > 1) {
           t.appendChild(mkTipSep());
@@ -3066,15 +4035,13 @@ function toggleSummaryPanel() {
   if (existing) { existing.remove(); _summaryOpen = false; return; }
 
   closeAllPanels();
-  const panel = mkPanelBase(GT_SUMMARY_ID, false); // left-aligned
+  const panel = mkPanelBase(GT_SUMMARY_ID, true);
   panel.style.width = '340px';
 
   // Header row with title + per-base toggle
   const hdr = document.createElement('div');
   hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;';
-  const titleEl = document.createElement('div');
-  titleEl.style.cssText = 'color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;';
-  titleEl.textContent = 'Summary';
+  const titleEl = mkLabel('Summary');
   const viewToggle = document.createElement('button');
   const updateViewToggle = () => {
     viewToggle.textContent = _summaryPerBase ? 'Aggregate view' : 'Per-base view';
@@ -3295,6 +4262,12 @@ async function loadAndInjectHeader() {
       controls.appendChild(wishAllBtn);
     }
 
+    if (_settings.showFlights) {
+      const flightBtn = mkCtrlBtn('&#9992;', 'Flight calculator');
+      flightBtn.addEventListener('click', toggleFlightPanel);
+      controls.appendChild(flightBtn);
+    }
+
     const gearBtn = mkCtrlBtn('\u2699', 'Settings');
     gearBtn.addEventListener('click', toggleSettingsPanel);
     controls.appendChild(gearBtn);
@@ -3346,16 +4319,48 @@ async function loadAndInjectHeader() {
     document.body.appendChild(tab);
     document.body.appendChild(header);
 
+    // Right-edge panel wishlist button
+    const pwBtn = document.createElement('div');
+    pwBtn.id = GT_PANEL_WISHLIST_BTN_ID;
+    pwBtn.title = 'Wishlist Panel';
+    pwBtn.style.cssText = [
+      'position:fixed', 'right:0', 'top:50%', 'transform:translateY(-50%)',
+      'z-index:2147483640',
+      'background:#0a0a18', 'border:1px solid #1a1a38', 'border-right:none',
+      'border-radius:6px 0 0 6px',
+      'padding:10px 5px',
+      'cursor:pointer',
+      'display:flex', 'flex-direction:column', 'align-items:center', 'gap:4px',
+      'font-family:system-ui,sans-serif',
+    ].join(';');
+
+    const pwBtnText = document.createElement('span');
+    pwBtnText.style.cssText = 'writing-mode:vertical-rl;transform:rotate(180deg);font-size:10px;color:#6b6b8a;letter-spacing:.05em;user-select:none;';
+    pwBtnText.textContent = 'Wishlist';
+
+    const pwBtnBadge = document.createElement('span');
+    pwBtnBadge.setAttribute('data-badge', '1');
+    pwBtnBadge.style.cssText = 'background:#4f46e5;color:#fff;font-size:9px;border-radius:8px;padding:1px 4px;min-width:14px;text-align:center;display:none;';
+
+    pwBtn.appendChild(pwBtnText);
+    pwBtn.appendChild(pwBtnBadge);
+    pwBtn.addEventListener('mouseenter', () => { pwBtn.style.background = '#111128'; pwBtnText.style.color = '#d8d8f0'; });
+    pwBtn.addEventListener('mouseleave', () => { pwBtn.style.background = '#0a0a18'; pwBtnText.style.color = '#6b6b8a'; });
+    pwBtn.addEventListener('click', togglePanelWishlist);
+    document.body.appendChild(pwBtn);
+    _updatePanelWishlistBtn();
+
     // Keep spacer + tab + all floating panels in sync with header height
     _headerResizeObs = new ResizeObserver(() => {
       if (_headerCollapsed) return;
       const h = header.offsetHeight;
       spacer.style.height = h + 'px';
       tab.style.top = h + 'px';
-      [GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID].forEach(id => {
+      [GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID, GT_FLIGHT_ID, GT_WISHLIST_ALL_ID].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.top = h + 'px';
       });
+      _updatePanelWishlistBtn();
       syncOverflowBadge();
     });
     _headerResizeObs.observe(header);
@@ -3364,13 +4369,10 @@ async function loadAndInjectHeader() {
     if (!_outsideClickBound) {
       _outsideClickBound = true;
       document.addEventListener('click', (e) => {
-        const extIds = [GT_HEADER_ID, GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID, GT_TAB_ID, GT_TOAST_ID, GT_CUSTOM_PRICES_ID];
+        const extIds = [GT_HEADER_ID, GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID, GT_TAB_ID, GT_TOAST_ID, GT_CUSTOM_PRICES_ID, GT_PANEL_WISHLIST_ID, GT_PANEL_WISHLIST_BTN_ID, GT_FLIGHT_ID, GT_WISHLIST_ALL_ID];
         const inExt = extIds.some(id => document.getElementById(id)?.contains(e.target));
-        if (!inExt && (_detailBaseId || _settingsOpen || _cashOpen || _summaryOpen)) {
-          document.getElementById(GT_DETAIL_ID)?.remove();   _detailBaseId = null;
-          document.getElementById(GT_SETTINGS_ID)?.remove(); _settingsOpen = false;
-          document.getElementById(GT_CASH_ID)?.remove();     _cashOpen     = false;
-          document.getElementById(GT_SUMMARY_ID)?.remove();  _summaryOpen  = false;
+        if (!inExt && (_detailBaseId || _settingsOpen || _cashOpen || _summaryOpen || _flightOpen || _wishlistAllOpen)) {
+          closeAllPanels();
         }
       }, false);
     }
@@ -3384,8 +4386,10 @@ async function loadAndInjectHeader() {
     if (enabled !== false) {
       loadSprite();
       loadAndInjectHeader();
-      fetchCompanyData(); // warm cache + pull perks from GT API in background
+      fetchCompanyData(); // warm cache + pull perks from GT API on first load only
       watchGteNav();
+      // Refresh local API data every 5 minutes — no GT API / API key calls
+      setInterval(refreshLocalCompanyData, 5 * 60 * 1000);
       // Retry header injection until the game's local API is ready (SPA may load after content script)
       let retries = 0;
       const retryTimer = setInterval(async () => {
