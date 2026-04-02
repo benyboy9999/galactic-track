@@ -2524,6 +2524,11 @@ function buildSettingsPanel() {
   visitBtn.addEventListener('mouseleave', () => { visitBtn.style.color = '#6366f1'; });
   panel.appendChild(visitBtn);
 
+  const ver = document.createElement('div');
+  ver.style.cssText = 'text-align:center;font-size:10px;color:#2a2a4a;margin-top:6px;';
+  ver.textContent = 'v0.4.2';
+  panel.appendChild(ver);
+
   return panel;
 }
 
