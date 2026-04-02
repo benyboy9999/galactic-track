@@ -2930,10 +2930,15 @@ function openFlightPanel() {
   }
 
   // Tick countdown every second; self-clears when panel is removed
+  // Pause DOM updates while the dropdown is open to avoid native select disruption
   if (flightOptUpdaters.length) {
+    let isSelectOpen = false;
+    shipSelect.addEventListener('mousedown', () => { isSelectOpen = true; });
+    shipSelect.addEventListener('blur',      () => { isSelectOpen = false; });
+    shipSelect.addEventListener('change',    () => { isSelectOpen = false; });
     const countdownInterval = setInterval(() => {
       if (!document.getElementById(GT_FLIGHT_ID)) { clearInterval(countdownInterval); return; }
-      flightOptUpdaters.forEach(fn => fn());
+      if (!isSelectOpen) flightOptUpdaters.forEach(fn => fn());
     }, 1000);
   }
 
