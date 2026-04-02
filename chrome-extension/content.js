@@ -353,27 +353,37 @@ function loadSprite() {
 
   const spriteRe = /\/assets\/sprite-[A-Za-z0-9_-]+\.svg/;
 
-  // 1. Scan existing <use> elements in the game page DOM — most reliable, works even
-  //    when the resource is cached (cached resources don't appear in PerformanceObserver).
-  for (const use of document.querySelectorAll('use[href],use[xlink\\:href]')) {
-    const href = use.getAttribute('href') || use.getAttribute('xlink:href') || '';
-    if (spriteRe.test(href)) { _resolveSpriteUrl(href); return; }
-  }
-
-  // 2. Check performance buffer synchronously for already-recorded (non-cached) loads.
+  // 1. Check performance buffer — works for non-cached loads.
   for (const e of performance.getEntriesByType('resource')) {
     if (spriteRe.test(e.name)) { _resolveSpriteUrl(e.name); return; }
   }
 
-  // 3. Watch for the sprite load if it hasn't happened yet.
+  // 2. PerformanceObserver — catches the load if sprite hasn't loaded yet.
   try {
     const obs = new PerformanceObserver(list => {
       for (const e of list.getEntries()) {
-        if (spriteRe.test(e.name)) { _resolveSpriteUrl(e.name); obs.disconnect(); return; }
+        if (spriteRe.test(e.name)) { _resolveSpriteUrl(e.name); obs.disconnect(); }
       }
     });
     obs.observe({ type: 'resource', buffered: false });
-  } catch { /* PerformanceObserver unavailable */ }
+  } catch { /* unavailable */ }
+
+  // 3. Fetch main bundle to extract sprite filename — handles cached users where the
+  //    sprite never appears in performance entries and PerformanceObserver never fires.
+  //    Game loads via <link rel=modulepreload> not <script src>.
+  //    Bundle is already cached so this fetch is instant with no network request.
+  const mainLink = [...document.querySelectorAll('link[rel=modulepreload]')]
+    .find(l => l.href.includes('/assets/main-'));
+  if (mainLink) {
+    fetch(mainLink.href)
+      .then(r => r.ok ? r.text() : null)
+      .then(js => {
+        if (!js || _spriteUrl) return;
+        const m = js.match(/\/assets\/sprite-[A-Za-z0-9_-]+\.svg/);
+        if (m) _resolveSpriteUrl(`https://g2.galactictycoons.com${m[0]}`);
+      })
+      .catch(() => {});
+  }
 }
 
 const ICON_OVERRIDES = {
