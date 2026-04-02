@@ -319,9 +319,10 @@ run();
 
 // ── Production Tracker ────────────────────────────────────────────────────────
 
-const GT_HEADER_ID   = 'gt-prod-header';
-const GT_DETAIL_ID   = 'gt-prod-detail';
-const GT_SPACER_ID   = 'gt-prod-spacer';
+const GT_HEADER_ID    = 'gt-prod-header';
+const GT_CHIPAREA_ID  = 'gt-chip-area';
+const GT_DETAIL_ID    = 'gt-prod-detail';
+const GT_SPACER_ID    = 'gt-prod-spacer';
 const GT_SETTINGS_ID      = 'gt-prod-settings';
 const GT_CUSTOM_PRICES_ID = 'gt-custom-prices-modal';
 const GT_TOAST_ID         = 'gt-prod-toast';
@@ -432,6 +433,10 @@ const ICON_OVERRIDES = {
   'Ship Parts Shipment':'Pack_ShipParts','Defense systems pack':'Pack_Defense',
   'Habitats Shipment':'Pack_Habitats',
   'Scientific Instruments Shipment':'Pack_Scientific','Gifts':'Pack_Gifts',
+  // Short-name aliases (sName values that may be stored in wishlists or passed from old data)
+  '4D Emitter':'SuperiorFTLEmitter',
+  'Fuel Tank':'FuelTankSegment','Fuel Tank Segment':'FuelTankSegment',
+  'QFE':'AdvancedFTLEmitter','FTL Emitter':'BasicFTLEmitter',
 };
 
 function toIconId(name) {
@@ -531,7 +536,7 @@ async function addToPanelWishlist(base, mats) {
   const key  = String(base.id);
   if (!data[key]) data[key] = { baseName: base.name, items: [] };
   for (const m of mats) {
-    const matName = _loadedHeaderGamedata?.materials?.find(x => x.id === m.id)?.sName ?? `mat${m.id}`;
+    const matName = _loadedHeaderGamedata?.materials?.find(x => x.id === m.id)?.name ?? `mat${m.id}`;
     const existing = data[key].items.find(i => i.id === m.id);
     if (existing) existing.am += m.am;
     else data[key].items.push({ id: m.id, name: matName, am: m.am });
@@ -635,6 +640,8 @@ let _perksLoaded    = false;
 let _guildLoaded    = false;
 const COMPANY_TTL   = 5 * 60 * 1000;
 
+let _syncOverflowBadge = null; // set by loadAndInjectHeader; called after chip refresh
+
 // Refresh local API data only — no GT API / API key calls.
 async function refreshLocalCompanyData() {
   const local = await requestGTLocalAPI('getMyCompany');
@@ -644,6 +651,24 @@ async function refreshLocalCompanyData() {
     _companyData   = perks ? { ...local, perks } : local;
     _companyDataTs = Date.now();
   }
+}
+
+// Bust bases + price caches and rebuild header chips in-place.
+async function refreshChips() {
+  await refreshLocalCompanyData();
+  _basesCache = { data: null, ts: 0 };
+  _pricesCache = { data: null, ts: 0 };
+  const chipArea = document.getElementById(GT_CHIPAREA_ID);
+  if (!chipArea || !_loadedHeaderGamedata) return;
+  const bases = await fetchBases();
+  _loadedHeaderBases = bases;
+  await fetchMatPrices();
+  // Remove old chips, keep overflow badge (always last child)
+  const overflowBadge = chipArea.lastElementChild;
+  for (const chip of [...chipArea.querySelectorAll('[data-base-id]')]) chip.remove();
+  const sorted = sortBases(bases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
+  for (const base of sorted) chipArea.insertBefore(buildHeaderChip(base, _loadedHeaderGamedata), overflowBadge);
+  _syncOverflowBadge?.();
 }
 
 // Full fetch — local API + perks from GT API (on first load / explicit refresh only).
@@ -1194,7 +1219,7 @@ function calcBaseNeeds(base, gamedata) {
       const days      = dailyNeed > 0 ? inStock / dailyNeed : Infinity;
       inputs.push({
         matId: inp.id,
-        name:  matMap.get(inp.id)?.sName ?? `mat${inp.id}`,
+        name:  matMap.get(inp.id)?.name ?? `mat${inp.id}`,
         dailyNeed, inStock, days,
       });
     }
@@ -1206,7 +1231,7 @@ function calcBaseNeeds(base, gamedata) {
     const days    = c.rate > 0 ? inStock / c.rate : Infinity;
     return {
       matId: c.matId,
-      name:  matMap.get(c.matId)?.sName ?? `mat${c.matId}`,
+      name:  matMap.get(c.matId)?.name ?? `mat${c.matId}`,
       dailyNeed: c.rate, inStock, days,
     };
   });
@@ -1221,7 +1246,7 @@ function calcBaseNeeds(base, gamedata) {
     const dailyOutput = am * totalMul * cyclesPerDay;
     outputs.push({
       matId: out.id,
-      name:  matMap.get(out.id)?.sName ?? `mat${out.id}`,
+      name:  matMap.get(out.id)?.name ?? `mat${out.id}`,
       dailyOutput,
       inStock: warehouseAmts.get(out.id) ?? 0,
     });
@@ -2841,9 +2866,16 @@ function mkIconLine(name, qtyStr, valStr) {
 
 let _flightOpen = false;
 
-function openFlightPanel() {
+async function openFlightPanel() {
   closeAllPanels();
   const gamedata  = _loadedHeaderGamedata;
+  // Always fetch fresh ship data from local API when opening
+  const freshCompany = await requestGTLocalAPI('getMyCompany');
+  if (freshCompany?.id) {
+    const perks = _companyData?.perks;
+    _companyData = perks ? { ...freshCompany, perks } : freshCompany;
+    _companyDataTs = Date.now();
+  }
   const company   = _companyData;
   const ships     = company?.ships ?? [];
   const guildData = _guildData;
@@ -2904,71 +2936,104 @@ function openFlightPanel() {
     return (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true });
   });
 
-  const shipSelect = document.createElement('select');
-  shipSelect.style.cssText = 'width:100%;background:#0a0a18;border:1px solid #2a2a4a;border-radius:4px;color:#c0c0da;font-size:11px;padding:5px 8px;font-family:inherit;box-sizing:border-box;margin-bottom:8px;cursor:pointer;';
+  // Custom ship picker — native <select> was unreliable cross-browser with live countdowns
+  const shipWrap = document.createElement('div');
+  shipWrap.style.cssText = 'position:relative;margin-bottom:8px;';
 
-  const placeholderOpt = document.createElement('option');
-  placeholderOpt.value = '';
-  placeholderOpt.textContent = 'Choose a ship…';
-  placeholderOpt.disabled = true;
-  placeholderOpt.selected = true;
-  shipSelect.appendChild(placeholderOpt);
+  const shipBtn = document.createElement('div');
+  shipBtn.style.cssText = 'width:100%;background:#0a0a18;border:1px solid #2a2a4a;border-radius:4px;color:#6b6b8a;font-size:11px;padding:5px 8px;font-family:inherit;box-sizing:border-box;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none;';
+  const shipBtnLabel = document.createElement('span');
+  shipBtnLabel.textContent = 'Choose a ship…';
+  const shipBtnArrow = document.createElement('span');
+  shipBtnArrow.textContent = '▾';
+  shipBtnArrow.style.cssText = 'font-size:10px;color:#6b6b8a;';
+  shipBtn.appendChild(shipBtnLabel);
+  shipBtn.appendChild(shipBtnArrow);
 
-  // Track in-flight options for countdown updates
-  const flightOptUpdaters = [];
+  const shipDropdown = document.createElement('div');
+  shipDropdown.style.cssText = 'position:absolute;top:100%;left:0;right:0;background:#0d0d20;border:1px solid #2a2a4a;border-radius:4px;max-height:200px;overflow-y:auto;z-index:10;display:none;box-shadow:0 4px 12px rgba(0,0,0,0.6);margin-top:2px;';
+
+  const flightCountdownUpdaters = [];
 
   for (const ship of sortedShips) {
     const inFlight = !!ship.flight;
     const fromPlanet = getPlanetById(gamedata, ship.pId);
     const fromName   = fromPlanet?.name ?? `ID ${ship.pId}`;
-    const opt = document.createElement('option');
-    opt.value = ship.id ?? ship.name;
+
+    const row = document.createElement('div');
+    row.style.cssText = `padding:5px 8px;font-size:11px;cursor:${inFlight ? 'default' : 'pointer'};display:flex;flex-direction:column;gap:1px;border-bottom:1px solid #1a1a30;`;
+
+    const rowTop = document.createElement('div');
+    rowTop.style.cssText = `color:${inFlight ? '#4a4a6a' : '#c0c0da'};font-weight:500;`;
+    rowTop.textContent = ship.name;
+
+    const rowSub = document.createElement('div');
+    rowSub.style.cssText = `font-size:10px;color:${inFlight ? '#3a3a5a' : '#6b6b8a'};`;
+
     if (inFlight) {
       const destPlanet = getPlanetById(gamedata, ship.flight.destPId);
       const destName   = destPlanet?.name ?? `ID ${ship.flight.destPId}`;
       const aTime      = new Date(ship.flight.aDate).getTime();
-      const baseLabel  = `${ship.name} ✈  (${fromName} → ${destName}, `;
-      const updateOpt  = () => { opt.textContent = baseLabel + fmtCountdown(aTime - Date.now()) + ')'; };
-      updateOpt();
-      flightOptUpdaters.push(updateOpt);
+      const updateSub  = () => { rowSub.textContent = `✈ ${fromName} → ${destName}  ·  ${fmtCountdown(aTime - Date.now())}`; };
+      updateSub();
+      flightCountdownUpdaters.push(updateSub);
     } else {
-      opt.textContent = `${ship.name}  (${fromName})`;
+      rowSub.textContent = fromName;
+      row.addEventListener('mouseenter', () => { row.style.background = '#111128'; });
+      row.addEventListener('mouseleave', () => { row.style.background = ''; });
+      row.addEventListener('mousedown', e => e.preventDefault());
+      row.addEventListener('click', async () => {
+        selectedShip = ship;
+        shipBtnLabel.textContent = ship.name;
+        shipBtnLabel.style.color = '#c0c0da';
+        shipDropdown.style.display = 'none';
+        selectedCargoWeight = 0;
+        if (ship.warehouseId) {
+          const wh = await requestGTLocalAPI('getWarehouse', { warehouseId: ship.warehouseId });
+          for (const m of wh?.mats ?? []) {
+            const mat = matMap.get(Number(m.id));
+            selectedCargoWeight += (m.am ?? 0) * (mat?.weight ?? 0);
+          }
+        }
+        updateInfo();
+        recalc();
+      });
     }
-    opt.disabled = inFlight;
-    opt.dataset.shipName = ship.name;
-    shipSelect.appendChild(opt);
+
+    row.appendChild(rowTop);
+    row.appendChild(rowSub);
+    shipDropdown.appendChild(row);
   }
 
-  // Tick countdown every second; self-clears when panel is removed
-  // Pause DOM updates while the dropdown is open to avoid native select disruption
-  if (flightOptUpdaters.length) {
-    let isSelectOpen = false;
-    shipSelect.addEventListener('mousedown', () => { isSelectOpen = true; });
-    shipSelect.addEventListener('blur',      () => { isSelectOpen = false; });
-    shipSelect.addEventListener('change',    () => { isSelectOpen = false; });
+  // Toggle dropdown open/close
+  let shipDropdownOpen = false;
+  shipBtn.addEventListener('click', () => {
+    shipDropdownOpen = !shipDropdownOpen;
+    shipDropdown.style.display = shipDropdownOpen ? '' : 'none';
+    shipBtnArrow.textContent = shipDropdownOpen ? '▴' : '▾';
+  });
+
+  // Close on outside click (panel's own outside-click handler covers this via GT_FLIGHT_ID)
+  document.addEventListener('click', function closeShipDrop(e) {
+    if (!shipWrap.contains(e.target)) {
+      shipDropdownOpen = false;
+      shipDropdown.style.display = 'none';
+      shipBtnArrow.textContent = '▾';
+    }
+    if (!document.getElementById(GT_FLIGHT_ID)) document.removeEventListener('click', closeShipDrop);
+  });
+
+  // Live countdowns for in-flight ships
+  if (flightCountdownUpdaters.length) {
     const countdownInterval = setInterval(() => {
       if (!document.getElementById(GT_FLIGHT_ID)) { clearInterval(countdownInterval); return; }
-      if (!isSelectOpen) flightOptUpdaters.forEach(fn => fn());
+      flightCountdownUpdaters.forEach(fn => fn());
     }, 1000);
   }
 
-  shipSelect.addEventListener('change', async () => {
-    const ship = sortedShips.find(s => (s.id ?? s.name) == shipSelect.value);
-    if (!ship) return;
-    selectedShip = ship;
-    selectedCargoWeight = 0;
-    if (ship.warehouseId) {
-      const wh = await requestGTLocalAPI('getWarehouse', { warehouseId: ship.warehouseId });
-      for (const m of wh?.mats ?? []) {
-        const mat = matMap.get(Number(m.id));
-        selectedCargoWeight += (m.am ?? 0) * (mat?.weight ?? 0);
-      }
-    }
-    updateInfo();
-    recalc();
-  });
-
-  panel.appendChild(shipSelect);
+  shipWrap.appendChild(shipBtn);
+  shipWrap.appendChild(shipDropdown);
+  panel.appendChild(shipWrap);
   panel.appendChild(mkSep());
 
   // ── Ship info ──────────────────────────────────────────────────────────────
@@ -3209,7 +3274,7 @@ function openFlightPanel() {
       tip.appendChild(mkIconLine(fuelMat?.name ?? 'Fuel', `×${Math.ceil(fuelUsed).toLocaleString()}`, fmtCr(fuelCost)));
       const tankLine = document.createElement('div');
       tankLine.style.cssText = 'font-size:10px;color:#6b6b8a;margin-top:4px;';
-      tankLine.textContent = `Tank: ${(selectedShip.fuel ?? 0).toLocaleString()} / ${tankCapacity.toLocaleString()} ${fuelMat?.sName ?? ''}${hasFuel ? '' : ' ⚠ insufficient'}`;
+      tankLine.textContent = `Tank: ${(selectedShip.fuel ?? 0).toLocaleString()} / ${tankCapacity.toLocaleString()} ${fuelMat?.name ?? ''}${hasFuel ? '' : ' ⚠ insufficient'}`;
       tip.appendChild(tankLine);
     }, true);
 
@@ -3312,7 +3377,7 @@ async function _showImportWishlistPicker(panel) {
     return;
   }
 
-  const matMap = new Map(((_loadedHeaderGamedata?.materials) ?? []).map(m => [m.id, m.sName ?? `mat${m.id}`]));
+  const matMap = new Map(((_loadedHeaderGamedata?.materials) ?? []).map(m => [m.id, m.name ?? `mat${m.id}`]));
 
   for (const wl of usable) {
     const label = wl.title ?? `Wishlist #${wl.id}`;
@@ -3643,7 +3708,7 @@ async function openCashPanel() {
         const qty     = m.am ?? 0;
         const price   = effectivePrice(matId);
         const lineVal = qty * price;
-        const name    = _loadedHeaderGamedata?.materials?.find(mat => mat.id === matId)?.sName ?? `mat${matId}`;
+        const name    = _loadedHeaderGamedata?.materials?.find(mat => mat.id === matId)?.name ?? `mat${matId}`;
         return { matId, qty, price, lineVal, name };
       })
       .filter(m => m.qty > 0)
@@ -3679,7 +3744,7 @@ async function openCashPanel() {
             const qty     = m.am ?? 0;
             const price   = effectivePrice(matId);
             const lineVal = qty * price;
-            const name    = _loadedHeaderGamedata?.materials?.find(mat => mat.id === matId)?.sName ?? `mat${matId}`;
+            const name    = _loadedHeaderGamedata?.materials?.find(mat => mat.id === matId)?.name ?? `mat${matId}`;
             return { matId, qty, price, lineVal, name };
           })
           .filter(m => m.qty > 0)
@@ -4126,6 +4191,7 @@ async function loadAndInjectHeader() {
 
     // Chip area — grows, wraps when expanded
     const chipArea = document.createElement('div');
+    chipArea.id = GT_CHIPAREA_ID;
     chipArea.dataset.chipArea = '1';
     Object.assign(chipArea.style, {
       flex: '1', minWidth: '0',
@@ -4204,6 +4270,7 @@ async function loadAndInjectHeader() {
       overflowBadge.textContent = `+${hidden.length}`;
     }
 
+    _syncOverflowBadge = syncOverflowBadge;
     header.appendChild(chipArea);
 
     // Controls column — always right-aligned, fixed height, never wraps
@@ -4265,6 +4332,16 @@ async function loadAndInjectHeader() {
     setExpanded(false);
     expandBtn.addEventListener('click', () => setExpanded(!_expanded));
     controls.appendChild(expandBtn);
+
+    const refreshBtn = mkCtrlBtn('↻', 'Refresh data');
+    refreshBtn.addEventListener('click', async () => {
+      refreshBtn.style.opacity = '0.4';
+      refreshBtn.style.pointerEvents = 'none';
+      await refreshChips();
+      refreshBtn.style.opacity = '';
+      refreshBtn.style.pointerEvents = '';
+    });
+    controls.appendChild(refreshBtn);
 
     if (_settings.showSummary) {
       const summaryBtn = mkCtrlBtn('\u03a3', 'Summary');
@@ -4414,8 +4491,8 @@ async function loadAndInjectHeader() {
       loadAndInjectHeader();
       fetchCompanyData(); // warm cache + pull perks from GT API on first load only
       watchGteNav();
-      // Refresh local API data every 5 minutes — no GT API / API key calls
-      setInterval(refreshLocalCompanyData, 5 * 60 * 1000);
+      // Refresh local API data + rebuild header chips every 5 minutes — no GT API / API key calls
+      setInterval(refreshChips, 5 * 60 * 1000);
       // Retry header injection until the game's local API is ready (SPA may load after content script)
       let retries = 0;
       const retryTimer = setInterval(async () => {
