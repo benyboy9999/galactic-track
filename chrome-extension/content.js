@@ -3014,18 +3014,7 @@ function openFlightPanel() {
   destInput.style.cssText = 'width:100%;background:#0a0a18;border:1px solid #2a2a4a;border-radius:4px;color:#c0c0da;font-size:11px;padding:5px 8px;font-family:inherit;box-sizing:border-box;';
 
   const destDropdown = document.createElement('div');
-  destDropdown.id = 'gt-dest-dropdown';
-  destDropdown.style.cssText = 'position:fixed;background:#0d0d20;border:1px solid #2a2a4a;border-radius:4px;max-height:180px;overflow-y:auto;z-index:2147483646;display:none;min-width:180px;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
-  destDropdown.addEventListener('mousedown', e => e.stopPropagation());
-  destDropdown.addEventListener('click',     e => e.stopPropagation());
-  document.body.appendChild(destDropdown);
-
-  function positionDestDropdown() {
-    const r = destInput.getBoundingClientRect();
-    destDropdown.style.left  = r.left + 'px';
-    destDropdown.style.width = r.width + 'px';
-    destDropdown.style.top   = (r.bottom + 2) + 'px';
-  }
+  destDropdown.style.cssText = 'position:absolute;top:100%;left:0;right:0;background:#0d0d20;border:1px solid #2a2a4a;border-radius:4px;max-height:180px;overflow-y:auto;z-index:10;display:none;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
 
   let selectedDestPlanet = null;
 
@@ -3045,6 +3034,7 @@ function openFlightPanel() {
       opt.textContent = planet.name;
       opt.addEventListener('mouseenter', () => { opt.style.background = '#111128'; });
       opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
+      opt.addEventListener('mousedown', e => e.preventDefault());
       opt.addEventListener('click', () => {
         destInput.value = planet.name;
         selectedDestPlanet = planet;
@@ -3053,12 +3043,12 @@ function openFlightPanel() {
       });
       destDropdown.appendChild(opt);
     }
-    positionDestDropdown();
     destDropdown.style.display = '';
   });
-  destInput.addEventListener('blur', () => { setTimeout(() => { destDropdown.style.display = 'none'; }, 150); });
+  destInput.addEventListener('blur', () => { destDropdown.style.display = 'none'; });
 
   destWrap.appendChild(destInput);
+  destWrap.appendChild(destDropdown);
   panel.appendChild(destWrap);
   panel.appendChild(mkSep());
 
@@ -3255,7 +3245,6 @@ function openFlightPanel() {
 function toggleFlightPanel() {
   if (_flightOpen) {
     document.getElementById(GT_FLIGHT_ID)?.remove();
-    document.getElementById('gt-dest-dropdown')?.remove();
     _flightOpen = false;
   } else openFlightPanel();
 }
@@ -3267,7 +3256,7 @@ function closeAllPanels() {
   document.getElementById(GT_SETTINGS_ID)?.remove();      _settingsOpen    = false;
   document.getElementById(GT_CASH_ID)?.remove();          _cashOpen        = false;
   document.getElementById(GT_SUMMARY_ID)?.remove();       _summaryOpen     = false;
-  document.getElementById(GT_FLIGHT_ID)?.remove();        document.getElementById('gt-dest-dropdown')?.remove(); _flightOpen = false;
+  document.getElementById(GT_FLIGHT_ID)?.remove();        _flightOpen = false;
   document.getElementById(GT_WISHLIST_ALL_ID)?.remove();  _wishlistAllOpen = false;
 }
 
@@ -4396,7 +4385,7 @@ async function loadAndInjectHeader() {
     if (!_outsideClickBound) {
       _outsideClickBound = true;
       document.addEventListener('click', (e) => {
-        const extIds = [GT_HEADER_ID, GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID, GT_TAB_ID, GT_TOAST_ID, GT_CUSTOM_PRICES_ID, GT_PANEL_WISHLIST_ID, GT_PANEL_WISHLIST_BTN_ID, GT_FLIGHT_ID, GT_WISHLIST_ALL_ID, 'gt-dest-dropdown'];
+        const extIds = [GT_HEADER_ID, GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID, GT_TAB_ID, GT_TOAST_ID, GT_CUSTOM_PRICES_ID, GT_PANEL_WISHLIST_ID, GT_PANEL_WISHLIST_BTN_ID, GT_FLIGHT_ID, GT_WISHLIST_ALL_ID];
         const inExt = extIds.some(id => document.getElementById(id)?.contains(e.target));
         if (!inExt && (_detailBaseId || _settingsOpen || _cashOpen || _summaryOpen || _flightOpen || _wishlistAllOpen)) {
           closeAllPanels();
