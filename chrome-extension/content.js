@@ -60,41 +60,19 @@ async function resolveIdentity() {
   const cached = await chrome.storage.local.get(['gTag', 'companyName', 'gTagTs']);
   if (cached.gTag && Date.now() - (cached.gTagTs ?? 0) < IDENTITY_TTL) return cached;
 
-  // Try Local API
-  const company = await requestGTLocalAPI('getMyCompany');
-  if (Number.isInteger(company?.id) && company.id > 0) {
-    try {
-      const r = await fetch(`${GT_API}/public/company/${company.id}/detail`);
-      if (r.ok) {
-        const detail = await r.json();
-        const gTag = detail.gTag ?? detail.guild_tag ?? '';
-        if (gTag) {
-          const companyName = company.name ?? '';
-          chrome.storage.local.set({ gTag, companyName, gTagTs: Date.now() });
-          return { gTag, companyName };
-        }
-      }
-    } catch {}
-  }
-
-  // Fallback: Extended API key
-  const { gtExtApiKey } = await chrome.storage.local.get(['gtExtApiKey']);
-  if (!gtExtApiKey) return null;
-  try {
-    const r1 = await fetch(`${GT_API}/public/company`, { headers: { 'X-Api-Key': gtExtApiKey } });
-    if (!r1.ok) return null;
-    const co = await r1.json();
-    const cid = co.id ?? co.cId;
-    if (!Number.isInteger(cid) || cid <= 0) return null;
-    const r2 = await fetch(`${GT_API}/public/company/${cid}/detail`);
-    if (!r2.ok) return null;
-    const detail = await r2.json();
-    const gTag = detail.gTag ?? detail.guild_tag ?? '';
-    if (!gTag) return null;
-    const companyName = co.name ?? co.companyName ?? '';
+  // Get company name from local API, gTag from guild data (fetched on page load)
+  const [company, guild] = await Promise.all([
+    requestGTLocalAPI('getMyCompany'),
+    fetchGuildData(),
+  ]);
+  const companyName = company?.name ?? '';
+  const gTag = guild?.tag ?? guild?.gTag ?? guild?.guild_tag ?? '';
+  if (gTag) {
     chrome.storage.local.set({ gTag, companyName, gTagTs: Date.now() });
     return { gTag, companyName };
-  } catch { return null; }
+  }
+
+  return null;
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -502,6 +480,8 @@ const DEFAULT_SETTINGS = {
   showSummary:      true,
   showAssets:       true,
   showWishlist:     true,
+  showWishlistAll:  true,
+  showWishlistPanel: true,
   showGuildPrices:  true,
   showCosts:        true,
   showTooltips:     true,
@@ -625,6 +605,14 @@ async function fetchGuildData() {
     if (!r.ok) return null;
     _guildData   = await r.json();
     _guildDataTs = Date.now();
+    // Cache gTag from guild response so resolveIdentity doesn't need a separate detail call
+    const gTag = _guildData?.tag ?? _guildData?.gTag ?? _guildData?.guild_tag ?? '';
+    if (gTag) {
+      const cached = await chrome.storage.local.get(['gTag', 'companyName']);
+      if (!cached.gTag) {
+        chrome.storage.local.set({ gTag, companyName: cached.companyName ?? '', gTagTs: Date.now() });
+      }
+    }
     return _guildData;
   } catch { return null; }
 }
@@ -723,28 +711,11 @@ function extractPriceMap(raw) {
 
 async function fetchMatPrices() {
   if (_priceMap && Date.now() - _priceMapTs < PRICE_TTL) return _priceMap;
-
-  // Try Local API first
   const localPrices = await requestGTLocalAPI('getPrices');
-  if (localPrices) {
-    const map = extractPriceMap(localPrices);
-    if (map.size > 0) {
-      _priceMap = map; _priceMapTs = Date.now();
-      return map;
-    }
-  }
-
-  // Fall back to direct API
-  const apiKey = await getExtApiKey();
-  if (!apiKey) return null;
-  try {
-    const resp = await fetch(`${GT_API}/public/exchange/mat-prices?apikey=${encodeURIComponent(apiKey)}`);
-    if (!resp.ok) return null;
-    const map = extractPriceMap(await resp.json());
-    _priceMap   = map;
-    _priceMapTs = Date.now();
-    return map;
-  } catch { return null; }
+  if (!localPrices) return _priceMap ?? null;
+  const map = extractPriceMap(localPrices);
+  if (map.size > 0) { _priceMap = map; _priceMapTs = Date.now(); }
+  return _priceMap ?? null;
 }
 
 // Fetch a single material's current lowest sell price via mat-details/{id}.
@@ -756,26 +727,10 @@ async function fetchMatDetailPrice(matId) {
   if (_priceMap?.has(id)) return _priceMap.get(id);
   if (_matDetailFetching.has(id)) return 0;
   _matDetailFetching.add(id);
-  const apiKey = await getExtApiKey();
-  if (!apiKey) { _matDetailFetching.delete(id); return 0; }
-  try {
-    const r = await fetch(`${GT_API}/public/exchange/mat-details/${id}?apikey=${encodeURIComponent(apiKey)}`);
-    if (!r.ok) { _matDetailFetching.delete(id); return 0; }
-    const detail = await r.json();
-    // detail may be { sellOrders: [{unitPrice,...},...] } or { minPrice, ... }
-    const orders = detail.sellOrders ?? detail.orders ?? [];
-    let price = 0;
-    if (orders.length) {
-      price = Math.min(...orders.map(o => Number(o.unitPrice ?? o.price ?? 0)).filter(p => p > 0));
-    }
-    if (!price) price = Number(detail.minPrice ?? detail.currentPrice ?? detail.avgPrice ?? 0);
-    if (price > 0) {
-      if (!_priceMap) _priceMap = new Map();
-      _priceMap.set(id, price);
-    }
-    _matDetailFetching.delete(id);
-    return price;
-  } catch { _matDetailFetching.delete(id); return 0; }
+  // Refresh price map from local API — the item may have appeared since last fetch
+  await fetchMatPrices();
+  _matDetailFetching.delete(id);
+  return _priceMap?.get(id) ?? 0;
 }
 
 // ── Average price cache ───────────────────────────────────────────────────────
@@ -786,24 +741,18 @@ const AVG_PRICE_TTL = 30 * 60 * 1000; // 30 min
 
 async function fetchAvgPrices() {
   if (_avgPriceMap && Date.now() - _avgPriceMapTs < AVG_PRICE_TTL) return _avgPriceMap;
-  const apiKey = await getExtApiKey();
-  if (!apiKey) return null;
-  try {
-    const resp = await fetch(`${GT_API}/public/exchange/mat-details?apikey=${encodeURIComponent(apiKey)}`);
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    const arr  = data.materials ?? (Array.isArray(data) ? data : null);
-    if (!arr) return null;
-    const map = new Map();
-    for (const m of arr) {
-      const id  = Number(m.id ?? m.matId);
-      const avg = Number(m.avgPrice ?? m.avg ?? 0);
-      if (id && avg > 0) map.set(id, avg / 100);
-    }
-    _avgPriceMap   = map;
-    _avgPriceMapTs = Date.now();
-    return map;
-  } catch { return null; }
+  // Local API getPrices returns avgPrice per material — build avg map from it
+  const localPrices = await requestGTLocalAPI('getPrices');
+  const arr = localPrices?.prices ?? (Array.isArray(localPrices) ? localPrices : null);
+  if (!arr) return _avgPriceMap ?? null;
+  const map = new Map();
+  for (const m of arr) {
+    const id  = Number(m.matId ?? m.id);
+    const avg = Number(m.avgPrice ?? m.avg ?? 0);
+    if (id && avg > 0) map.set(id, avg / 100);
+  }
+  if (map.size > 0) { _avgPriceMap = map; _avgPriceMapTs = Date.now(); }
+  return _avgPriceMap ?? null;
 }
 
 // Returns the effective price for a material, respecting custom overrides and priceMode.
@@ -986,6 +935,26 @@ function calcFlightPerks(companyData, gamedataPerks) {
   return { cargoCapPct, degradationPct, fuelSavingPct, speedPct };
 }
 
+// Raw base travel time at a given pf, before speed multipliers.
+// Used by fuel formula which needs baseTime at 50% power.
+function calcBaseTime(distance, totalWeight, emitterCount, emitter, pf) {
+  const ftlCapacity = emitterCount * (emitter.fieldCapacity ?? 1000) * pf;
+  const weightRatio = totalWeight > 0 ? ftlCapacity / totalWeight : 1;
+  let accel, maxSpd;
+  if (weightRatio >= 1) {
+    accel  = emitter.acceleration * weightRatio;
+    maxSpd = emitter.maxSpeed * (1 + (weightRatio - 1) * 0.15);
+  } else {
+    accel  = emitter.acceleration * Math.pow(weightRatio, 1.7);
+    maxSpd = emitter.maxSpeed * (1 - Math.pow(1 - weightRatio, 1.3));
+  }
+  const accelTime = maxSpd / accel;
+  const accelDist = (accel * accelTime * accelTime) / 2;
+  return distance <= accelDist
+    ? Math.sqrt(2 * distance / accel)
+    : accelTime + (distance - accelDist) / maxSpd;
+}
+
 // Returns { timeHours, fuelUsed, weightRatio, powerFraction, tankCapacity, weightEmpty, condWear }
 // pf: explicit power fraction (0.2–1.0). opts: { fuelSavingMult, degradationMult }
 function calcFlight(distance, ship, cargoWeight, emitter, reactor, speedMult, pf, opts = {}) {
@@ -993,20 +962,27 @@ function calcFlight(distance, ship, cargoWeight, emitter, reactor, speedMult, pf
   const blueprint    = ship.blueprint;
   const emitterCount = blueprint.emittersCount;
 
-  const { weightEmpty, fuelCapacity } = calcShipConfig(blueprint, emitter, reactor);
+  const { weightEmpty, fuelCapacity, reactorCount } = calcShipConfig(blueprint, emitter, reactor);
   const tankCapacity = fuelCapacity;
+  const totalWeight  = weightEmpty + cargoWeight;
 
-  const effectiveFuelCons = reactor.fuelConsumption * fuelSavingMult;
+  // Resolve power fraction — if not given, find highest pf that fits within tank
+  let powerFraction;
+  if (pf !== undefined) {
+    powerFraction = Math.max(0.2, Math.min(pf, 1.0));
+  } else {
+    powerFraction = 1.0;
+    for (let step = 80; step >= 0; step--) {
+      const testPF  = 0.20 + step * 0.01;
+      const fuelEff = Math.max(0.01, 1.20 - testPF);
+      const bt50    = calcBaseTime(distance, totalWeight, emitterCount, emitter, 0.50);
+      const fuel    = (reactorCount * reactor.fuelConsumption / fuelEff) * bt50 * fuelSavingMult;
+      if (fuel <= tankCapacity) { powerFraction = testPF; break; }
+    }
+  }
 
-  // If no explicit pf, use max power within fuel limit
-  const fuelDenom   = distance > 0 ? distance * emitterCount * effectiveFuelCons : Infinity;
-  const maxPFByFuel = fuelDenom > 0 ? Math.sqrt(tankCapacity / fuelDenom) : 1.0;
-  const powerFraction = pf !== undefined
-    ? Math.max(0.2, Math.min(pf, 1.0))
-    : Math.min(maxPFByFuel, 1.0);
-
+  // ── Time ──
   const ftlCapacity = emitterCount * (emitter.fieldCapacity ?? 1000) * powerFraction;
-  const totalWeight = weightEmpty + cargoWeight;
   const weightRatio = totalWeight > 0 ? ftlCapacity / totalWeight : 1;
 
   let accel, maxSpd;
@@ -1027,13 +1003,23 @@ function calcFlight(distance, ship, cargoWeight, emitter, reactor, speedMult, pf
   const condMult  = Math.min((ship.condition ?? 1) + 0.2, 1.0);
   const timeHours = baseTime / condMult / SERVER_SHIP_SPEED / speedMult;
 
-  const fuelUsed = Math.min(
-    distance * emitterCount * effectiveFuelCons * powerFraction * powerFraction,
+  // ── Fuel (dev formula): reactors × fuelRate / fuelEfficiency × baseTime@50pf ──
+  // fuelEfficiency = 1 - (pf - 0.20) = 1.20 - pf
+  const fuelEfficiency = Math.max(0.01, 1.20 - powerFraction);
+  const baseTime50     = calcBaseTime(distance, totalWeight, emitterCount, emitter, 0.50);
+  const fuelUsed       = Math.min(
+    (reactorCount * reactor.fuelConsumption / fuelEfficiency) * baseTime50 * fuelSavingMult,
     tankCapacity
   );
 
-  // Condition wear ≈ 1% per flight hour × degradation multiplier
-  const condWear = Math.min(timeHours * 0.01 * degradationMult, ship.condition ?? 1);
+  // ── Condition loss: 0.001 × SERVER_SHIP_SPEED = 0.004/hr, with shielding damage mult ──
+  // Shielding level 1=None(0%), 2=Light(-10%), 3=Heavy(-20%) per heat/rad slot
+  const heatLevel  = blueprint.heatShielding ?? 1;
+  const radLevel   = blueprint.radiationShielding ?? 1;
+  const heatRed    = heatLevel === 3 ? 0.20 : heatLevel === 2 ? 0.10 : 0;
+  const radRed     = radLevel  === 3 ? 0.20 : radLevel  === 2 ? 0.10 : 0;
+  const damageMult = Math.max(0, 1 - heatRed - radRed);
+  const condWear   = Math.min(timeHours * 0.004 * damageMult * degradationMult, ship.condition ?? 1);
 
   return { timeHours, fuelUsed, weightRatio, maxSpeed: maxSpd, accel, powerFraction, tankCapacity, weightEmpty, condWear };
 }
@@ -2025,47 +2011,6 @@ function showWishlistAllModal(onConfirm) {
   document.body.appendChild(modal);
 }
 
-// Delete All Wishlists — fetches then deletes each one
-async function handleDeleteAllWishlists(btn, resetFn) {
-  const apiKey = await getExtApiKey();
-  if (!apiKey) { showToast('Extended API key needed \u2014 set in Settings', false); resetFn(); return; }
-
-  btn.disabled = true;
-  btn.textContent = 'Fetching\u2026';
-
-  try {
-    let lists = null;
-    const localLists = await requestGTLocalAPI('getWishlists');
-    if (localLists) {
-      lists = localLists.wishlists ?? (Array.isArray(localLists) ? localLists : null);
-    }
-    if (!lists) {
-      const resp = await fetch(`${GT_API}/public/wishlists?apikey=${encodeURIComponent(apiKey)}`);
-      if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
-      lists = await resp.json();
-    }
-    if (!lists.length) { showToast('No wishlists found'); resetFn(); return; }
-
-    let deleted = 0, failed = 0;
-    for (const wl of lists) {
-      try {
-        const r = await fetch(
-          `${GT_API}/public/wishlist/${wl.id}?apikey=${encodeURIComponent(apiKey)}`,
-          { method: 'DELETE' }
-        );
-        if (!r.ok) throw new Error();
-        deleted++;
-      } catch { failed++; }
-    }
-
-    if (failed) showToast(`${deleted} deleted, ${failed} failed`, false);
-    else        showToast(`\u2713 ${deleted} wishlists deleted`);
-  } catch (err) {
-    showToast(`Error: ${err.message}`, false);
-  } finally {
-    resetFn();
-  }
-}
 
 // ── Header chip ───────────────────────────────────────────────────────────────
 
@@ -2342,7 +2287,7 @@ function buildSettingsPanel() {
   }
 
   // ── Wishlisting section (collapsible) ─────────────────────────────────────
-  const wishBody = mkCollapsible('Wishlisting', true);
+  const wishBody = mkCollapsible('Wishlisting', false);
 
   mkNumRow(wishBody, 'Target stock (days)', '#c0c0da', 'targetDays', 0.1, 0.1, true);
 
@@ -2441,33 +2386,37 @@ function buildSettingsPanel() {
   sepFeat.style.cssText = 'border-top:1px solid #1a1a30;margin:8px 0 0;';
   panel.appendChild(sepFeat);
 
-  const featTitle = mkLabel('Feature Visibility', 'padding:7px 0 5px;');
-  panel.appendChild(featTitle);
+  // Collapsible header
+  let featExpanded = true;
+  const featHeader = document.createElement('div');
+  featHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:7px 0 5px;cursor:pointer;user-select:none;';
+  const featHeaderLbl = mkLabel('Feature Visibility', '');
+  const featChevron = document.createElement('span');
+  featChevron.style.cssText = 'color:#6b6b8a;font-size:10px;transition:transform 0.15s;';
+  featChevron.textContent = '▾';
+  featHeader.appendChild(featHeaderLbl);
+  featHeader.appendChild(featChevron);
+  panel.appendChild(featHeader);
 
-  const featToggles = [
-    { key: 'showCosts',       label: 'Show costs / values' },
-    { key: 'showTooltips',    label: 'Price tooltips' },
-    { key: 'showGuildPrices', label: 'Guild prices in-game' },
-    { key: 'showGTE',         label: 'Guild Trade' },
-    { key: 'showSummary',     label: 'Summary panel' },
-    { key: 'showAssets',      label: 'Cash & assets panel' },
-    { key: 'showWishlist',    label: '1-click wishlisting' },
-    { key: 'showFlights',     label: 'Flight calculator' },
-  ];
+  const featBody = document.createElement('div');
+  panel.appendChild(featBody);
 
-  for (const { key, label } of featToggles) {
+  featHeader.addEventListener('click', () => {
+    featExpanded = !featExpanded;
+    featBody.style.display = featExpanded ? '' : 'none';
+    featChevron.style.transform = featExpanded ? '' : 'rotate(-90deg)';
+  });
+
+  function buildFeatToggle(container, key, label) {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:3px 0;';
-
     const lbl = document.createElement('span');
     lbl.style.color = '#c0c0da';
     lbl.textContent = label;
-
     const tog = buildMiniToggle(_settings[key], (val) => {
       _settings[key] = val;
       saveSettings();
       if (key === 'showCosts') {
-        // Rebuild chips + detail live without full reload
         if (_panelHeader && _loadedHeaderBases && _loadedHeaderGamedata) {
           _panelHeader.querySelectorAll('[data-base-id]').forEach(chip => {
             const base = _loadedHeaderBases.find(b => String(b.id) === chip.dataset.baseId);
@@ -2485,11 +2434,22 @@ function buildSettingsPanel() {
         loadAndInjectHeader();
       }
     });
-
     row.appendChild(lbl);
     row.appendChild(tog);
-    panel.appendChild(row);
+    container.appendChild(row);
   }
+
+  const mainToggles = [
+    { key: 'showGuildPrices',   label: 'Guild prices' },
+    { key: 'showGTE',           label: 'Guild trade' },
+    { key: 'showSummary',       label: 'Summary panel' },
+    { key: 'showAssets',        label: 'Cash & assets panel' },
+    { key: 'showFlights',       label: 'Flight planner panel' },
+    { key: 'showWishlistAll',   label: 'Wishlist all panel' },
+    { key: 'showWishlist',      label: '1-click wishlisting' },
+    { key: 'showWishlistPanel', label: 'Wishlist panel tab' },
+  ];
+  for (const { key, label } of mainToggles) buildFeatToggle(featBody, key, label);
 
   // Custom Prices button
   const sepPrices = document.createElement('div');
@@ -2784,6 +2744,17 @@ function mkPanelTitle(text) {
   return t;
 }
 
+function fmtCountdown(ms) {
+  if (ms <= 0) return 'landed';
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}hr ${m}m ${sec}s`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
 function mkSep() {
   const s = document.createElement('div');
   s.style.cssText = 'border-top:1px solid #1a1a30;margin:6px 0;';
@@ -2801,7 +2772,7 @@ function mkRow(label, value, valueCol) {
   return r;
 }
 
-function attachTooltip(el, buildFn) {
+function attachTooltip(el, buildFn, preferLeft = false) {
   let tip = null;
   el.addEventListener('mouseenter', () => {
     tip = document.createElement('div');
@@ -2811,8 +2782,11 @@ function attachTooltip(el, buildFn) {
   });
   el.addEventListener('mousemove', (e) => {
     if (!tip) return;
-    tip.style.left = Math.min(e.clientX + 12, window.innerWidth  - tip.offsetWidth  - 8) + 'px';
-    tip.style.top  = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8) + 'px';
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = preferLeft
+      ? Math.max(e.clientX - w - 12, 8) + 'px'
+      : Math.min(e.clientX + 12, window.innerWidth - w - 8) + 'px';
+    tip.style.top  = Math.min(e.clientY + 12, window.innerHeight - h - 8) + 'px';
   });
   el.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
 }
@@ -2930,16 +2904,37 @@ function openFlightPanel() {
   placeholderOpt.selected = true;
   shipSelect.appendChild(placeholderOpt);
 
+  // Track in-flight options for countdown updates
+  const flightOptUpdaters = [];
+
   for (const ship of sortedShips) {
     const inFlight = !!ship.flight;
-    const planet   = getPlanetById(gamedata, ship.pId);
-    const locName  = planet?.name ?? `ID ${ship.pId}`;
+    const fromPlanet = getPlanetById(gamedata, ship.pId);
+    const fromName   = fromPlanet?.name ?? `ID ${ship.pId}`;
     const opt = document.createElement('option');
     opt.value = ship.id ?? ship.name;
-    opt.textContent = inFlight ? `${ship.name} ✈  (${locName})` : `${ship.name}  (${locName})`;
+    if (inFlight) {
+      const destPlanet = getPlanetById(gamedata, ship.flight.destPId);
+      const destName   = destPlanet?.name ?? `ID ${ship.flight.destPId}`;
+      const aTime      = new Date(ship.flight.aDate).getTime();
+      const baseLabel  = `${ship.name} ✈  (${fromName} → ${destName}, `;
+      const updateOpt  = () => { opt.textContent = baseLabel + fmtCountdown(aTime - Date.now()) + ')'; };
+      updateOpt();
+      flightOptUpdaters.push(updateOpt);
+    } else {
+      opt.textContent = `${ship.name}  (${fromName})`;
+    }
     opt.disabled = inFlight;
     opt.dataset.shipName = ship.name;
     shipSelect.appendChild(opt);
+  }
+
+  // Tick countdown every second; self-clears when panel is removed
+  if (flightOptUpdaters.length) {
+    const countdownInterval = setInterval(() => {
+      if (!document.getElementById(GT_FLIGHT_ID)) { clearInterval(countdownInterval); return; }
+      flightOptUpdaters.forEach(fn => fn());
+    }, 1000);
   }
 
   shipSelect.addEventListener('change', async () => {
@@ -3014,7 +3009,18 @@ function openFlightPanel() {
   destInput.style.cssText = 'width:100%;background:#0a0a18;border:1px solid #2a2a4a;border-radius:4px;color:#c0c0da;font-size:11px;padding:5px 8px;font-family:inherit;box-sizing:border-box;';
 
   const destDropdown = document.createElement('div');
-  destDropdown.style.cssText = 'position:absolute;top:100%;left:0;right:0;background:#0d0d20;border:1px solid #2a2a4a;border-top:none;border-radius:0 0 4px 4px;max-height:150px;overflow-y:auto;z-index:10;display:none;';
+  destDropdown.id = 'gt-dest-dropdown';
+  destDropdown.style.cssText = 'position:fixed;background:#0d0d20;border:1px solid #2a2a4a;border-radius:4px;max-height:180px;overflow-y:auto;z-index:2147483646;display:none;min-width:180px;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+  destDropdown.addEventListener('mousedown', e => e.stopPropagation());
+  destDropdown.addEventListener('click',     e => e.stopPropagation());
+  document.body.appendChild(destDropdown);
+
+  function positionDestDropdown() {
+    const r = destInput.getBoundingClientRect();
+    destDropdown.style.left  = r.left + 'px';
+    destDropdown.style.width = r.width + 'px';
+    destDropdown.style.top   = (r.bottom + 2) + 'px';
+  }
 
   let selectedDestPlanet = null;
 
@@ -3028,15 +3034,13 @@ function openFlightPanel() {
     const matches = allPlanets.filter(p => p.name.toLowerCase().includes(q)).slice(0, 25);
     if (!matches.length) { destDropdown.style.display = 'none'; return; }
 
-    destDropdown.style.display = '';
     for (const planet of matches) {
       const opt = document.createElement('div');
       opt.style.cssText = 'padding:4px 8px;font-size:11px;color:#c0c0da;cursor:pointer;';
       opt.textContent = planet.name;
       opt.addEventListener('mouseenter', () => { opt.style.background = '#111128'; });
       opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
-      opt.addEventListener('mousedown', (e) => {
-        e.preventDefault();
+      opt.addEventListener('click', () => {
         destInput.value = planet.name;
         selectedDestPlanet = planet;
         destDropdown.style.display = 'none';
@@ -3044,11 +3048,12 @@ function openFlightPanel() {
       });
       destDropdown.appendChild(opt);
     }
+    positionDestDropdown();
+    destDropdown.style.display = '';
   });
   destInput.addEventListener('blur', () => { setTimeout(() => { destDropdown.style.display = 'none'; }, 150); });
 
   destWrap.appendChild(destInput);
-  destWrap.appendChild(destDropdown);
   panel.appendChild(destWrap);
   panel.appendChild(mkSep());
 
@@ -3110,8 +3115,8 @@ function openFlightPanel() {
   resultRows.time.lbl.textContent       = 'Travel time';
   resultRows.totalCost.lbl.textContent  = 'Total cost';
   resultRows.costPerTon.lbl.textContent = 'Cost per ton';
-  resultRows.fuel.lbl.textContent       = 'Fuel used';
-  resultRows.durability.lbl.textContent = 'Durability lost';
+  resultRows.fuel.lbl.textContent       = 'Fuel cost';
+  resultRows.durability.lbl.textContent = 'Repair cost';
 
   const fuelWarning = document.createElement('div');
   fuelWarning.style.cssText = `color:${COL_CRIT};font-size:11px;padding:4px 0;display:none;font-weight:600;`;
@@ -3188,20 +3193,32 @@ function openFlightPanel() {
     resultRows.distance.val.textContent   = `${dist.toFixed(1)} ly`;
     resultRows.time.val.textContent       = fmtFlightTime(timeHours);
     resultRows.totalCost.val.textContent  = totalCost > 0 ? fmtCr(totalCost) : '—';
-    resultRows.costPerTon.val.textContent = costPerTon > 0 ? fmtCr(costPerTon) : '—';
+    resultRows.costPerTon.val.textContent = costPerTon > 0 ? `$${costPerTon.toFixed(2)}` : '—';
 
-    // Fuel row with hover tooltip
+    // Fuel cost row
     resultRows.fuel.val.style.color   = hasFuel ? '#c0c0da' : COL_CRIT;
-    resultRows.fuel.val.textContent   = `${Math.ceil(fuelUsed).toLocaleString()} / ${tankCapacity.toLocaleString()} ${fuelMat?.sName ?? ''}`;
-    resultRows.fuel.val.title         = fuelPrice > 0
-      ? `${fuelMat?.sName ?? 'Fuel'} × ${Math.ceil(fuelUsed).toLocaleString()} = ${fmtCr(fuelCost)}`
-      : '';
+    resultRows.fuel.val.textContent   = fuelCost > 0 ? fmtCr(fuelCost) : '—';
+    attachTooltip(resultRows.fuel.val, tip => {
+      if (fuelPrice <= 0) return false;
+      tip.appendChild(mkTipTitle('Fuel breakdown'));
+      tip.appendChild(mkIconLine(fuelMat?.name ?? 'Fuel', `×${Math.ceil(fuelUsed).toLocaleString()}`, fmtCr(fuelCost)));
+      const tankLine = document.createElement('div');
+      tankLine.style.cssText = 'font-size:10px;color:#6b6b8a;margin-top:4px;';
+      tankLine.textContent = `Tank: ${(selectedShip.fuel ?? 0).toLocaleString()} / ${tankCapacity.toLocaleString()} ${fuelMat?.sName ?? ''}${hasFuel ? '' : ' ⚠ insufficient'}`;
+      tip.appendChild(tankLine);
+    }, true);
 
-    // Durability row with hover tooltip
-    resultRows.durability.val.textContent = `${condWearPct}%`;
-    resultRows.durability.val.title       = repairKitPrice > 0
-      ? `Repair Kit × ${Math.ceil(repairKitsUsed).toLocaleString()} = ${fmtCr(repairCost)}`
-      : '';
+    // Repair cost row
+    resultRows.durability.val.textContent = repairCost > 0 ? fmtCr(repairCost) : '—';
+    attachTooltip(resultRows.durability.val, tip => {
+      if (repairKitPrice <= 0) return false;
+      tip.appendChild(mkTipTitle('Repair breakdown'));
+      tip.appendChild(mkIconLine('Ship Repair Kit', `×${Math.ceil(repairKitsUsed).toLocaleString()}`, fmtCr(repairCost)));
+      const condLine = document.createElement('div');
+      condLine.style.cssText = 'font-size:10px;color:#6b6b8a;margin-top:4px;';
+      condLine.textContent = `Condition loss: ${condWearPct}%`;
+      tip.appendChild(condLine);
+    }, true);
 
     fuelWarning.style.display = hasFuel ? 'none' : '';
     resultsBox.style.display  = '';
@@ -3224,15 +3241,18 @@ function openFlightPanel() {
         flightCenterLevel = latestFCLevel;
         guildSpeedBonus   = 1 + flightCenterLevel * 0.03;
         totalSpeedMult    = startBonus * guildSpeedBonus * perkSpeedMult;
+        recalc();
       }
-      recalc();
     }).catch(() => {});
   }
 }
 
 function toggleFlightPanel() {
-  if (_flightOpen) { document.getElementById(GT_FLIGHT_ID)?.remove(); _flightOpen = false; }
-  else openFlightPanel();
+  if (_flightOpen) {
+    document.getElementById(GT_FLIGHT_ID)?.remove();
+    document.getElementById('gt-dest-dropdown')?.remove();
+    _flightOpen = false;
+  } else openFlightPanel();
 }
 
 let _cashOpen = false;
@@ -3242,7 +3262,7 @@ function closeAllPanels() {
   document.getElementById(GT_SETTINGS_ID)?.remove();      _settingsOpen    = false;
   document.getElementById(GT_CASH_ID)?.remove();          _cashOpen        = false;
   document.getElementById(GT_SUMMARY_ID)?.remove();       _summaryOpen     = false;
-  document.getElementById(GT_FLIGHT_ID)?.remove();        _flightOpen      = false;
+  document.getElementById(GT_FLIGHT_ID)?.remove();        document.getElementById('gt-dest-dropdown')?.remove(); _flightOpen = false;
   document.getElementById(GT_WISHLIST_ALL_ID)?.remove();  _wishlistAllOpen = false;
 }
 
@@ -3581,7 +3601,7 @@ async function openCashPanel() {
           for (const item of breakdown) {
             tip.appendChild(mkIconLine(item.name, `${item.name} x${item.qty.toLocaleString()}`, `@ ${fmtCr(item.price)} ($${Math.round(item.lineVal).toLocaleString()})`));
           }
-        });
+        }, true);
       }
 
       panel.appendChild(row);
@@ -3635,7 +3655,7 @@ async function openCashPanel() {
           const valStr = m.price > 0 ? `@ ${fmtCr(m.price)} ($${Math.round(m.lineVal).toLocaleString()})` : null;
           tip.appendChild(mkIconLine(m.name, `${m.name} x${m.qty.toLocaleString()}`, valStr));
         }
-      });
+      }, true);
       panel.appendChild(row);
       panel.appendChild(mkSep());
     }
@@ -3707,7 +3727,7 @@ async function openCashPanel() {
             const valStr = m.price > 0 ? `@ ${fmtCr(m.price)} ($${Math.round(m.lineVal).toLocaleString()})` : null;
             tip.appendChild(mkIconLine(m.name, `${m.name} x${m.qty.toLocaleString()}`, valStr));
           }
-        });
+        }, true);
         shipList.appendChild(shipRow);
       }
 
@@ -4254,8 +4274,8 @@ async function loadAndInjectHeader() {
       controls.appendChild(cashBtn);
     }
 
-    if (_settings.showWishlist) {
-      const wishAllBtn = mkCtrlBtn('&#128722;', 'Create wishlists for all visible bases');
+    if (_settings.showWishlistAll) {
+      const wishAllBtn = mkCtrlBtn('&#128722;', 'Wishlist all panel');
       wishAllBtn.addEventListener('click', () => {
         showWishlistAllModal(opts => handleWishlistAll(wishAllBtn, opts));
       });
@@ -4263,7 +4283,7 @@ async function loadAndInjectHeader() {
     }
 
     if (_settings.showFlights) {
-      const flightBtn = mkCtrlBtn('&#9992;', 'Flight calculator');
+      const flightBtn = mkCtrlBtn('&#9992;', 'Flight planner');
       flightBtn.addEventListener('click', toggleFlightPanel);
       controls.appendChild(flightBtn);
     }
@@ -4320,35 +4340,37 @@ async function loadAndInjectHeader() {
     document.body.appendChild(header);
 
     // Right-edge panel wishlist button
-    const pwBtn = document.createElement('div');
-    pwBtn.id = GT_PANEL_WISHLIST_BTN_ID;
-    pwBtn.title = 'Wishlist Panel';
-    pwBtn.style.cssText = [
-      'position:fixed', 'right:0', 'top:50%', 'transform:translateY(-50%)',
-      'z-index:2147483640',
-      'background:#0a0a18', 'border:1px solid #1a1a38', 'border-right:none',
-      'border-radius:6px 0 0 6px',
-      'padding:10px 5px',
-      'cursor:pointer',
-      'display:flex', 'flex-direction:column', 'align-items:center', 'gap:4px',
-      'font-family:system-ui,sans-serif',
-    ].join(';');
+    if (_settings.showWishlistPanel !== false) {
+      const pwBtn = document.createElement('div');
+      pwBtn.id = GT_PANEL_WISHLIST_BTN_ID;
+      pwBtn.title = 'Wishlist Panel';
+      pwBtn.style.cssText = [
+        'position:fixed', 'right:0', 'top:50%', 'transform:translateY(-50%)',
+        'z-index:2147483640',
+        'background:#0a0a18', 'border:1px solid #1a1a38', 'border-right:none',
+        'border-radius:6px 0 0 6px',
+        'padding:10px 5px',
+        'cursor:pointer',
+        'display:flex', 'flex-direction:column', 'align-items:center', 'gap:4px',
+        'font-family:system-ui,sans-serif',
+      ].join(';');
 
-    const pwBtnText = document.createElement('span');
-    pwBtnText.style.cssText = 'writing-mode:vertical-rl;transform:rotate(180deg);font-size:10px;color:#6b6b8a;letter-spacing:.05em;user-select:none;';
-    pwBtnText.textContent = 'Wishlist';
+      const pwBtnText = document.createElement('span');
+      pwBtnText.style.cssText = 'writing-mode:vertical-rl;transform:rotate(180deg);font-size:10px;color:#6b6b8a;letter-spacing:.05em;user-select:none;';
+      pwBtnText.textContent = 'Wishlist';
 
-    const pwBtnBadge = document.createElement('span');
-    pwBtnBadge.setAttribute('data-badge', '1');
-    pwBtnBadge.style.cssText = 'background:#4f46e5;color:#fff;font-size:9px;border-radius:8px;padding:1px 4px;min-width:14px;text-align:center;display:none;';
+      const pwBtnBadge = document.createElement('span');
+      pwBtnBadge.setAttribute('data-badge', '1');
+      pwBtnBadge.style.cssText = 'background:#4f46e5;color:#fff;font-size:9px;border-radius:8px;padding:1px 4px;min-width:14px;text-align:center;display:none;';
 
-    pwBtn.appendChild(pwBtnText);
-    pwBtn.appendChild(pwBtnBadge);
-    pwBtn.addEventListener('mouseenter', () => { pwBtn.style.background = '#111128'; pwBtnText.style.color = '#d8d8f0'; });
-    pwBtn.addEventListener('mouseleave', () => { pwBtn.style.background = '#0a0a18'; pwBtnText.style.color = '#6b6b8a'; });
-    pwBtn.addEventListener('click', togglePanelWishlist);
-    document.body.appendChild(pwBtn);
-    _updatePanelWishlistBtn();
+      pwBtn.appendChild(pwBtnText);
+      pwBtn.appendChild(pwBtnBadge);
+      pwBtn.addEventListener('mouseenter', () => { pwBtn.style.background = '#111128'; pwBtnText.style.color = '#d8d8f0'; });
+      pwBtn.addEventListener('mouseleave', () => { pwBtn.style.background = '#0a0a18'; pwBtnText.style.color = '#6b6b8a'; });
+      pwBtn.addEventListener('click', togglePanelWishlist);
+      document.body.appendChild(pwBtn);
+      _updatePanelWishlistBtn();
+    }
 
     // Keep spacer + tab + all floating panels in sync with header height
     _headerResizeObs = new ResizeObserver(() => {
@@ -4369,7 +4391,7 @@ async function loadAndInjectHeader() {
     if (!_outsideClickBound) {
       _outsideClickBound = true;
       document.addEventListener('click', (e) => {
-        const extIds = [GT_HEADER_ID, GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID, GT_TAB_ID, GT_TOAST_ID, GT_CUSTOM_PRICES_ID, GT_PANEL_WISHLIST_ID, GT_PANEL_WISHLIST_BTN_ID, GT_FLIGHT_ID, GT_WISHLIST_ALL_ID];
+        const extIds = [GT_HEADER_ID, GT_DETAIL_ID, GT_SETTINGS_ID, GT_CASH_ID, GT_SUMMARY_ID, GT_TAB_ID, GT_TOAST_ID, GT_CUSTOM_PRICES_ID, GT_PANEL_WISHLIST_ID, GT_PANEL_WISHLIST_BTN_ID, GT_FLIGHT_ID, GT_WISHLIST_ALL_ID, 'gt-dest-dropdown'];
         const inExt = extIds.some(id => document.getElementById(id)?.contains(e.target));
         if (!inExt && (_detailBaseId || _settingsOpen || _cashOpen || _summaryOpen || _flightOpen || _wishlistAllOpen)) {
           closeAllPanels();
