@@ -349,19 +349,29 @@ function _resolveSpriteUrl(url) {
 
 function loadSprite() {
   if (_spriteUrl) return;
+
+  const spriteRe = /\/assets\/sprite-[A-Za-z0-9_-]+\.svg/;
+
+  // 1. Scan existing <use> elements in the game page DOM — most reliable, works even
+  //    when the resource is cached (cached resources don't appear in PerformanceObserver).
+  for (const use of document.querySelectorAll('use[href],use[xlink\\:href]')) {
+    const href = use.getAttribute('href') || use.getAttribute('xlink:href') || '';
+    if (spriteRe.test(href)) { _resolveSpriteUrl(href); return; }
+  }
+
+  // 2. Check performance buffer synchronously for already-recorded (non-cached) loads.
+  for (const e of performance.getEntriesByType('resource')) {
+    if (spriteRe.test(e.name)) { _resolveSpriteUrl(e.name); return; }
+  }
+
+  // 3. Watch for the sprite load if it hasn't happened yet.
   try {
-    // PerformanceObserver with buffered:true fires immediately for already-loaded
-    // resources AND watches for future loads — covers both timing scenarios.
     const obs = new PerformanceObserver(list => {
       for (const e of list.getEntries()) {
-        if (/\/assets\/sprite-[A-Za-z0-9_-]+\.svg/.test(e.name)) {
-          _resolveSpriteUrl(e.name);
-          obs.disconnect();
-          return;
-        }
+        if (spriteRe.test(e.name)) { _resolveSpriteUrl(e.name); obs.disconnect(); return; }
       }
     });
-    obs.observe({ type: 'resource', buffered: true });
+    obs.observe({ type: 'resource', buffered: false });
   } catch { /* PerformanceObserver unavailable */ }
 }
 
