@@ -488,6 +488,26 @@ function fmtDays(d) {
   return d.toFixed(1) + 'd';
 }
 
+function _debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+// ── Contracts pinning ─────────────────────────────────────────────────────────
+const GT_PINNED_CONTRACTS_KEY = 'gt-pinned-contracts';
+const _getPinnedContracts = () => {
+  try { return new Set(JSON.parse(localStorage.getItem(GT_PINNED_CONTRACTS_KEY) ?? '[]')); }
+  catch { return new Set(); }
+};
+const _setPinnedContracts = set =>
+  localStorage.setItem(GT_PINNED_CONTRACTS_KEY, JSON.stringify([...set]));
+
+const _contractRowKey = tr => {
+  const tds = [...tr.querySelectorAll('td')];
+  const type    = tds[0]?.firstChild?.textContent?.trim() ?? '';
+  const date    = tds[1]?.querySelector('div')?.textContent?.trim() ?? '';
+  const partner = tds[2]?.textContent?.trim().slice(0, 30) ?? '';
+  const mat     = tds[4]?.textContent?.trim().slice(0, 30) ?? '';
+  return [type, date, partner, mat].join('|').replace(/\s+/g, '');
+};
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS = {
@@ -498,6 +518,8 @@ const DEFAULT_SETTINGS = {
   includeInputs:      true,
   includeConsumables: true,
   hiddenBases:        [],
+  baseOrder:          [],     // ordered array of base ID strings; empty = default sort
+  sortByTimeLeft:     false,  // when true, sort chips/list by worstDay ascending
   priceMode:          'current', // 'current' | 'average'
   customPrices:       {},        // { [matId]: priceInDollars }
   // Feature visibility
@@ -511,6 +533,8 @@ const DEFAULT_SETTINGS = {
   showCosts:        true,
   showTooltips:     true,
   showFlights:      true,
+  disableScrap:     false,
+  disableHotkeys:   false,
 };
 
 let _settings = { ...DEFAULT_SETTINGS };
@@ -676,7 +700,7 @@ async function refreshChips() {
   // Remove old chips, keep overflow badge (always last child)
   const overflowBadge = chipArea.lastElementChild;
   for (const chip of [...chipArea.querySelectorAll('[data-base-id]')]) chip.remove();
-  const sorted = sortBases(bases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
+  const sorted = sortBases(bases, _loadedHeaderGamedata).filter(b => !_settings.hiddenBases.includes(String(b.id)));
   for (const base of sorted) chipArea.insertBefore(buildHeaderChip(base, _loadedHeaderGamedata), overflowBadge);
   _syncOverflowBadge?.();
 }
@@ -1097,6 +1121,22 @@ function findOptimalFlightPF(distance, ship, cargoWeight, emitter, reactor, spee
   return bestPF;
 }
 
+// Finds pf that minimises total trip cost (fuel + repair) / effectiveCargo — ignores travel time.
+function findCheapestFlightPF(distance, ship, cargoWeight, emitter, reactor, speedMult, opts) {
+  const { fuelPrice = 0, repairKitPrice = 0, repairKitsTotal = 0, effectiveCargo = 1 } = opts;
+  if (fuelPrice <= 0 && repairKitPrice <= 0) return 0.20;
+  let bestPF = 0.20, bestScore = Infinity;
+  for (let step = 0; step <= 80; step++) {
+    const pf = 0.20 + step * 0.01;
+    const r  = calcFlight(distance, ship, cargoWeight, emitter, reactor, speedMult, pf, opts);
+    const fuelCost   = r.fuelUsed * (fuelPrice > 0 ? fuelPrice : 0);
+    const repairCost = repairKitsTotal * r.condWear * (repairKitPrice > 0 ? repairKitPrice : 0);
+    const score      = (fuelCost + repairCost) / Math.max(effectiveCargo, 1);
+    if (score < bestScore) { bestScore = score; bestPF = pf; }
+  }
+  return bestPF;
+}
+
 // ── Per-base needs calculation ────────────────────────────────────────────────
 
 function calcBaseNeeds(base, gamedata) {
@@ -1262,11 +1302,18 @@ function calcBaseNeeds(base, gamedata) {
     });
   }
 
-  // Annotate inputs and consumables with self-sufficiency info
-  const outputMap = new Map(outputs.map(o => [o.matId, o.dailyOutput]));
+  // Annotate inputs/consumables with self-sufficiency, and outputs with net surplus
+  const outputMap = new Map();
+  for (const o of outputs) outputMap.set(o.matId, (outputMap.get(o.matId) ?? 0) + o.dailyOutput);
+  const inputMap  = new Map();
+  for (const item of [...inputs, ...consumables]) {
+    inputMap.set(item.matId, (inputMap.get(item.matId) ?? 0) + item.dailyNeed);
+  }
+
   for (const item of [...inputs, ...consumables]) {
     const produced = outputMap.get(item.matId) ?? 0;
-    if (produced >= item.dailyNeed) {
+    // Use a 1% tolerance to absorb floating-point drift in cyclesPerDay calculations
+    if (produced >= item.dailyNeed * 0.99) {
       item.selfProduced = true;
       item.netDailyNeed = 0;
       item.days = Infinity;
@@ -1278,6 +1325,12 @@ function calcBaseNeeds(base, gamedata) {
       item.selfProduced = false;
       item.netDailyNeed = item.dailyNeed;
     }
+  }
+
+  // Annotate outputs with net surplus (gross output minus internal consumption)
+  for (const out of outputs) {
+    const consumed = inputMap.get(out.matId) ?? 0;
+    out.netDailyOutput = Math.max(0, out.dailyOutput - consumed);
   }
 
   return { inputs, consumables, outputs };
@@ -1381,6 +1434,56 @@ function buildDetailPanel(base, gamedata) {
   nameRow.appendChild(nameEl);
   nameRow.appendChild(costToggle);
   panel.appendChild(nameRow);
+
+  // ── Warehouse fill bar (async) ────────────────────────────────────────────
+  const whBarArea = document.createElement('div');
+  whBarArea.style.cssText = 'padding:4px 0 6px;border-bottom:1px solid #1a1a2e;margin-bottom:4px;';
+  panel.appendChild(whBarArea);
+
+  const _matWeightMap = new Map((gamedata.materials ?? []).map(m => [m.id, m.weight ?? 0]));
+  const _whCurrentWeight = (base.warehouse?.mats ?? []).reduce(
+    (s, m) => s + (m.am ?? 0) * (_matWeightMap.get(Number(m.id)) ?? 0), 0);
+
+  function _renderWhBar(cap) {
+    whBarArea.innerHTML = '';
+    if (!cap) { whBarArea.style.display = 'none'; return; }
+    whBarArea.style.display = '';
+    const fillPct = Math.min(1, _whCurrentWeight / cap);
+    const fillCol = fillPct >= 0.95 ? '#ef4444' : fillPct >= 0.80 ? '#f59e0b' : '#22c55e';
+
+    const barRow = document.createElement('div');
+    barRow.style.cssText = 'display:flex;align-items:center;gap:6px;';
+    const barWrap = document.createElement('div');
+    barWrap.style.cssText = 'flex:1;height:3px;background:#1a1a30;border-radius:2px;overflow:hidden;';
+    const barFill = document.createElement('div');
+    barFill.style.cssText = `height:100%;width:${(fillPct * 100).toFixed(1)}%;background:${fillCol};border-radius:2px;`;
+    barWrap.appendChild(barFill);
+    const wtLabel = document.createElement('span');
+    wtLabel.style.cssText = 'color:#6b6b8a;font-size:10px;white-space:nowrap;flex-shrink:0;';
+    wtLabel.textContent = `${Math.round(_whCurrentWeight).toLocaleString()}t / ${Math.round(cap).toLocaleString()}t`;
+    barRow.appendChild(barWrap);
+    barRow.appendChild(wtLabel);
+    whBarArea.appendChild(barRow);
+
+    const netWeightGain = outputs.reduce((s, o) => s + (o.netDailyOutput ?? o.dailyOutput) * (_matWeightMap.get(Number(o.matId)) ?? 0), 0)
+      - [...inputs, ...consumables].reduce((s, i) => s + i.dailyNeed * (_matWeightMap.get(Number(i.matId)) ?? 0), 0);
+    if (netWeightGain > 0) {
+      const rem = cap - _whCurrentWeight;
+      if (rem > 0) {
+        const fullLbl = document.createElement('span');
+        fullLbl.style.cssText = 'display:block;color:#6b6b8a;font-size:10px;margin-top:2px;';
+        fullLbl.textContent = `Full in ${fmtDays(rem / netWeightGain)}`;
+        whBarArea.appendChild(fullLbl);
+      }
+    }
+  }
+
+  const _whId = base.warehouse?.id ?? base.warehouseId;
+  if (_whId) {
+    requestGTLocalAPI('getWarehouse', { warehouseId: _whId }).then(wh => _renderWhBar(wh?.cap ?? 0));
+  } else {
+    whBarArea.style.display = 'none';
+  }
 
   // Content area — rebuilt when cost toggle changes
   const contentArea = document.createElement('div');
@@ -1572,13 +1675,14 @@ function buildDetailPanel(base, gamedata) {
     if (outputs.length) {
       const oh = document.createElement('div');
       oh.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin:6px 0 3px;';
-      const ohLabel = mkLabel('Outputs / day');
+      const ohLabel = mkLabel('Net Outputs / day');
       oh.appendChild(ohLabel);
       contentArea.appendChild(oh);
 
       for (const r of outputs) {
+        const netOutput  = r.netDailyOutput ?? r.dailyOutput;
         const unitPrice  = effectivePrice(r.matId);
-        const dailyValue = unitPrice * r.dailyOutput;
+        const dailyValue = unitPrice * netOutput;
         totalDailyOutputValue += dailyValue;
         outputItems.push({ r, unitPrice, dailyValue });
 
@@ -1597,7 +1701,7 @@ function buildDetailPanel(base, gamedata) {
 
         const qtySpan = document.createElement('span');
         qtySpan.style.cssText = 'color:#9090b0;font-size:10px;white-space:nowrap;text-align:right;';
-        qtySpan.textContent = Math.round(r.dailyOutput).toLocaleString() + '/d';
+        qtySpan.textContent = Math.round(netOutput).toLocaleString() + '/d';
 
         const stockSpan = document.createElement('span');
         stockSpan.style.cssText = 'color:#7a7a9a;font-size:10px;white-space:nowrap;text-align:right;';
@@ -1614,8 +1718,9 @@ function buildDetailPanel(base, gamedata) {
           row.appendChild(valSpan);
         }
 
-        // Row hover tooltip
-        if (showCosts && dailyValue > 0) {
+        // Row hover tooltip — show when costs visible OR when output is netted down
+        const isNetted = r.netDailyOutput != null && r.netDailyOutput < r.dailyOutput;
+        if (showCosts && dailyValue > 0 || isNetted) {
           let rowTip = null;
           row.addEventListener('mouseenter', () => {
             rowTip = document.createElement('div');
@@ -1628,13 +1733,25 @@ function buildDetailPanel(base, gamedata) {
             if (ic) left.appendChild(ic);
             const lbl = document.createElement('span');
             lbl.style.color = '#c0c0da';
-            lbl.textContent = `${r.name} x${Math.round(r.dailyOutput).toLocaleString()}/d`;
+            lbl.textContent = `${r.name} x${Math.round(netOutput).toLocaleString()}/d`;
             left.appendChild(lbl);
-            const val = document.createElement('span');
-            val.style.color = '#9090b0';
-            val.textContent = `@ ${fmtCr(unitPrice)} (${fmtCr(dailyValue)}/d)`;
-            line.appendChild(left); line.appendChild(val);
+            if (showCosts && dailyValue > 0) {
+              const val = document.createElement('span');
+              val.style.color = '#9090b0';
+              val.textContent = `@ ${fmtCr(unitPrice)} (${fmtCr(dailyValue)}/d)`;
+              line.appendChild(left); line.appendChild(val);
+            } else {
+              line.appendChild(left);
+            }
             rowTip.appendChild(line);
+            if (isNetted) {
+              const grossLine = document.createElement('div');
+              grossLine.style.cssText = 'display:flex;justify-content:space-between;gap:16px;padding:2px 0 0;';
+              const gl = document.createElement('span'); gl.style.color = '#4a4a6a'; gl.textContent = 'Gross /day';
+              const gv = document.createElement('span'); gv.style.cssText = 'color:#4a4a6a;font-weight:600;'; gv.textContent = Math.round(r.dailyOutput).toLocaleString();
+              grossLine.appendChild(gl); grossLine.appendChild(gv);
+              rowTip.appendChild(grossLine);
+            }
             document.body.appendChild(rowTip);
           });
           row.addEventListener('mousemove', (e) => {
@@ -1906,7 +2023,7 @@ function showWishlistAllModal(onConfirm) {
   const existing = document.getElementById(GT_WISHLIST_ALL_ID);
   if (existing) { existing.remove(); _wishlistAllOpen = false; return; }
 
-  const allBases = sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
+  const allBases = sortBases(_loadedHeaderBases);
   if (!allBases.length) return;
 
   closeAllPanels();
@@ -1936,26 +2053,56 @@ function showWishlistAllModal(onConfirm) {
   };
   updateBasesLabel();
 
+  // Select all / Deselect all
+  const selAllRow = document.createElement('div');
+  selAllRow.style.cssText = 'display:flex;gap:8px;margin-bottom:4px;';
+  const _mkSelBtn = (label) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:10px;color:#6b6b8a;padding:0;font-family:inherit;text-decoration:underline;';
+    btn.addEventListener('mouseenter', () => { btn.style.color = '#9090b0'; });
+    btn.addEventListener('mouseleave', () => { btn.style.color = '#6b6b8a'; });
+    return btn;
+  };
+  const selAllBtn   = _mkSelBtn('Select all');
+  const deselAllBtn = _mkSelBtn('Deselect all');
+  selAllRow.append(selAllBtn, deselAllBtn);
+  modal.appendChild(selAllRow);
+
   const basesList = document.createElement('div');
   basesList.style.cssText = 'background:#0a0a18;border:1px solid #1a1a30;border-radius:6px;padding:8px 10px;margin-bottom:14px;max-height:140px;overflow-y:auto;';
 
-  allBases.forEach(b => {
-    const bid = String(b.id);
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:7px;padding:2px 0;font-size:12px;';
-    const { col } = baseStatusColour(b, _loadedHeaderGamedata);
-    const dot = document.createElement('span');
-    dot.style.cssText = `width:7px;height:7px;border-radius:50%;background:${col};flex-shrink:0;display:inline-block;`;
-    const name = document.createElement('span');
-    name.style.cssText = 'flex:1;color:#c0c0da;';
-    name.textContent = b.name;
-    const tog = buildMiniToggle(true, val => {
-      if (val) localBasesOn.add(bid); else localBasesOn.delete(bid);
-      updateBasesLabel();
+  const _renderBaseRows = () => {
+    basesList.innerHTML = '';
+    allBases.forEach(b => {
+      const bid = String(b.id);
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:7px;padding:2px 0;font-size:12px;';
+      const { col } = baseStatusColour(b, _loadedHeaderGamedata);
+      const dot = document.createElement('span');
+      dot.style.cssText = `width:7px;height:7px;border-radius:50%;background:${col};flex-shrink:0;display:inline-block;`;
+      const name = document.createElement('span');
+      name.style.cssText = 'flex:1;color:#c0c0da;';
+      name.textContent = b.name;
+      const tog = buildMiniToggle(localBasesOn.has(bid), val => {
+        if (val) localBasesOn.add(bid); else localBasesOn.delete(bid);
+        updateBasesLabel();
+      });
+      row.append(dot, name, tog);
+      basesList.appendChild(row);
     });
-    row.append(dot, name, tog);
-    basesList.appendChild(row);
+  };
+  _renderBaseRows();
+
+  selAllBtn.addEventListener('click', () => {
+    allBases.forEach(b => localBasesOn.add(String(b.id)));
+    _renderBaseRows(); updateBasesLabel();
   });
+  deselAllBtn.addEventListener('click', () => {
+    localBasesOn.clear();
+    _renderBaseRows(); updateBasesLabel();
+  });
+
   modal.appendChild(basesList);
 
   // ── Settings section ───────────────────────────────────────────────────────
@@ -1970,11 +2117,11 @@ function showWishlistAllModal(onConfirm) {
   stockPeriodRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;border-bottom:1px solid #12122a;';
   const spLabel = document.createElement('span'); spLabel.style.color = '#6b6b8a'; spLabel.textContent = 'Stock period';
   const spInput = document.createElement('input');
-  spInput.type = 'number'; spInput.min = '1'; spInput.max = '365'; spInput.step = '1';
-  spInput.value = localState.targetDays;
-  spInput.style.cssText = 'width:48px;background:#1a1a30;border:1px solid #2a2a4a;border-radius:4px;color:#c0c0da;font-size:11px;padding:2px 4px;text-align:right;font-family:inherit;';
+  spInput.type = 'number'; spInput.min = '0.1'; spInput.max = '365'; spInput.step = '0.1';
+  spInput.value = localState.targetDays.toFixed(1);
+  spInput.style.cssText = 'width:52px;background:#1a1a30;border:1px solid #2a2a4a;border-radius:4px;color:#c0c0da;font-size:11px;padding:2px 4px;text-align:right;font-family:inherit;';
   spInput.addEventListener('input', () => {
-    const v = parseInt(spInput.value, 10);
+    const v = parseFloat(spInput.value);
     if (v > 0) localState.targetDays = v;
   });
   const spSuffix = document.createElement('span'); spSuffix.style.cssText = 'color:#6b6b8a;margin-left:3px;'; spSuffix.textContent = 'd';
@@ -2359,7 +2506,7 @@ function buildSettingsPanel() {
     const expRow = document.createElement('div');
     expRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:7px 0 5px;cursor:pointer;';
 
-    const expLabel = mkLabel(`Bases (${_loadedHeaderBases.length})`);
+    const expLabel = mkLabel(`Overview (${_loadedHeaderBases.length})`);
 
     const expArrow = document.createElement('span');
     expArrow.style.cssText = 'color:#6b6b8a;font-size:10px;';
@@ -2376,7 +2523,7 @@ function buildSettingsPanel() {
 
     const basesNote = document.createElement('div');
     basesNote.style.cssText = 'display:none;color:#4a4a6a;font-size:10px;line-height:1.4;padding-bottom:4px;';
-    basesNote.textContent = 'Hidden bases are excluded from the summary panel and wishlist all.';
+    basesNote.textContent = 'Hidden bases are excluded from summary and header view only.';
     basesList.appendChild(basesNote);
 
     expRow.addEventListener('click', () => {
@@ -2386,44 +2533,103 @@ function buildSettingsPanel() {
       expArrow.textContent = basesExpanded ? '\u25b4' : '\u25be';
     });
 
-    for (const base of sortBases(_loadedHeaderBases)) {
-      const bid = String(base.id);
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:2px 0;';
+    // Sort by time left toggle
+    const sortRow = document.createElement('div');
+    sortRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:4px 0 6px;border-bottom:1px solid #1a1a30;margin-bottom:2px;';
+    const sortLbl = document.createElement('span');
+    sortLbl.style.cssText = 'color:#9090b0;font-size:11px;';
+    sortLbl.textContent = 'Sort by time left';
+    const sortTog = buildMiniToggle(_settings.sortByTimeLeft, (on) => {
+      _settings.sortByTimeLeft = on;
+      saveSettings();
+      rebuildBaseRows();
+      refreshHeaderChips();
+    });
+    sortRow.appendChild(sortLbl);
+    sortRow.appendChild(sortTog);
+    basesList.appendChild(sortRow);
 
-      const lbl = document.createElement('span');
-      lbl.style.color = '#c0c0da';
-      lbl.textContent = base.name;
+    const refreshHeaderChips = () => {
+      const chipArea = _panelHeader?.querySelector('[data-chip-area]');
+      if (!chipArea || !_loadedHeaderGamedata) return;
+      chipArea.querySelectorAll('[data-base-id]').forEach(c => c.remove());
+      const overflowBadge = chipArea.lastElementChild;
+      const sorted = sortBases(_loadedHeaderBases, _loadedHeaderGamedata)
+        .filter(b => !_settings.hiddenBases.includes(String(b.id)));
+      for (const b of sorted) chipArea.insertBefore(buildHeaderChip(b, _loadedHeaderGamedata), overflowBadge);
+      _syncOverflowBadge?.();
+    };
 
-      const tog = buildMiniToggle(!_settings.hiddenBases.includes(bid), (visible) => {
-        if (visible) {
-          _settings.hiddenBases = _settings.hiddenBases.filter(id => id !== bid);
-        } else {
-          if (!_settings.hiddenBases.includes(bid)) _settings.hiddenBases.push(bid);
-        }
-        saveSettings();
-        // Update header chips immediately
-        const chipArea = _panelHeader?.querySelector('[data-chip-area]');
-        if (chipArea && _loadedHeaderGamedata) {
-          const existing = chipArea.querySelector(`[data-base-id="${bid}"]`);
-          if (visible && !existing) {
-            chipArea.querySelectorAll('[data-base-id]').forEach(c => c.remove());
-            const sorted = sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
-            for (const b of sorted) chipArea.appendChild(buildHeaderChip(b, _loadedHeaderGamedata));
-          } else if (!visible && existing) {
-            existing.remove();
-            if (_detailBaseId === bid) {
-              document.getElementById(GT_DETAIL_ID)?.remove();
-              _detailBaseId = null;
-            }
-          }
-        }
+    const rebuildBaseRows = () => {
+      [...basesList.children].forEach(c => {
+        if (c !== basesNote && c !== sortRow) c.remove();
       });
+      const sortByTime = _settings.sortByTimeLeft;
+      for (const base of sortBases(_loadedHeaderBases, _loadedHeaderGamedata)) {
+        const bid = String(base.id);
+        const row = document.createElement('div');
+        row.dataset.dragId = bid;
+        row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0;';
+        row.draggable = !sortByTime;
 
-      row.appendChild(lbl);
-      row.appendChild(tog);
-      basesList.appendChild(row);
-    }
+        const handle = document.createElement('span');
+        handle.textContent = '\u283f';
+        handle.style.cssText = `color:#6b6b8a;font-size:13px;cursor:${sortByTime ? 'default' : 'grab'};flex-shrink:0;opacity:${sortByTime ? 0.3 : 1};user-select:none;`;
+
+        const lbl = document.createElement('span');
+        lbl.style.cssText = `flex:1;color:${sortByTime ? '#4a4a6a' : '#c0c0da'};font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:${sortByTime ? 0.5 : 1};`;
+        lbl.textContent = base.name;
+
+        const tog = buildMiniToggle(!_settings.hiddenBases.includes(bid), (visible) => {
+          if (visible) {
+            _settings.hiddenBases = _settings.hiddenBases.filter(id => id !== bid);
+          } else {
+            if (!_settings.hiddenBases.includes(bid)) _settings.hiddenBases.push(bid);
+          }
+          saveSettings();
+          refreshHeaderChips();
+        });
+
+        row.appendChild(handle);
+        row.appendChild(lbl);
+        row.appendChild(tog);
+        basesList.appendChild(row);
+
+        if (!sortByTime) {
+          row.addEventListener('dragstart', e => {
+            e.dataTransfer.setData('text/plain', bid);
+            e.dataTransfer.effectAllowed = 'move';
+            row.style.opacity = '0.4';
+          });
+          row.addEventListener('dragend', () => { row.style.opacity = ''; });
+          row.addEventListener('dragover', e => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            row.style.borderTop = '2px solid #4a4aaa';
+          });
+          row.addEventListener('dragleave', () => { row.style.borderTop = ''; });
+          row.addEventListener('drop', e => {
+            e.preventDefault();
+            row.style.borderTop = '';
+            const fromId = e.dataTransfer.getData('text/plain');
+            if (fromId === bid) return;
+            const allRows = [...basesList.querySelectorAll('[data-drag-id]')];
+            const order = allRows.map(r => r.dataset.dragId);
+            const fi = order.indexOf(fromId);
+            const ti = order.indexOf(bid);
+            if (fi === -1 || ti === -1) return;
+            order.splice(fi, 1);
+            order.splice(ti, 0, fromId);
+            _settings.baseOrder = order;
+            saveSettings();
+            rebuildBaseRows();
+            refreshHeaderChips();
+          });
+        }
+      }
+    };
+
+    rebuildBaseRows();
   }
 
   // Feature visibility section
@@ -2489,7 +2695,6 @@ function buildSettingsPanel() {
     { key: 'showGTE',           label: 'Guild trade' },
     { key: 'showSummary',       label: 'Summary panel' },
     { key: 'showAssets',        label: 'Cash & assets panel' },
-    { key: 'showFlights',       label: 'Flight planner panel' },
     { key: 'showWishlistAll',   label: 'Wishlist all panel' },
     { key: 'showWishlist',      label: '1-click wishlisting' },
     { key: 'showWishlistPanel', label: 'Wishlist panel tab' },
@@ -2500,6 +2705,38 @@ function buildSettingsPanel() {
   const sepPrices = document.createElement('div');
   sepPrices.style.cssText = 'border-top:1px solid #1a1a30;margin:10px 0 8px;';
   panel.appendChild(sepPrices);
+
+  // GT-Companion deactivate
+  const compDeactivateBtn = document.createElement('button');
+  compDeactivateBtn.style.width = '100%';
+  compDeactivateBtn.style.textAlign = 'left';
+  compDeactivateBtn.style.marginBottom = '6px';
+  const _updateCompDeactivateBtn = () => {
+    compDeactivateBtn.textContent = _companionEnabled ? '⊘ Deactivate GT-Companion' : '○ GT-Companion (inactive)';
+    _gtBtn(compDeactivateBtn, 'neutral');
+    compDeactivateBtn.style.width = '100%';
+    compDeactivateBtn.style.textAlign = 'left';
+    compDeactivateBtn.style.marginBottom = '6px';
+    compDeactivateBtn.style.opacity = _companionEnabled ? '1' : '0.5';
+    compDeactivateBtn.disabled = !_companionEnabled;
+  };
+  _updateCompDeactivateBtn();
+  compDeactivateBtn.addEventListener('mouseenter', () => { if (_companionEnabled) { compDeactivateBtn.style.color = '#f87171'; compDeactivateBtn.style.borderColor = '#6b2a2a'; } });
+  compDeactivateBtn.addEventListener('mouseleave', () => { if (_companionEnabled) _updateCompDeactivateBtn(); });
+  compDeactivateBtn.addEventListener('click', () => {
+    if (!_companionEnabled) return;
+    _companionEnabled = false;
+    _companionSnapshots = [];
+    _companionTargets = {};
+    _baseSnapshotMap = {};
+    chrome.storage.local.set({ gtCompanionEnabled: false, gtCompanionBaseMap: {} });
+    injectSlotBadges();
+    _updateModalTarget();
+    _updateCompDeactivateBtn();
+    const bar = document.getElementById(GT_COMPANION_BAR_ID);
+    if (bar) _renderCompanionBarState(bar);
+  });
+  panel.appendChild(compDeactivateBtn);
 
   const customPricesBtn = document.createElement('button');
   customPricesBtn.textContent = '\u{1F4B2} Custom Prices';
@@ -2526,7 +2763,7 @@ function buildSettingsPanel() {
 
   const ver = document.createElement('div');
   ver.style.cssText = 'text-align:center;font-size:10px;color:#2a2a4a;margin-top:6px;';
-  ver.textContent = 'v0.4.2';
+  ver.textContent = 'v0.5';
   panel.appendChild(ver);
 
   return panel;
@@ -2756,8 +2993,22 @@ async function openCustomPricesModal() {
 let _loadedHeaderBases    = null;
 let _loadedHeaderGamedata = null;
 
-// Sort: numeric prefix first, then alphabetical
-function sortBases(bases) {
+// Sort: respect sortByTimeLeft > baseOrder > numeric prefix > alphabetical
+function sortBases(bases, gamedata) {
+  if (_settings.sortByTimeLeft && gamedata) {
+    return [...bases].sort((a, b) => {
+      const { worstDay: wa } = baseStatusColour(a, gamedata);
+      const { worstDay: wb } = baseStatusColour(b, gamedata);
+      return wa - wb;
+    });
+  }
+  if (_settings.baseOrder?.length) {
+    const idx = id => {
+      const i = _settings.baseOrder.indexOf(String(id));
+      return i === -1 ? Infinity : i;
+    };
+    return [...bases].sort((a, b) => idx(a.id) - idx(b.id));
+  }
   const leadNum = s => { const m = s.match(/(\d+)/); return m ? parseInt(m[1], 10) : Infinity; };
   return [...bases].sort((a, b) => {
     const na = leadNum(a.name), nb = leadNum(b.name);
@@ -3530,11 +3781,8 @@ function _updatePanelWishlistBtn() {
   loadPanelWishlist().then(data => {
     const count = Object.values(data).reduce((s, b) => s + b.items.length, 0);
     btn.style.display = _panelWishlistOpen ? 'none' : '';
-    const badge = btn.querySelector('[data-badge]');
-    if (badge) {
-      badge.textContent = count > 0 ? count : '';
-      badge.style.display = count > 0 ? '' : 'none';
-    }
+    const textEl = btn.querySelector('span');
+    if (textEl) textEl.style.color = count > 0 ? '#7c3aed' : '#6b6b8a';
   });
 }
 
@@ -3654,43 +3902,80 @@ async function openCashPanel() {
     panel.appendChild(mkSep());
   }
 
-  // Base inventory value
+  // Base inventory value — collapsible header like Ship Cargo
   const bases = sortBases(_loadedHeaderBases ?? []);
   let totalInv = 0;
   if (bases.length && _priceMap) {
-    const subTitle = mkLabel('Base Inventory', 'margin:4px 0 4px;');
-    panel.appendChild(subTitle);
-
-    for (const base of bases) {
-      let val = 0;
-      const breakdown = []; // { name, qty, price, lineVal }
-      if (_loadedHeaderGamedata) {
+    const baseInvData = [];
+    if (_loadedHeaderGamedata) {
+      for (const base of bases) {
+        let val = 0;
+        const breakdown = [];
         const { outputs } = calcBaseNeeds(base, _loadedHeaderGamedata);
         const warehouseAmts = new Map((base.warehouse?.mats ?? []).map(m => [Number(m.id), m.am ?? 0]));
         for (const out of outputs) {
-          const qty   = warehouseAmts.get(Number(out.matId)) ?? 0;
-          const price = effectivePrice(out.matId);
+          const qty     = warehouseAmts.get(Number(out.matId)) ?? 0;
+          const price   = effectivePrice(out.matId);
           const lineVal = qty * price;
           val += lineVal;
           if (qty > 0 && price > 0) breakdown.push({ name: out.name, qty, price, lineVal });
         }
+        totalInv += val;
+        baseInvData.push({ base, val, breakdown });
       }
-      totalInv += val;
-
-      const row = mkRow(base.name, fmtCr(val));
-
-      if (breakdown.length) {
-        row.style.cursor = 'default';
-        attachTooltip(row, tip => {
-          for (const item of breakdown) {
-            tip.appendChild(mkIconLine(item.name, `${item.name} x${item.qty.toLocaleString()}`, `@ ${fmtCr(item.price)} ($${Math.round(item.lineVal).toLocaleString()})`));
-          }
-        }, true);
-      }
-
-      panel.appendChild(row);
     }
-    panel.appendChild(mkSep());
+
+    if (totalInv > 0 || baseInvData.length) {
+      let invExpanded = false;
+      const invHdrRow = document.createElement('div');
+      invHdrRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;';
+      const invHdrLeft = document.createElement('div');
+      invHdrLeft.style.cssText = 'display:flex;align-items:center;gap:5px;';
+      const invArrow = document.createElement('span');
+      invArrow.style.cssText = 'color:#6b6b8a;font-size:10px;';
+      invArrow.textContent = '\u25be';
+      const invHdrLbl = document.createElement('span');
+      invHdrLbl.style.color = '#c0c0da';
+      invHdrLbl.textContent = 'Base Inventory';
+      invHdrLeft.appendChild(invArrow); invHdrLeft.appendChild(invHdrLbl);
+      const invHdrVal = document.createElement('span');
+      invHdrVal.style.cssText = 'color:#9090b0;font-size:11px;';
+      invHdrVal.textContent = fmtCr(totalInv);
+      invHdrRow.appendChild(invHdrLeft); invHdrRow.appendChild(invHdrVal);
+
+      const invBaseList = document.createElement('div');
+      invBaseList.style.display = 'none';
+
+      for (const { base, val, breakdown } of baseInvData) {
+        const baseRow = document.createElement('div');
+        baseRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:2px 0 2px 12px;cursor:default;border-bottom:1px solid #12122a;';
+        const bLbl = document.createElement('span');
+        bLbl.style.cssText = 'color:#9090b0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        bLbl.textContent = base.name;
+        const bVal = document.createElement('span');
+        bVal.style.cssText = 'color:#9090b0;font-size:11px;white-space:nowrap;';
+        bVal.textContent = fmtCr(val);
+        baseRow.appendChild(bLbl); baseRow.appendChild(bVal);
+        if (breakdown.length) {
+          attachTooltip(baseRow, tip => {
+            for (const item of breakdown) {
+              tip.appendChild(mkIconLine(item.name, `${item.name} x${item.qty.toLocaleString()}`, `@ ${fmtCr(item.price)} ($${Math.round(item.lineVal).toLocaleString()})`));
+            }
+          }, true);
+        }
+        invBaseList.appendChild(baseRow);
+      }
+
+      invHdrRow.addEventListener('click', () => {
+        invExpanded = !invExpanded;
+        invBaseList.style.display = invExpanded ? 'block' : 'none';
+        invArrow.textContent = invExpanded ? '\u25b4' : '\u25be';
+      });
+
+      panel.appendChild(invHdrRow);
+      panel.appendChild(invBaseList);
+      panel.appendChild(mkSep());
+    }
   }
 
   // Exchange listings (active sell orders)
@@ -3855,6 +4140,7 @@ function toggleCashPanel() {
 
 let _summaryOpen      = false;
 let _summaryPerBase   = false;
+let _summaryShowStock = false;
 let _wishlistAllOpen  = false;
 
 function buildSummaryContent(container, perBase) {
@@ -3900,139 +4186,76 @@ function buildSummaryContent(container, perBase) {
     return s;
   };
 
-  const renderInputRows = (items, parent) => {
-    items.forEach(r => {
-      const col    = daysColour(r.days);
-      const daysStr = fmtDays(r.days);
-      const deficit = Math.max(0, Math.ceil(r.dailyNeed * _settings.targetDays - r.inStock));
-
-      const row = document.createElement('div');
-      row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto auto auto;gap:4px;align-items:center;padding:2px 0;border-bottom:1px solid #12122a;';
-
-      const nameSpan = document.createElement('span');
-      nameSpan.style.cssText = 'color:#c0c0da;display:flex;align-items:center;gap:4px;min-width:0;';
-      const ic = makeIcon(r.name, 12);
-      if (ic) nameSpan.appendChild(ic);
-      const nt = document.createElement('span');
-      nt.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;';
-      nt.textContent = r.name;
-      nameSpan.appendChild(nt);
-
-      const needSpan = document.createElement('span');
-      needSpan.style.cssText = 'color:#6b6b8a;font-size:10px;white-space:nowrap;text-align:right;';
-      needSpan.textContent = Math.round(r.dailyNeed).toLocaleString() + '/d';
-
-      const stockSpan = document.createElement('span');
-      stockSpan.style.cssText = 'color:#7a7a9a;font-size:10px;white-space:nowrap;text-align:right;';
-      stockSpan.textContent = Math.round(r.inStock).toLocaleString();
-
-      const defSpan = document.createElement('span');
-      defSpan.style.cssText = `color:${col};font-size:10px;white-space:nowrap;text-align:right;`;
-      defSpan.textContent = deficit > 0 ? deficit.toLocaleString() : '0';
-
-      const daysSpan = document.createElement('span');
-      daysSpan.style.cssText = `color:${col};font-size:11px;font-weight:600;text-align:right;`;
-      daysSpan.textContent = daysStr;
-
-      row.appendChild(nameSpan); row.appendChild(needSpan);
-      row.appendChild(stockSpan); row.appendChild(defSpan); row.appendChild(daysSpan);
-
-      attachTip(row, () => {
-        const t = mkTipEl();
-        t.appendChild(mkTipLine('/day needed',    Math.round(r.dailyNeed).toLocaleString(), '#6b6b8a'));
-        t.appendChild(mkTipLine('Current stock',  Math.round(r.inStock).toLocaleString(),   '#7a7a9a'));
-        t.appendChild(mkTipLine('Amount needed',  deficit > 0 ? deficit.toLocaleString() : '0', col));
-        t.appendChild(mkTipLine('Time left',      daysStr, col));
-        return t;
-      });
-
-      parent.appendChild(row);
-    });
-  };
-
-  const renderOutputRows = (items, parent) => {
-    items.forEach(r => {
-      const unitPrice = _priceMap ? effectivePrice(r.matId) : 0;
-      const dailyVal  = unitPrice * r.dailyOutput;
-      const row = document.createElement('div');
-      row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;gap:5px;align-items:center;padding:2px 0;border-bottom:1px solid #12122a;';
-
-      const nameSpan = document.createElement('span');
-      nameSpan.style.cssText = 'color:#c0c0da;display:flex;align-items:center;gap:4px;min-width:0;';
-      const ic = makeIcon(r.name, 12);
-      if (ic) nameSpan.appendChild(ic);
-      const nt = document.createElement('span');
-      nt.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;';
-      nt.textContent = r.name;
-      nameSpan.appendChild(nt);
-
-      const qtySpan = document.createElement('span');
-      qtySpan.style.cssText = 'color:#9090b0;font-size:10px;white-space:nowrap;';
-      qtySpan.textContent = Math.round(r.dailyOutput).toLocaleString() + '/d';
-
-      const valSpan = document.createElement('span');
-      valSpan.style.cssText = `color:${COL_OK};font-size:10px;white-space:nowrap;text-align:right;`;
-      valSpan.textContent = dailyVal > 0 ? fmtCr(dailyVal) + '/d' : '\u2014';
-
-      row.appendChild(nameSpan); row.appendChild(qtySpan); row.appendChild(valSpan);
-
-      if (dailyVal > 0) {
-        attachTip(row, () => {
-          const t = mkTipEl();
-          t.appendChild(mkIconLine(r.name, `${r.name} x${Math.round(r.dailyOutput).toLocaleString()}/d`, `@ ${fmtCr(unitPrice)} (${fmtCr(dailyVal)}/d)`));
-          return t;
-        });
-      }
-
-      parent.appendChild(row);
-    });
-  };
-
   const mkSection = (label, parent) => {
     parent.appendChild(mkLabel(label, 'margin:8px 0 3px;'));
   };
 
-  const renderInputTotals = (items, parent) => {
-    if (!_priceMap || !items.length) return;
-    const td = _settings.targetDays;
-    let restockCost = 0, dailyCost = 0;
-    const restockLines = [];
-    items.forEach(r => {
-      const p      = effectivePrice(r.matId);
-      const def    = Math.max(0, Math.ceil(r.dailyNeed * td - r.inStock));
-      const lineCost = p * def;
-      restockCost += lineCost;
-      dailyCost   += p * r.dailyNeed;
-      if (def > 0 && p > 0) restockLines.push({ r, deficit: def, unitPrice: p, lineCost });
-    });
-    if (!restockCost && !dailyCost) return;
-    const row = document.createElement('div');
-    row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;gap:8px;padding:3px 0 1px;border-top:1px solid #1e1e3a;margin-top:2px;';
-    const lbl = document.createElement('span');
-    lbl.style.cssText = 'color:#6b6b8a;font-size:10px;';
-    lbl.textContent = 'Total';
-    const rv = document.createElement('span');
-    rv.style.cssText = 'color:#9090b0;font-size:10px;text-align:right;white-space:nowrap;';
-    rv.textContent = restockCost > 0 ? `$${Math.round(restockCost).toLocaleString()}` : '\u2014';
-    const dv = document.createElement('span');
-    dv.style.cssText = 'color:#6b6b8a;font-size:10px;text-align:right;white-space:nowrap;';
-    dv.textContent = dailyCost > 0 ? `$${Math.round(dailyCost).toLocaleString()}/d` : '\u2014';
-    row.append(lbl, rv, dv);
+  // Renders a single flow row: name | stock (bold) | qty/d | ±$/d
+  const renderFlowRow = (name, matId, flow, inStock, parent) => {
+    const isOut     = flow > 0;
+    const unitPrice = _priceMap ? effectivePrice(matId) : 0;
+    const dailyVal  = Math.abs(flow) * unitPrice;
+    const valCol    = isOut ? COL_OK : COL_CRIT;
 
-    if (restockLines.length) {
-      attachTip(row, () => {
-        const t = mkTipEl();
-        t.appendChild(mkTipTitle('Restock cost'));
-        for (const { r, deficit, unitPrice, lineCost } of restockLines) {
-          t.appendChild(mkIconLine(r.name, `${r.name} x${deficit.toLocaleString()}`, `@ ${fmtCr(unitPrice)} ($${Math.round(lineCost).toLocaleString()})`));
-        }
-        if (restockLines.length > 1) {
-          t.appendChild(mkTipSep());
-          t.appendChild(mkTipLine('Total', `$${Math.round(restockCost).toLocaleString()}`, '#b0b0cc'));
-        }
-        return t;
-      });
+    const cols = _summaryShowStock ? '1fr auto auto auto' : '1fr auto auto';
+    const row = document.createElement('div');
+    row.style.cssText = `display:grid;grid-template-columns:${cols};gap:4px;align-items:center;padding:3px 0;border-bottom:1px solid #12122a;cursor:default;`;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.style.cssText = 'color:#c0c0da;display:flex;align-items:center;gap:4px;min-width:0;';
+    const ic = makeIcon(name);
+    if (ic) nameSpan.appendChild(ic);
+    const nt = document.createElement('span');
+    nt.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    nt.textContent = name;
+    nameSpan.appendChild(nt);
+
+    const qtySpan = document.createElement('span');
+    qtySpan.style.cssText = 'color:#6b6b8a;font-size:10px;white-space:nowrap;text-align:right;';
+    qtySpan.textContent = Math.round(Math.abs(flow)).toLocaleString() + '/d';
+
+    const valSpan = document.createElement('span');
+    valSpan.style.cssText = `color:${valCol};font-size:10px;white-space:nowrap;text-align:right;`;
+    valSpan.textContent = dailyVal > 0
+      ? (isOut ? '+' : '\u2212') + fmtCr(dailyVal) + '/d'
+      : '\u2014';
+
+    row.appendChild(nameSpan);
+    if (_summaryShowStock) {
+      const stockSpan = document.createElement('span');
+      stockSpan.style.cssText = 'color:#c0c0da;font-size:10px;font-weight:700;white-space:nowrap;text-align:right;';
+      stockSpan.textContent = Math.round(inStock).toLocaleString();
+      row.appendChild(stockSpan);
     }
+    row.appendChild(qtySpan); row.appendChild(valSpan);
+
+    // Tooltip — matches expanded panel style exactly
+    let rowTip = null;
+    row.addEventListener('mouseenter', () => {
+      rowTip = document.createElement('div');
+      rowTip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:5px;padding:6px 9px;font-size:11px;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
+      const tipRows = [
+        ['Current stock', Math.round(inStock).toLocaleString(),                    '#c0c0da'],
+        [isOut ? 'Net output /day' : 'Net input /day', Math.round(Math.abs(flow)).toLocaleString() + '/d', '#9090b0'],
+      ];
+      if (dailyVal > 0) tipRows.push([(isOut ? 'Income' : 'Cost') + ' /day', (isOut ? '+' : '\u2212') + fmtCr(dailyVal) + '/d', valCol]);
+      for (const [lbl, val, vc] of tipRows) {
+        const line = document.createElement('div');
+        line.style.cssText = 'display:flex;justify-content:space-between;gap:16px;padding:1px 0;';
+        const l = document.createElement('span'); l.style.color = '#6b6b8a'; l.textContent = lbl;
+        const v = document.createElement('span'); v.style.cssText = `color:${vc};font-weight:600;`; v.textContent = val;
+        line.appendChild(l); line.appendChild(v);
+        rowTip.appendChild(line);
+      }
+      document.body.appendChild(rowTip);
+    });
+    row.addEventListener('mousemove', (e) => {
+      if (!rowTip) return;
+      const x = Math.min(e.clientX + 12, window.innerWidth  - rowTip.offsetWidth  - 8);
+      const y = Math.min(e.clientY + 12, window.innerHeight - rowTip.offsetHeight - 8);
+      rowTip.style.left = x + 'px'; rowTip.style.top = y + 'px';
+    });
+    row.addEventListener('mouseleave', () => { rowTip?.remove(); rowTip = null; });
 
     parent.appendChild(row);
   };
@@ -4060,76 +4283,77 @@ function buildSummaryContent(container, perBase) {
     parent.appendChild(nr);
   };
 
-  if (perBase) {
-    // ── Per-base view ──
-    for (const base of bases) {
+  // Build a per-material net flow map across all bases:
+  //   flow = Σ(netDailyOutput) - Σ(dailyNeed for inputs/consumables)
+  // Materials with flow > 0 → net outputs; flow < 0 → net inputs
+  const buildFlowMap = (baseList) => {
+    const flowMap = new Map(); // matId → { name, flow, inStock }
+    for (const base of baseList) {
       const { inputs, consumables, outputs } = calcBaseNeeds(base, _loadedHeaderGamedata);
-      const eligible = [...inputs, ...consumables]
-        .map(r => ({ ...r, days: r.dailyNeed > 0 ? r.inStock / r.dailyNeed : Infinity }));
+      for (const r of [...inputs, ...consumables]) {
+        const ex = flowMap.get(r.matId);
+        if (ex) { ex.flow -= r.dailyNeed; ex.inStock += r.inStock; }
+        else flowMap.set(r.matId, { name: r.name, matId: r.matId, flow: -r.dailyNeed, inStock: r.inStock });
+      }
+      for (const r of outputs) {
+        const netOut = r.netDailyOutput ?? r.dailyOutput;
+        const ex = flowMap.get(r.matId);
+        if (ex) { ex.flow += netOut; ex.inStock = Math.max(ex.inStock, r.inStock); }
+        else flowMap.set(r.matId, { name: r.name, matId: r.matId, flow: netOut, inStock: r.inStock });
+      }
+    }
+    return flowMap;
+  };
 
+  if (perBase) {
+    // ── Per-base view — net flow per base ──
+    for (const base of bases) {
       const hdr = document.createElement('div');
       hdr.style.cssText = 'color:#d1d5db;font-size:12px;font-weight:600;margin:10px 0 3px;padding-top:6px;border-top:1px solid #1e1e3a;';
       hdr.textContent = base.name;
       container.appendChild(hdr);
 
-      if (eligible.length) { renderInputRows(eligible, container); renderInputTotals(eligible, container); }
-      if (outputs.length)  { mkSection('Outputs', container); renderOutputRows(outputs, container); }
-      if (!eligible.length && !outputs.length) {
+      const flowMap = buildFlowMap([base]);
+      const netInputs  = [...flowMap.values()].filter(r => r.flow < -0.01).sort((a, b) => a.flow - b.flow);
+      const netOutputs = [...flowMap.values()].filter(r => r.flow >  0.01).sort((a, b) => b.flow - a.flow);
+
+      if (!netInputs.length && !netOutputs.length) {
         const empty = document.createElement('div');
         empty.style.cssText = 'color:#6b6b8a;font-size:11px;font-style:italic;padding:2px 0;';
         empty.textContent = 'No active production';
         container.appendChild(empty);
+        continue;
       }
-      // Per-base net profit
-      if (_priceMap && (eligible.length || outputs.length)) {
-        const dailyIncome = outputs.reduce((s, r) => s + effectivePrice(r.matId) * r.dailyOutput, 0);
-        const dailyCost   = eligible.reduce((s, r) => s + effectivePrice(r.matId) * r.dailyNeed, 0);
+
+      if (netInputs.length)  { mkSection('Net Inputs',  container); netInputs.forEach(r  => renderFlowRow(r.name, r.matId, r.flow, r.inStock, container)); }
+      if (netOutputs.length) { mkSection('Net Outputs', container); netOutputs.forEach(r => renderFlowRow(r.name, r.matId, r.flow, r.inStock, container)); }
+
+      if (_priceMap && (netInputs.length || netOutputs.length)) {
+        const dailyIncome = netOutputs.reduce((s, r) => s + effectivePrice(r.matId) * r.flow, 0);
+        const dailyCost   = netInputs.reduce((s, r) => s + effectivePrice(r.matId) * Math.abs(r.flow), 0);
         mkNetProfitRow(container, dailyIncome, dailyCost, 'display:flex;justify-content:space-between;align-items:center;padding:4px 0 2px;border-top:1px solid #1e1e3a;margin-top:3px;');
       }
     }
   } else {
-    // ── Aggregate view ──
-    const inputsMap  = new Map(); // matId → {name, dailyNeed, inStock}
-    const outputsMap = new Map(); // matId → {name, dailyOutput}
+    // ── Aggregate view — net flow across all bases ──
+    const flowMap    = buildFlowMap(bases);
+    const netInputs  = [...flowMap.values()].filter(r => r.flow < -0.01).sort((a, b) => a.flow - b.flow);
+    const netOutputs = [...flowMap.values()].filter(r => r.flow >  0.01).sort((a, b) => b.flow - a.flow);
 
-    for (const base of bases) {
-      const { inputs, consumables, outputs } = calcBaseNeeds(base, _loadedHeaderGamedata);
-      const eligible = [...inputs, ...consumables];
-      for (const r of eligible) {
-        const ex = inputsMap.get(r.matId);
-        if (ex) { ex.dailyNeed += r.dailyNeed; ex.inStock += r.inStock; }
-        else inputsMap.set(r.matId, { name: r.name, matId: r.matId, dailyNeed: r.dailyNeed, inStock: r.inStock });
-      }
-      for (const r of outputs) {
-        const ex = outputsMap.get(r.matId);
-        if (ex) { ex.dailyOutput += r.dailyOutput; }
-        else outputsMap.set(r.matId, { name: r.name, matId: r.matId, dailyOutput: r.dailyOutput });
-      }
-    }
-
-    const aggInputs = [...inputsMap.values()].map(r => ({
-      ...r, days: r.dailyNeed > 0 ? r.inStock / r.dailyNeed : Infinity,
-    })).sort((a, b) => (isFinite(a.days) ? a.days : 1e9) - (isFinite(b.days) ? b.days : 1e9));
-
-    const aggOutputs = [...outputsMap.values()];
-    let totalDailyValue = 0;
-    let totalDailyInputCost = 0;
-    if (_priceMap) {
-      aggOutputs.forEach(r => { totalDailyValue     += effectivePrice(r.matId) * r.dailyOutput; });
-      aggInputs.forEach(r => { totalDailyInputCost  += effectivePrice(r.matId) * r.dailyNeed; });
-    }
-
-    if (aggInputs.length)  { mkSection('All Inputs', container);  renderInputRows(aggInputs, container); renderInputTotals(aggInputs, container); }
-    if (aggOutputs.length) { mkSection('All Outputs', container); renderOutputRows(aggOutputs, container); }
-
-    if (totalDailyValue > 0 || totalDailyInputCost > 0) {
-      mkNetProfitRow(container, totalDailyValue, totalDailyInputCost, 'display:flex;justify-content:space-between;align-items:center;padding:5px 0 2px;border-top:2px solid #1e1e3a;margin-top:4px;');
-    }
-    if (!aggInputs.length && !aggOutputs.length) {
+    if (!netInputs.length && !netOutputs.length) {
       const empty = document.createElement('div');
       empty.style.cssText = 'color:#6b6b8a;font-style:italic;padding:4px 0;';
       empty.textContent = 'No active production detected.';
       container.appendChild(empty);
+    } else {
+      if (netInputs.length)  { mkSection('Net Inputs',  container); netInputs.forEach(r  => renderFlowRow(r.name, r.matId, r.flow, r.inStock, container)); }
+      if (netOutputs.length) { mkSection('Net Outputs', container); netOutputs.forEach(r => renderFlowRow(r.name, r.matId, r.flow, r.inStock, container)); }
+
+      if (_priceMap && (netInputs.length || netOutputs.length)) {
+        const dailyIncome = netOutputs.reduce((s, r) => s + effectivePrice(r.matId) * r.flow, 0);
+        const dailyCost   = netInputs.reduce((s, r) => s + effectivePrice(r.matId) * Math.abs(r.flow), 0);
+        mkNetProfitRow(container, dailyIncome, dailyCost, 'display:flex;justify-content:space-between;align-items:center;padding:5px 0 2px;border-top:2px solid #1e1e3a;margin-top:4px;');
+      }
     }
   }
 }
@@ -4157,7 +4381,19 @@ function toggleSummaryPanel() {
     updateViewToggle();
     buildSummaryContent(content, _summaryPerBase);
   });
-  hdr.appendChild(titleEl); hdr.appendChild(viewToggle);
+  const stockToggle = document.createElement('button');
+  stockToggle.style.cssText = 'background:none;border:none;cursor:pointer;font-size:10px;color:#6b6b8a;padding:0;font-family:inherit;';
+  stockToggle.textContent = _summaryShowStock ? 'Hide stock' : 'Show stock';
+  stockToggle.addEventListener('click', () => {
+    _summaryShowStock = !_summaryShowStock;
+    stockToggle.textContent = _summaryShowStock ? 'Hide stock' : 'Show stock';
+    buildSummaryContent(content, _summaryPerBase);
+  });
+  const hdrRight = document.createElement('div');
+  hdrRight.style.cssText = 'display:flex;align-items:center;gap:10px;';
+  hdrRight.appendChild(stockToggle);
+  hdrRight.appendChild(viewToggle);
+  hdr.appendChild(titleEl); hdr.appendChild(hdrRight);
   panel.appendChild(hdr);
 
   const content = document.createElement('div');
@@ -4378,11 +4614,6 @@ async function loadAndInjectHeader() {
       controls.appendChild(wishAllBtn);
     }
 
-    if (_settings.showFlights) {
-      const flightBtn = mkCtrlBtn('&#9992;', 'Flight planner');
-      flightBtn.addEventListener('click', toggleFlightPanel);
-      controls.appendChild(flightBtn);
-    }
 
     const gearBtn = mkCtrlBtn('\u2699', 'Settings');
     gearBtn.addEventListener('click', toggleSettingsPanel);
@@ -4447,7 +4678,7 @@ async function loadAndInjectHeader() {
         'border-radius:6px 0 0 6px',
         'padding:10px 5px',
         'cursor:pointer',
-        'display:flex', 'flex-direction:column', 'align-items:center', 'gap:4px',
+        'display:flex', 'flex-direction:column', 'align-items:center',
         'font-family:system-ui,sans-serif',
       ].join(';');
 
@@ -4455,14 +4686,9 @@ async function loadAndInjectHeader() {
       pwBtnText.style.cssText = 'writing-mode:vertical-rl;transform:rotate(180deg);font-size:10px;color:#6b6b8a;letter-spacing:.05em;user-select:none;';
       pwBtnText.textContent = 'Wishlist';
 
-      const pwBtnBadge = document.createElement('span');
-      pwBtnBadge.setAttribute('data-badge', '1');
-      pwBtnBadge.style.cssText = 'background:#4f46e5;color:#fff;font-size:9px;border-radius:8px;padding:1px 4px;min-width:14px;text-align:center;display:none;';
-
       pwBtn.appendChild(pwBtnText);
-      pwBtn.appendChild(pwBtnBadge);
       pwBtn.addEventListener('mouseenter', () => { pwBtn.style.background = '#111128'; pwBtnText.style.color = '#d8d8f0'; });
-      pwBtn.addEventListener('mouseleave', () => { pwBtn.style.background = '#0a0a18'; pwBtnText.style.color = '#6b6b8a'; });
+      pwBtn.addEventListener('mouseleave', () => { pwBtn.style.background = '#0a0a18'; _updatePanelWishlistBtn(); });
       pwBtn.addEventListener('click', togglePanelWishlist);
       document.body.appendChild(pwBtn);
       _updatePanelWishlistBtn();
@@ -4506,6 +4732,10 @@ async function loadAndInjectHeader() {
       loadAndInjectHeader();
       fetchCompanyData(); // warm cache + pull perks from GT API on first load only
       watchGteNav();
+      watchBuildingModal();
+      watchFlightModal();
+      watchContractsPage();
+      watchBuildingGrid();
       // Refresh local API data + rebuild header chips every 5 minutes — no GT API / API key calls
       setInterval(refreshChips, 5 * 60 * 1000);
       // Retry header injection until the game's local API is ready (SPA may load after content script)
@@ -5422,6 +5652,1065 @@ async function injectGteNavBtn() {
   } finally {
     _gteNavInjecting = false;
   }
+}
+
+// ── GT-Companion + Building panel ─────────────────────────────────────────────
+
+const GT_COMPANION_BAR_ID  = 'gt-companion-bar';
+const GT_SLOT_BADGE_CLASS  = 'gt-slot-badge';
+const GT_MODAL_TARGET_ID   = 'gt-modal-target';
+
+let _companionTargets   = {}; // { [slotId]: { level, typeId } }
+let _companionSnapshots = []; // raw snapshots from last fetch
+let _baseSnapshotMap    = {}; // { [baseId]: snapshotId } — persisted in storage
+let _companionEnabled   = false; // requires explicit user consent
+let _levelLockEnabled   = true;  // when true, upgrade button is blocked at target level
+
+let _buildingKeyHandler = null;
+let _buildingModalObs   = null;
+let _buildingSlotObs    = null;
+let _buildingGridObs    = null;
+
+function _isBuildingModal() {
+  const modal = document.querySelector('.modal.show');
+  return !!modal?.querySelector('.modal-header .btn-group .input-group-text');
+}
+
+function _applyScrapDisableStyle() {
+  if (_settings.disableScrap && !document.getElementById('gt-scrap-disable')) {
+    const s = document.createElement('style');
+    s.id = 'gt-scrap-disable';
+    s.textContent = '.modal.show .btn.btn-danger.btn-icon-split { opacity: 0.35 !important; pointer-events: none !important; }';
+    document.head.appendChild(s);
+  } else if (!_settings.disableScrap) {
+    document.getElementById('gt-scrap-disable')?.remove();
+  }
+}
+
+let _gtModalTipTimer = null;
+
+function _showModalTip(anchor, lines) {
+  document.getElementById('gt-modal-tip')?.remove();
+  clearTimeout(_gtModalTipTimer);
+  _gtModalTipTimer = setTimeout(() => {
+    const rect = anchor.getBoundingClientRect();
+    const tip = document.createElement('div');
+    tip.id = 'gt-modal-tip';
+    tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d1f;border:1px solid #2a2a4a;border-radius:6px;padding:5px 10px;font-family:system-ui,sans-serif;font-size:11px;color:#b0b0cc;box-shadow:0 4px 16px rgba(0,0,0,0.7);pointer-events:none;white-space:pre;line-height:1.7;';
+    tip.textContent = Array.isArray(lines) ? lines.join('\n') : lines;
+    document.body.appendChild(tip);
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    const left = Math.max(8, Math.min(rect.left + rect.width / 2 - tw / 2, window.innerWidth - tw - 8));
+    tip.style.left = left + 'px';
+    tip.style.top = (rect.top - th - 6) + 'px';
+  }, 250);
+}
+
+function _hideModalTip() {
+  clearTimeout(_gtModalTipTimer);
+  document.getElementById('gt-modal-tip')?.remove();
+}
+
+// ── Shared button style for this feature ──────────────────────────────────
+// Use _gtBtn(el, variant) to apply. Variants: 'on','off','neutral','muted','target-ok','target-pending'
+const _GT_BTN_BASE = 'background:#12122a;border:1px solid;border-radius:4px;cursor:pointer;font-size:11px;font-family:system-ui,sans-serif;font-weight:600;display:inline-flex;align-items:center;justify-content:center;padding:1px 8px;height:24px;flex-shrink:0;transition:border-color 0.15s,color 0.15s,opacity 0.15s;line-height:1;white-space:nowrap;';
+const _GT_BTN_VARIANTS = {
+  on:             { border: '#22c55e', color: '#4ade80' },
+  off:            { border: '#ef4444', color: '#f87171' },
+  neutral:        { border: '#2a2a4a', color: '#9090b0' },
+  muted:          { border: '#1e1e36', color: '#6b6b8a' },
+  'target-ok':    { border: '#22c55e44', color: '#4ade80' },
+  'target-pend':  { border: '#3b82f644', color: '#93c5fd' },
+};
+function _gtBtn(el, variant) {
+  const v = _GT_BTN_VARIANTS[variant] ?? _GT_BTN_VARIANTS.neutral;
+  el.style.cssText = _GT_BTN_BASE + `border-color:${v.border};color:${v.color};`;
+}
+
+function _styleHkBtn(btn) {
+  _gtBtn(btn, !_settings.disableHotkeys ? 'on' : 'off');
+}
+
+function _styleScrapBtn(btn) {
+  _gtBtn(btn, _settings.disableScrap ? 'on' : 'off');
+}
+
+function _injectModalButtons(modal) {
+  if (modal.querySelector('#gt-modal-btn-wrap')) return;
+  const header = modal.querySelector('.modal-header');
+  const navGroup = header?.querySelector('.btn-group');
+  if (!header || !navGroup) return;
+
+  const wrap = document.createElement('div');
+  wrap.id = 'gt-modal-btn-wrap';
+  wrap.style.cssText = 'display:inline-flex;gap:4px;align-items:center;margin-right:8px;';
+
+  // Target level indicator
+  const targetEl = document.createElement('span');
+  targetEl.id = GT_MODAL_TARGET_ID;
+  targetEl.style.display = 'none';
+  wrap.appendChild(targetEl);
+
+  // Watch slot counter changes to update target indicator
+  const slotCounter = header.querySelector('.btn-group .input-group-text');
+  if (slotCounter) {
+    _buildingSlotObs = new MutationObserver(() => _updateModalTarget());
+    _buildingSlotObs.observe(slotCounter, { characterData: true, childList: true, subtree: true });
+  }
+
+  // Hotkeys toggle
+  const hkBtn = document.createElement('button');
+  hkBtn.type = 'button';
+  hkBtn.textContent = 'Hotkeys';
+  _styleHkBtn(hkBtn);
+  hkBtn.addEventListener('mouseenter', () => _showModalTip(hkBtn, _settings.disableHotkeys
+    ? 'Hotkeys off — click to enable\n\u2190 \u2192 navigate  \u00B7  U upgrade  \u00B7  S scrap  \u00B7  R repair'
+    : 'Hotkeys on — click to disable\n\u2190 \u2192 navigate  \u00B7  U upgrade  \u00B7  S scrap  \u00B7  R repair'));
+  hkBtn.addEventListener('mouseleave', _hideModalTip);
+  hkBtn.addEventListener('click', () => {
+    _settings.disableHotkeys = !_settings.disableHotkeys;
+    saveSettings();
+    _styleHkBtn(hkBtn);
+    _hideModalTip();
+  });
+
+  // Scrap protection toggle
+  const scrapBtn = document.createElement('button');
+  scrapBtn.type = 'button';
+  scrapBtn.textContent = 'Scrap Lock';
+  _styleScrapBtn(scrapBtn);
+  scrapBtn.addEventListener('mouseenter', () => _showModalTip(scrapBtn, _settings.disableScrap
+    ? 'Scrap protected — click to allow scrapping'
+    : 'Scrap unprotected — click to prevent accidental scrapping'));
+  scrapBtn.addEventListener('mouseleave', _hideModalTip);
+  scrapBtn.addEventListener('click', () => {
+    _settings.disableScrap = !_settings.disableScrap;
+    saveSettings();
+    _applyScrapDisableStyle();
+    _styleScrapBtn(scrapBtn);
+    _hideModalTip();
+  });
+
+  wrap.appendChild(hkBtn);
+  wrap.appendChild(scrapBtn);
+  header.insertBefore(wrap, navGroup);
+}
+
+function _bindBuildingKeys() {
+  if (_buildingKeyHandler) return;
+  _buildingKeyHandler = (e) => {
+    if (_settings.disableHotkeys) return;
+    if (!_isBuildingModal()) return;
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+    const modal = document.querySelector('.modal.show');
+    const navBtns = [...(modal?.querySelectorAll('.modal-header .btn-group .btn-primary.btn-square') ?? [])];
+    switch (e.key) {
+      case 'ArrowLeft':  e.preventDefault(); navBtns[0]?.click(); break;
+      case 'ArrowRight': e.preventDefault(); navBtns[1]?.click(); break;
+      case 'u': case 'U': {
+        const slotId = _getCurrentSlotId();
+        const target = _companionTargets[slotId];
+        if (target && _levelLockEnabled) {
+          const cur = parseInt(document.querySelector(`button.btn-building[data-slot-id="${slotId}"] .badge.btn-badge`)?.textContent ?? '0');
+          if (cur >= target.level) break;
+        }
+        modal?.querySelector('.btn.btn-primary.btn-icon-split.w-100')?.click();
+        break;
+      }
+      case 's': case 'S': if (!_settings.disableScrap) modal?.querySelector('.btn.btn-danger.btn-icon-split')?.click(); break;
+      case 'r': case 'R': modal?.querySelector('.btn.btn-warning.btn-icon-split')?.click(); break;
+    }
+  };
+  document.addEventListener('keydown', _buildingKeyHandler);
+  _applyScrapDisableStyle();
+  const modal = document.querySelector('.modal.show');
+  if (modal) { _injectModalButtons(modal); _updateModalTarget(); }
+}
+
+function _unbindBuildingKeys() {
+  if (!_buildingKeyHandler) return;
+  document.removeEventListener('keydown', _buildingKeyHandler);
+  _buildingKeyHandler = null;
+  _buildingSlotObs?.disconnect();
+  _buildingSlotObs = null;
+  document.getElementById('gt-modal-btn-wrap')?.remove();
+  document.getElementById('gt-scrap-disable')?.remove();
+  document.getElementById('gt-upgrade-block')?.remove();
+  _hideModalTip();
+}
+
+// ── Companion: parse + apply ───────────────────────────────────────────────
+
+const GT_COMPANION_URL = 'https://api.gt-companion.com/external/company/base-snapshots';
+
+function _detectCurrentBaseId() {
+  const m = window.location.pathname.match(/\/base\/(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
+function _isOnBuildingsTab() {
+  return /\/base\/\d+/.test(location.pathname) &&
+    new URLSearchParams(location.search).get('tab') === 'buildings';
+}
+
+function _parseSnapshot(snapshot) {
+  const targets = {};
+  for (const slot of snapshot.buildingSlotOverrides ?? []) {
+    if (slot.status === 2 && slot.building) {
+      targets[String(slot.id)] = { level: slot.building.level, typeId: slot.building.typeId };
+    }
+  }
+  return targets;
+}
+
+function _applySnapshot(snapshot) {
+  _companionTargets = _parseSnapshot(snapshot);
+  injectSlotBadges();
+  _updateModalTarget();
+}
+
+function _fmtSnapshotLabel(s) {
+  const date = new Date(s.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return `${s.baseName} — ${s.planetName} (${date})`;
+}
+
+async function _fetchCompanionSnapshots() {
+  if (!_companionEnabled) return;
+  const bar = document.getElementById(GT_COMPANION_BAR_ID);
+  const setStatus = (msg, err = false) => {
+    const el = bar?.querySelector('.gt-cb-status');
+    if (el) { el.textContent = msg; el.style.color = err ? '#f87171' : '#9090b0'; }
+  };
+  setStatus('Fetching…');
+  try {
+    const apiKey = await getExtApiKey();
+    if (!apiKey) throw new Error('No API key — set one in Settings (⚙)');
+    const res = await fetch(GT_COMPANION_URL, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const snaps = json.snapshots ?? [];
+    if (!snaps.length) throw new Error('No snapshots found');
+    _companionSnapshots = snaps;
+    _renderSnapshotPicker(bar, snaps);
+    setStatus(`${snaps.length} snapshot${snaps.length > 1 ? 's' : ''} loaded`);
+  } catch (err) {
+    setStatus(err.message, true);
+  }
+}
+
+function _renderSnapshotPicker(bar, snaps) {
+  bar.querySelector('.gt-cb-picker')?.remove();
+  // Switch Import → Refresh now that we have data
+  const content = bar.querySelector('.gt-cb-content') ?? bar;
+  const importBtn = content.querySelector('.gt-cb-import');
+  const refreshBtn = content.querySelector('.gt-cb-refresh');
+  if (importBtn) importBtn.style.display = 'none';
+  if (refreshBtn) refreshBtn.style.display = '';
+
+  const currentBaseId = _detectCurrentBaseId();
+  const sorted = [...snaps].sort((a, b) => (b.baseId === currentBaseId) - (a.baseId === currentBaseId));
+
+  const wrap = document.createElement('div');
+  wrap.className = 'gt-cb-picker';
+  wrap.style.cssText = 'display:flex;align-items:center;gap:6px;flex-shrink:0;';
+
+  const sel = document.createElement('select');
+  sel.style.cssText = 'background:#12122a;border:1px solid #2a2a4a;border-radius:4px;color:#d8d8f0;font-size:11px;padding:2px 5px;height:22px;cursor:pointer;max-width:240px;';
+
+  // Placeholder option
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select snapshot…';
+  placeholder.disabled = true;
+  sel.appendChild(placeholder);
+
+  sorted.forEach((s) => {
+    const isMatch = s.baseId === currentBaseId;
+    const opt = document.createElement('option');
+    opt.value = String(snaps.indexOf(s));
+    opt.textContent = (isMatch ? '● ' : '') + _fmtSnapshotLabel(s);
+    if (isMatch) opt.style.color = '#4ade80';
+    sel.appendChild(opt);
+  });
+
+  // Auto-select stored snapshot and apply, or show placeholder
+  const storedId = currentBaseId && _baseSnapshotMap[String(currentBaseId)];
+  const storedSnap = storedId && snaps.find(s => s.id === storedId);
+  if (storedSnap) {
+    sel.value = String(snaps.indexOf(storedSnap));
+    _applySnapshot(storedSnap);
+  } else {
+    sel.value = ''; // show placeholder
+  }
+
+  const applyBtn = document.createElement('button');
+  applyBtn.textContent = 'Apply';
+  applyBtn.style.cssText = 'background:#1e1e40;border:1px solid #4f46e5;border-radius:4px;color:#818cf8;font-size:11px;padding:2px 8px;cursor:pointer;flex-shrink:0;';
+  applyBtn.addEventListener('click', () => {
+    const snap = snaps[Number(sel.value)];
+    _applySnapshot(snap);
+    if (currentBaseId) {
+      _baseSnapshotMap[String(currentBaseId)] = snap.id;
+      chrome.storage.local.set({ gtCompanionBaseMap: _baseSnapshotMap });
+    }
+    const statusEl = bar.querySelector('.gt-cb-status');
+    if (statusEl) { statusEl.textContent = `${Object.keys(_companionTargets).length} slots applied`; statusEl.style.color = '#4ade80'; }
+  });
+
+  wrap.appendChild(sel);
+  wrap.appendChild(applyBtn);
+  content.insertBefore(wrap, content.querySelector('.gt-cb-status'));
+}
+
+// ── Companion: state helpers ───────────────────────────────────────────────
+
+function _renderCompanionBarState(bar) {
+  const panel = bar.querySelector('.gt-cb-panel');
+  const barContent = bar.querySelector('.gt-cb-content');
+  const activateBtn = bar.querySelector('.gt-cb-activate');
+  if (!panel || !barContent || !activateBtn) return;
+
+  if (_companionEnabled) {
+    activateBtn.style.display = 'none'; // hidden once active — deactivate lives in Settings
+    barContent.style.display = 'flex';
+    if (_companionSnapshots.length) {
+      _renderSnapshotPicker(bar, _companionSnapshots);
+      const statusEl = bar.querySelector('.gt-cb-status');
+      if (statusEl) { statusEl.textContent = `${_companionSnapshots.length} snapshots loaded`; statusEl.style.color = '#9090b0'; }
+      const importBtn = bar.querySelector('.gt-cb-import');
+      const refreshBtn = bar.querySelector('.gt-cb-refresh');
+      if (importBtn) importBtn.style.display = 'none';
+      if (refreshBtn) refreshBtn.style.display = '';
+    }
+  } else {
+    activateBtn.style.display = '';
+    activateBtn.textContent = 'Activate';
+    _gtBtn(activateBtn, 'neutral');
+    barContent.style.display = 'none';
+  }
+}
+
+function _showCompanionConsent(bar, onAccept) {
+  // Remove any existing consent prompt
+  bar.querySelector('.gt-cb-consent')?.remove();
+  const panel = bar.querySelector('.gt-cb-panel');
+  if (!panel) return;
+
+  const consent = document.createElement('div');
+  consent.className = 'gt-cb-consent';
+  consent.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0;';
+
+  const msg = document.createElement('span');
+  msg.style.cssText = 'color:#9090b0;font-size:11px;flex:1;';
+  msg.textContent = 'Your API key will be used to call all base snapshots from GT-Companion.';
+  consent.appendChild(msg);
+
+  const acceptBtn = document.createElement('button');
+  acceptBtn.textContent = 'Accept & Activate';
+  _gtBtn(acceptBtn, 'on');
+  acceptBtn.addEventListener('click', () => { consent.remove(); onAccept(); });
+  consent.appendChild(acceptBtn);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  _gtBtn(cancelBtn, 'neutral');
+  cancelBtn.addEventListener('click', () => consent.remove());
+  consent.appendChild(cancelBtn);
+
+  panel.appendChild(consent);
+}
+
+// ── Companion: import bar ──────────────────────────────────────────────────
+
+function injectCompanionBar() {
+  if (document.getElementById(GT_COMPANION_BAR_ID)) return;
+  const firstBtn = document.querySelector('button.btn-building[data-slot-id]');
+  if (!firstBtn) return;
+  const cardBody = firstBtn.closest('.card-body');
+  if (!cardBody?.parentElement) return;
+
+  // Load persisted state
+  chrome.storage.local.get(['gtCompanionBaseMap', 'gtCompanionEnabled', 'gtLevelLock'], ({ gtCompanionBaseMap, gtCompanionEnabled, gtLevelLock }) => {
+    _baseSnapshotMap = gtCompanionBaseMap ?? {};
+    _companionEnabled = gtCompanionEnabled ?? false;
+    _levelLockEnabled = gtLevelLock !== false; // default true
+    _renderCompanionBarState(bar);
+  });
+
+  // ── Outer wrapper ───────────────────────────────────────────────────────
+  const bar = document.createElement('div');
+  bar.id = GT_COMPANION_BAR_ID;
+  bar.style.cssText = 'font-family:system-ui,sans-serif;font-size:11px;margin-bottom:8px;';
+
+  // ── Main content panel ──────────────────────────────────────────────────
+  const panel = document.createElement('div');
+  panel.className = 'gt-cb-panel';
+  panel.style.cssText = 'background:#0d0d1f;border:1px solid #1a1a30;border-bottom:none;padding:6px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;overflow:hidden;transition:max-height 0.25s ease,padding 0.25s ease;max-height:80px;';
+
+  // Title + tooltip — always in panel left
+  const titleWrap = document.createElement('div');
+  titleWrap.style.cssText = 'display:inline-flex;align-items:center;gap:5px;flex-shrink:0;';
+
+  const titleEl = document.createElement('span');
+  titleEl.style.cssText = 'color:#6366f1;font-weight:700;letter-spacing:0.03em;';
+  titleEl.textContent = 'GT-Companion';
+
+  const helpBtn = document.createElement('span');
+  helpBtn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid #4a4a6a;color:#6b6b8a;font-size:9px;font-weight:700;cursor:default;flex-shrink:0;line-height:1;';
+  helpBtn.textContent = '?';
+  helpBtn.addEventListener('mouseenter', () => {
+    _showModalTip(helpBtn, [
+      'Load existing base snapshots from GT-Companion to help with base design and leveling.',
+      'Level Lock will cap the maximum upgrade on that building slot to prevent accidents.',
+      '',
+      'You must have \'Cross-Device Sync\' enabled in GT-Companion to fetch your base plan snapshots.',
+    ]);
+  });
+  helpBtn.addEventListener('mouseleave', _hideModalTip);
+
+  titleWrap.appendChild(titleEl);
+  titleWrap.appendChild(helpBtn);
+  panel.appendChild(titleWrap);
+
+  // ── Lip tab — sits below panel, right-aligned, always visible ──────────
+  const lip = document.createElement('div');
+  lip.style.cssText = 'display:flex;justify-content:flex-end;';
+
+  const lipBtn = document.createElement('div');
+  lipBtn.style.cssText = 'display:inline-flex;align-items:center;background:#0d0d1f;border:1px solid #1a1a30;border-top:none;border-radius:0 0 6px 6px;padding:2px 10px 3px;cursor:pointer;user-select:none;';
+
+  const lipArrow = document.createElement('span');
+  lipArrow.style.cssText = 'color:#6b6b8a;font-size:9px;line-height:1;transition:color 0.15s;';
+  lipArrow.textContent = '▲';
+
+  lipBtn.appendChild(lipArrow);
+  lip.appendChild(lipBtn);
+  lipBtn.addEventListener('mouseenter', () => { lipArrow.style.color = '#9090b0'; });
+  lipBtn.addEventListener('mouseleave', () => { lipArrow.style.color = '#6b6b8a'; });
+
+  let _barCollapsed = false;
+  const toggleCollapse = () => {
+    _barCollapsed = !_barCollapsed;
+    if (_barCollapsed) {
+      panel.style.maxHeight = '0';
+      panel.style.padding = '0 10px';
+      lipArrow.textContent = '▼';
+    } else {
+      panel.style.maxHeight = '80px';
+      panel.style.padding = '6px 10px';
+      lipArrow.textContent = '▲';
+    }
+  };
+  lipBtn.addEventListener('click', toggleCollapse);
+
+  // ── Activation toggle ───────────────────────────────────────────────────
+  const activateBtn = document.createElement('button');
+  activateBtn.className = 'gt-cb-activate';
+  activateBtn.textContent = 'Activate';
+  _gtBtn(activateBtn, 'neutral');
+  activateBtn.addEventListener('click', () => {
+    if (_companionEnabled) return; // deactivation handled in Settings panel
+    _showCompanionConsent(bar, () => {
+      _companionEnabled = true;
+      chrome.storage.local.set({ gtCompanionEnabled: true });
+      _renderCompanionBarState(bar);
+    });
+  });
+  panel.appendChild(activateBtn);
+
+  // ── Content area (only visible when activated) ──────────────────────────
+  const barContent = document.createElement('div');
+  barContent.className = 'gt-cb-content';
+  barContent.style.cssText = 'display:none;align-items:center;gap:8px;flex:1;flex-wrap:wrap;';
+
+  const doFetch = (btn) => {
+    btn.disabled = true; btn.style.opacity = '0.5';
+    _fetchCompanionSnapshots().finally(() => { btn.disabled = false; btn.style.opacity = ''; });
+  };
+
+  const importBtn = document.createElement('button');
+  importBtn.className = 'gt-cb-import';
+  importBtn.textContent = '⬇ Import';
+  _gtBtn(importBtn, 'neutral');
+  importBtn.addEventListener('click', () => doFetch(importBtn));
+  barContent.appendChild(importBtn);
+
+  const refreshBtn = document.createElement('button');
+  refreshBtn.className = 'gt-cb-refresh';
+  refreshBtn.textContent = '↻';
+  refreshBtn.title = 'Re-fetch snapshots';
+  _gtBtn(refreshBtn, 'muted');
+  refreshBtn.style.display = 'none';
+  refreshBtn.addEventListener('click', () => doFetch(refreshBtn));
+  barContent.appendChild(refreshBtn);
+
+  const statusEl = document.createElement('span');
+  statusEl.className = 'gt-cb-status';
+  statusEl.style.cssText = 'color:#6b6b8a;font-size:11px;flex:1;';
+  statusEl.textContent = 'No targets loaded';
+  barContent.appendChild(statusEl);
+
+  // Level Lock toggle
+  const lockBtn = document.createElement('button');
+  const _updateLockBtn = () => {
+    lockBtn.textContent = _levelLockEnabled ? 'Lvl 🔒 On' : 'Lvl 🔓 Off';
+    _gtBtn(lockBtn, _levelLockEnabled ? 'on' : 'off');
+  };
+  lockBtn.addEventListener('click', () => {
+    _levelLockEnabled = !_levelLockEnabled;
+    chrome.storage.local.set({ gtLevelLock: _levelLockEnabled });
+    _updateLockBtn();
+    _updateModalTarget(); // re-evaluate upgrade block state
+  });
+  _updateLockBtn();
+  barContent.appendChild(lockBtn);
+
+  const _clearHover = (el, on) => { el.style.color = on ? '#f87171' : '#6b6b8a'; el.style.borderColor = on ? '#6b2a2a' : '#1e1e36'; };
+
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'gt-cb-clear';
+  clearBtn.textContent = 'Clear Current Overlay';
+  _gtBtn(clearBtn, 'muted');
+  clearBtn.addEventListener('mouseenter', () => _clearHover(clearBtn, true));
+  clearBtn.addEventListener('mouseleave', () => _clearHover(clearBtn, false));
+  clearBtn.addEventListener('click', () => {
+    const baseId = _detectCurrentBaseId();
+    _companionTargets = {};
+    if (baseId) {
+      delete _baseSnapshotMap[String(baseId)];
+      chrome.storage.local.set({ gtCompanionBaseMap: _baseSnapshotMap });
+    }
+    injectSlotBadges();
+    _updateModalTarget();
+    const sel = bar.querySelector('.gt-cb-picker select');
+    if (sel) sel.value = '';
+    statusEl.textContent = 'Overlay cleared';
+    statusEl.style.color = '#6b6b8a';
+  });
+  barContent.appendChild(clearBtn);
+
+  const clearAllBtn = document.createElement('button');
+  clearAllBtn.textContent = 'Clear All Overlays';
+  clearAllBtn.title = 'Remove overlays for all bases';
+  _gtBtn(clearAllBtn, 'muted');
+  clearAllBtn.addEventListener('mouseenter', () => _clearHover(clearAllBtn, true));
+  clearAllBtn.addEventListener('mouseleave', () => _clearHover(clearAllBtn, false));
+  clearAllBtn.addEventListener('click', () => {
+    _companionTargets = {};
+    _baseSnapshotMap = {};
+    chrome.storage.local.set({ gtCompanionBaseMap: {} });
+    injectSlotBadges();
+    _updateModalTarget();
+    const sel = bar.querySelector('.gt-cb-picker select');
+    if (sel) sel.value = '';
+    statusEl.textContent = 'All overlays cleared';
+    statusEl.style.color = '#6b6b8a';
+  });
+  barContent.appendChild(clearAllBtn);
+
+  panel.appendChild(barContent);
+  bar.appendChild(panel);
+  bar.appendChild(lip);
+  cardBody.parentElement.insertBefore(bar, cardBody);
+  bar.style.marginBottom = '0'; // lip provides the bottom spacing visually
+
+  // Render initial state once storage loads (via _renderCompanionBarState)
+}
+
+// ── Slot badge overlay ────────────────────────────────────────────────────
+
+function _getBuildingTypeId(btn) {
+  // Extract from SVG xlink:href hash e.g. "#ColonyBarracks" → sanitized name
+  // Then match against gamedata buildings by sanitized name
+  const use = btn.querySelector('use');
+  const href = use?.getAttribute('xlink:href') ?? use?.getAttribute('href') ?? '';
+  const spriteId = href.split('#')[1] ?? '';
+  if (!spriteId || !_gamedata) return null;
+  const sanitize = s => s.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const match = _gamedata.buildings?.find(b => sanitize(b.name) === sanitize(spriteId));
+  return match?.id ?? null;
+}
+
+function _getBuildingTypeName(typeId) {
+  return _gamedata?.buildings?.find(b => b.id === typeId)?.name ?? `Type ${typeId}`;
+}
+
+function injectSlotBadges() {
+  document.querySelectorAll('button.btn-building[data-slot-id]').forEach(btn => {
+    btn.querySelector(`.${GT_SLOT_BADGE_CLASS}`)?.remove();
+    const target = _companionTargets[btn.dataset.slotId];
+    if (!target) return;
+
+    const currentLvl = parseInt(btn.querySelector('.badge.btn-badge')?.textContent ?? '0');
+    const currentTypeId = _getBuildingTypeId(btn);
+    const typeMatch = currentTypeId === null || currentTypeId === target.typeId;
+    const levelMatch = currentLvl >= target.level;
+
+    let bg, color, text;
+    if (!typeMatch) {
+      // Wrong building type — show what's needed
+      bg = '#3b1a1a'; color = '#f87171';
+      text = `→ ${_getBuildingTypeName(target.typeId)}`;
+    } else if (!levelMatch) {
+      // Right type, wrong level
+      bg = '#1e3a5f'; color = '#93c5fd';
+      text = `Lv.${currentLvl} → ${target.level}`;
+    } else {
+      // All good
+      bg = '#14532d'; color = '#4ade80';
+      text = `✓ Lv.${target.level}`;
+    }
+
+    const badge = document.createElement('span');
+    badge.className = GT_SLOT_BADGE_CLASS;
+    badge.style.cssText = `position:absolute;bottom:2px;right:2px;background:${bg};color:${color};font-size:8px;font-weight:700;border-radius:3px;padding:0 3px;line-height:14px;pointer-events:none;z-index:2;max-width:90%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+    badge.textContent = text;
+    btn.style.position = 'relative';
+    btn.appendChild(badge);
+  });
+}
+
+// ── Modal target indicator ────────────────────────────────────────────────
+
+function _getCurrentSlotId() {
+  return document.querySelector('.modal.show .modal-header .btn-group .input-group-text')?.textContent?.trim();
+}
+
+function _applyUpgradeBlock(block) {
+  let s = document.getElementById('gt-upgrade-block');
+  if (block && _levelLockEnabled && !s) {
+    s = document.createElement('style');
+    s.id = 'gt-upgrade-block';
+    s.textContent = '.modal.show .btn.btn-primary.btn-icon-split.w-100 { opacity:0.4 !important; pointer-events:none !important; }';
+    document.head.appendChild(s);
+  } else if (!block || !_levelLockEnabled) {
+    s?.remove();
+  }
+}
+
+function _updateModalTarget() {
+  const el = document.getElementById(GT_MODAL_TARGET_ID);
+  if (!el) return;
+  const slotId = _getCurrentSlotId();
+  const target = slotId ? _companionTargets[slotId] : null;
+  if (!target) {
+    el.style.display = 'none';
+    _applyUpgradeBlock(false);
+    return;
+  }
+  const currentLvl = parseInt(document.querySelector(`button.btn-building[data-slot-id="${slotId}"] .badge.btn-badge`)?.textContent ?? '0');
+  const done = currentLvl >= target.level;
+  el.textContent = done ? `✓ Lv.${target.level}` : `→ Lv.${target.level}`;
+  _gtBtn(el, done ? 'target-ok' : 'target-pend');
+  _applyUpgradeBlock(done);
+}
+
+let _companionBarBaseId = null; // baseId the bar was last injected for
+
+function _onUrlChange() {
+  if (_isOnBuildingsTab()) {
+    const baseId = _detectCurrentBaseId();
+    // Force re-inject if base changed (different planet/base)
+    if (baseId !== _companionBarBaseId) {
+      document.getElementById(GT_COMPANION_BAR_ID)?.remove();
+      _companionTargets = {};
+      _companionBarBaseId = baseId;
+    }
+    if (document.querySelector('button.btn-building[data-slot-id]')) {
+      injectCompanionBar();
+      injectSlotBadges();
+    } else {
+      const obs = new MutationObserver(() => {
+        if (document.querySelector('button.btn-building[data-slot-id]')) {
+          obs.disconnect();
+          injectCompanionBar();
+          injectSlotBadges();
+        }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+    }
+  } else {
+    document.getElementById(GT_COMPANION_BAR_ID)?.remove();
+    _companionTargets = {};
+    _companionBarBaseId = null;
+  }
+}
+
+function watchBuildingGrid() {
+  if (_buildingGridObs) return;
+  const _origPush    = history.pushState.bind(history);
+  const _origReplace = history.replaceState.bind(history);
+  history.pushState    = (...args) => { _origPush(...args);    _onUrlChange(); };
+  history.replaceState = (...args) => { _origReplace(...args); _onUrlChange(); };
+  window.addEventListener('popstate', _onUrlChange);
+  // Fallback: poll for URL changes the game makes outside pushState/replaceState
+  let _lastHref = location.href;
+  setInterval(() => { if (location.href !== _lastHref) { _lastHref = location.href; _onUrlChange(); } }, 300);
+  _onUrlChange(); // check on initial load
+  _buildingGridObs = true;
+}
+
+function watchBuildingModal() {
+  if (_buildingModalObs) return;
+  _buildingModalObs = new MutationObserver(() => {
+    if (document.body.classList.contains('modal-open')) {
+      setTimeout(() => { if (_isBuildingModal()) _bindBuildingKeys(); }, 200);
+    } else {
+      _unbindBuildingKeys();
+    }
+  });
+  _buildingModalObs.observe(document.body, { attributes: true, attributeFilter: ['class'], subtree: false });
+}
+
+// ── Flight modal injection ─────────────────────────────────────────────────────
+
+let _flightModalObs = null;
+
+function watchFlightModal() {
+  if (_flightModalObs) return;
+  _flightModalObs = new MutationObserver(() => {
+    if (!document.body.classList.contains('modal-open')) return;
+    setTimeout(() => {
+      const modal = document.querySelector('.modal.show');
+      if (!modal || !modal.querySelector('button[data-btn-start-flight]')) return;
+      if (modal.querySelector('#gt-fi')) return;
+      _setupFlightModalInjection(modal);
+    }, 300);
+  });
+  _flightModalObs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+}
+
+async function _setupFlightModalInjection(modal) {
+  if (!_companyData) {
+    const fresh = await requestGTLocalAPI('getMyCompany');
+    if (fresh?.id) _companyData = { ...fresh, perks: _companyData?.perks };
+  }
+  if (!_priceMap)    await fetchMatPrices();
+  if (!_avgPriceMap) await fetchAvgPrices();
+  if (!_guildData)   await fetchGuildData();
+
+  const gamedata = _loadedHeaderGamedata;
+  if (!gamedata || !_companyData) return;
+
+  const company         = _companyData;
+  const ships           = company.ships ?? [];
+  const emitterMap      = new Map((gamedata.shipEmitters ?? []).map(e => [e.type, e]));
+  const reactorMap      = new Map((gamedata.shipReactors ?? []).map(r => [r.type, r]));
+  const flightPerks     = calcFlightPerks(company, gamedata.perks);
+  const fuelSavingMult  = 1 + flightPerks.fuelSavingPct  / 100;
+  const degradationMult = 1 + flightPerks.degradationPct / 100;
+  const totalSpeedMult  =
+    companyStartingBonus(company.fDate) *
+    (1 + ((_guildData?.projects ?? []).find(p => p.type === 3)?.level ?? 0) * 0.03) *
+    (1 + flightPerks.speedPct / 100);
+  const REPAIR_KIT_MAT_ID = 113;
+
+  const inject = () => _injectGTFlightHints(
+    modal, ships, emitterMap, reactorMap,
+    flightPerks, fuelSavingMult, degradationMult, totalSpeedMult, REPAIR_KIT_MAT_ID
+  );
+
+  inject();
+
+  const cardObs = new MutationObserver(_debounce(() => {
+    if (!modal.isConnected) { cardObs.disconnect(); return; }
+    if (!modal.querySelector('#gt-fi')) inject();
+  }, 200));
+  cardObs.observe(modal.querySelector('.modal-body') ?? modal, { childList: true, subtree: true });
+}
+
+function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
+                               flightPerks, fuelSavingMult, degradationMult, totalSpeedMult, REPAIR_KIT_MAT_ID) {
+  const slider = modal.querySelector('input#customRange1');
+  if (!slider) return;
+
+  // ── Dot bar — sits between the Efficiency/Power label row and the slider ──────
+  const sliderLabelRow = slider.previousElementSibling;
+  const dotBar = document.createElement('div');
+  dotBar.id = 'gt-fi';
+  dotBar.style.cssText = 'position:relative;height:14px;margin:4px 0 -2px;';
+
+  const mkDot = (col) => {
+    const d = document.createElement('span');
+    d.style.cssText = [
+      'position:absolute;top:50%;transform:translate(-50%,-50%);',
+      `width:8px;height:8px;border-radius:50%;background:${col};`,
+      'cursor:pointer;opacity:0;transition:opacity .15s;pointer-events:none;',
+      'z-index:10;',
+    ].join('');
+    dotBar.appendChild(d);
+    // Tooltip with 1s delay
+    let _tipEl = null, _tipTimer = null;
+    d.addEventListener('mouseenter', (e) => {
+      _tipTimer = setTimeout(() => {
+        _tipEl = document.createElement('div');
+        _tipEl.style.cssText = 'position:fixed;z-index:2147483647;background:#1a1a2e;border:1px solid #3a3a5a;border-radius:4px;padding:3px 8px;font-size:11px;color:#c0c0da;pointer-events:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.5);';
+        _tipEl.textContent = d.dataset.gtTip ?? '';
+        document.body.appendChild(_tipEl);
+        _tipEl.style.left = Math.min(e.clientX + 10, window.innerWidth  - _tipEl.offsetWidth  - 6) + 'px';
+        _tipEl.style.top  = (e.clientY - _tipEl.offsetHeight - 8) + 'px';
+      }, 500);
+    });
+    d.addEventListener('mousemove', (e) => {
+      if (_tipEl) {
+        _tipEl.style.left = Math.min(e.clientX + 10, window.innerWidth  - _tipEl.offsetWidth  - 6) + 'px';
+        _tipEl.style.top  = (e.clientY - _tipEl.offsetHeight - 8) + 'px';
+      }
+    });
+    d.addEventListener('mouseleave', () => { clearTimeout(_tipTimer); _tipEl?.remove(); _tipEl = null; });
+    return d;
+  };
+  const greenDot = mkDot('#22c55e'); greenDot.dataset.gtTip = 'Cheapest';
+  const blueDot  = mkDot('#60a5fa'); blueDot.dataset.gtTip  = 'Best';
+
+  sliderLabelRow.after(dotBar);
+  dotBar.after(slider);
+
+  // ── Cost rows — injected after the native "Fuel used" row ─────────────────────
+  const allRows = [...modal.querySelectorAll('.card-body .row')];
+  const fuelRow = allRows.find(r => r.querySelector('.col-4')?.textContent?.trim() === 'Fuel used');
+  if (!fuelRow) return;
+
+  const mkCostRow = (id, labelText) => {
+    const r = document.createElement('div');
+    r.id = id;
+    r.className = 'row';
+    r.innerHTML = `<div class="col-4 caption-lr-start">${labelText}</div><div class="col"><span class="text-body-tertiary">-</span></div>`;
+    return r;
+  };
+  const fuelCostRow   = mkCostRow('gt-fuel-row',   'Fuel cost');
+  const repairCostRow = mkCostRow('gt-repair-row', 'Repair cost');
+  const totalCostRow  = mkCostRow('gt-total-row',  'Est. total cost');
+  fuelRow.after(totalCostRow);
+  fuelRow.after(repairCostRow);
+  fuelRow.after(fuelCostRow);
+  const fuelValEl   = fuelCostRow.querySelector('span');
+  const repairValEl = repairCostRow.querySelector('span');
+  const totalValEl  = totalCostRow.querySelector('span');
+
+  // ── Shared state reader ────────────────────────────────────────────────────────
+  const readState = () => {
+    const checkedInput = modal.querySelector('input.btn-check[name="btnradioinfo"]:checked');
+    const shipLabel    = checkedInput && modal.querySelector(`label[for="${checkedInput.id}"]`);
+    const ship         = ships.find(s => String(s.id) === String(shipLabel?.dataset?.shipId));
+    const distRow      = allRows.find(r => r.querySelector('.col-4')?.textContent?.trim() === 'Distance');
+    const distMatch    = distRow?.querySelector('.col')?.textContent?.trim().match(/([\d.]+)\s*ly/);
+    const dist         = distMatch ? parseFloat(distMatch[1]) : null;
+    const cargoEl      = modal.querySelector('span.transition-bg-eout');
+    const cargoWeight  = cargoEl ? parseFloat(cargoEl.textContent.replace(/,/g, '')) || 0 : 0;
+    return { ship, dist, cargoWeight };
+  };
+
+  const buildOpts = (ship) => {
+    const bp      = ship.blueprint;
+    const emitter = emitterMap.get(bp.emitterType);
+    const reactor = reactorMap.get(bp.reactorType);
+    if (!emitter || !reactor) return null;
+    const cfg = calcShipConfig(bp, emitter, reactor);
+    return {
+      emitter, reactor,
+      opts: {
+        fuelSavingMult, degradationMult,
+        fuelPrice:       effectivePrice(reactor.fuelId),
+        repairKitPrice:  effectivePrice(REPAIR_KIT_MAT_ID),
+        repairKitsTotal: Math.ceil(cfg.weightEmpty / 10),
+        effectiveCargo:  bp.cargoCapacity * (1 + flightPerks.cargoCapPct / 100),
+      },
+    };
+  };
+
+  const hide = () => {
+    [greenDot, blueDot].forEach(d => { d.style.opacity = '0'; d.style.pointerEvents = 'none'; });
+    fuelValEl.textContent   = '-'; fuelValEl.className   = 'text-body-tertiary';
+    repairValEl.textContent = '-'; repairValEl.className = 'text-body-tertiary';
+    totalValEl.textContent  = '-'; totalValEl.className  = 'text-body-tertiary';
+  };
+
+  // ── recalc ─────────────────────────────────────────────────────────────────────
+  const recalc = () => {
+    const { ship, dist, cargoWeight } = readState();
+    if (!ship || !dist) { hide(); return; }
+
+    const built = buildOpts(ship);
+    if (!built) { hide(); return; }
+    const { emitter, reactor, opts } = built;
+
+    const optPF   = findOptimalFlightPF(dist, ship, cargoWeight, emitter, reactor, totalSpeedMult, opts);
+    const cheapPF = findCheapestFlightPF(dist, ship, cargoWeight, emitter, reactor, totalSpeedMult, opts);
+    const currentPF = Math.max(0.20, Math.min(1.0, parseInt(slider.value, 10) / 100));
+    const res     = calcFlight(dist, ship, cargoWeight, emitter, reactor, totalSpeedMult, currentPF, opts);
+
+    const fuelCost   = res.fuelUsed * opts.fuelPrice;
+    const repairCost = Math.ceil(opts.repairKitsTotal * res.condWear) * opts.repairKitPrice;
+    const hasFuel    = (ship.fuel ?? 0) >= Math.ceil(res.fuelUsed);
+
+    const posLeft = pf => {
+      const fraction = (pf * 100 - 20) / 80;
+      const w = slider.getBoundingClientRect().width;
+      const thumbR = parseFloat(getComputedStyle(slider).getPropertyValue('--bs-form-range-thumb-width') || '16') / 2;
+      if (w > 0) return `${((thumbR + fraction * (w - 2 * thumbR)) / w * 100).toFixed(2)}%`;
+      return `${(fraction * 100).toFixed(1)}%`;
+    };
+
+    // green = cheapest, blue = best (optimal)
+    greenDot.style.left          = posLeft(cheapPF);
+    greenDot.style.opacity       = '1';
+    greenDot.style.pointerEvents = 'auto';
+
+    const sameSpot = Math.abs(optPF - cheapPF) < 0.015;
+    blueDot.style.display        = sameSpot ? 'none' : '';
+    blueDot.style.left           = posLeft(optPF);
+    blueDot.style.opacity        = '1';
+    blueDot.style.pointerEvents  = 'auto';
+
+    const totalCost = fuelCost + repairCost;
+    fuelValEl.textContent   = opts.fuelPrice      > 0 ? '$' + Math.round(fuelCost).toLocaleString()   : '-';
+    fuelValEl.className     = hasFuel ? '' : 'text-danger fw-semibold';
+    repairValEl.textContent = opts.repairKitPrice  > 0 ? '$' + Math.round(repairCost).toLocaleString() : '-';
+    repairValEl.className   = '';
+    totalValEl.textContent  = totalCost > 0 ? '$' + Math.round(totalCost).toLocaleString() : '-';
+    totalValEl.className    = hasFuel ? '' : 'text-danger fw-semibold';
+  };
+
+  // ── Dot click handlers ─────────────────────────────────────────────────────────
+  const applyDot = (findFn) => {
+    const { ship, dist, cargoWeight } = readState();
+    if (!ship || !dist) return;
+    const built = buildOpts(ship);
+    if (!built) return;
+    const { emitter, reactor, opts } = built;
+    const pf = findFn(dist, ship, cargoWeight, emitter, reactor, totalSpeedMult, opts);
+    slider.value = String(Math.round(pf * 100));
+    slider.dispatchEvent(new Event('input',  { bubbles: true }));
+    slider.dispatchEvent(new Event('change', { bubbles: true }));
+    setTimeout(recalc, 60);
+  };
+
+  greenDot.addEventListener('click', () => applyDot(findCheapestFlightPF));
+  blueDot.addEventListener('click',  () => applyDot(findOptimalFlightPF));
+
+  // ── Event hooks ───────────────────────────────────────────────────────────────
+  recalc();
+
+  modal.querySelectorAll('input.btn-check[name="btnradioinfo"]')
+    .forEach(inp => inp.addEventListener('change', recalc));
+  slider.addEventListener('input', recalc);
+  modal.querySelectorAll('.dropdown-menu .dropdown-item')
+    .forEach(item => item.addEventListener('click', () => setTimeout(recalc, 150)));
+
+  // Watch the Distance row for game-side updates (destination typed/selected)
+  const distRow = allRows.find(r => r.querySelector('.col-4')?.textContent?.trim() === 'Distance');
+  if (distRow) {
+    new MutationObserver(_debounce(recalc, 80))
+      .observe(distRow, { subtree: true, characterData: true, childList: true });
+  }
+}
+
+// ── Contracts page — pinnable active contracts ────────────────────────────────
+
+function _injectContractPins() {
+  if (!document.getElementById('gt-contracts-style')) {
+    const s = document.createElement('style');
+    s.id = 'gt-contracts-style';
+    s.textContent = '.gt-pin-btn{opacity:.2;color:#f59e0b!important;} .gt-pin-btn.gt-starred{opacity:1!important;} .gt-pin-btn:hover{opacity:.55!important;}';
+    document.head.appendChild(s);
+  }
+  const table = document.querySelector('table.table-hover.mb-0');
+  if (!table) return;
+
+  const activeTh = [...table.querySelectorAll('th')]
+    .find(th => th.textContent.trim() === 'Active Contracts');
+  const activeTbody = activeTh?.closest('thead')?.nextElementSibling;
+  if (!activeTbody || activeTbody.tagName !== 'TBODY') return;
+
+  const pinned = _getPinnedContracts();
+  const rows   = [...activeTbody.querySelectorAll('tr')];
+
+  // Stamp original DOM index on first visit so we can restore order on unpin
+  rows.forEach((tr, i) => { if (!tr.dataset.gtOrigIdx) tr.dataset.gtOrigIdx = i; });
+
+  // Prune stale keys for contracts no longer in the active list
+  const currentKeys = new Set(rows.map(_contractRowKey));
+  let changed = false;
+  for (const k of pinned) { if (!currentKeys.has(k)) { pinned.delete(k); changed = true; } }
+  if (changed) _setPinnedContracts(pinned);
+
+  const setPinState = (btn, starred) => {
+    btn.textContent = '★';
+    btn.title       = starred ? 'Unpin' : 'Pin to top';
+    btn.classList.toggle('gt-starred', starred);
+  };
+
+  for (const tr of rows) {
+    const key      = _contractRowKey(tr);
+    const isPinned = pinned.has(key);
+
+    // Update existing star state if already injected
+    const existing = tr.querySelector('.gt-pin-btn');
+    if (existing) { setPinState(existing, isPinned); continue; }
+
+    const firstTd = tr.querySelector('td');
+    if (!firstTd) continue;
+
+    // Anchor star absolutely to top-left of the first cell — no layout impact
+    firstTd.style.position = 'relative';
+
+    const pinBtn = document.createElement('button');
+    pinBtn.className     = 'gt-pin-btn';
+    pinBtn.style.cssText = 'position:absolute;top:2px;left:2px;background:none;border:none;cursor:pointer;padding:0;font-size:10px;line-height:1;transition:opacity .15s;z-index:1;';
+    setPinState(pinBtn, isPinned);
+
+    pinBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      const p = _getPinnedContracts();
+      if (p.has(key)) p.delete(key); else p.add(key);
+      _setPinnedContracts(p);
+      _injectContractPins();
+    });
+
+    firstTd.appendChild(pinBtn);
+  }
+
+  // Sort: pinned rows first, unpinned rows restored to original DOM order
+  const sorted = [
+    ...rows.filter(tr => pinned.has(_contractRowKey(tr))),
+    ...rows.filter(tr => !pinned.has(_contractRowKey(tr)))
+          .sort((a, b) => parseInt(a.dataset.gtOrigIdx, 10) - parseInt(b.dataset.gtOrigIdx, 10)),
+  ];
+  sorted.forEach(tr => activeTbody.appendChild(tr));
+}
+
+let _contractsObs = null;
+function watchContractsPage() {
+  if (_contractsObs) return;
+  let _lastActiveTbody = null;
+
+  const tryInject = () => {
+    if (!location.href.includes('/exchange')) return;
+    const th = [...document.querySelectorAll('th')]
+      .find(th => th.textContent.trim() === 'Active Contracts');
+    const tbody = th?.closest('thead')?.nextElementSibling ?? null;
+    if (!tbody || tbody.tagName !== 'TBODY') return;
+    if (tbody === _lastActiveTbody) return;
+    _lastActiveTbody = tbody;
+    _injectContractPins();
+
+    // Re-inject if the game refreshes the tbody rows
+    new MutationObserver(_debounce(() => {
+      _lastActiveTbody = null;
+      _injectContractPins();
+    }, 300)).observe(tbody, { childList: true });
+  };
+
+  _contractsObs = new MutationObserver(_debounce(tryInject, 200));
+  _contractsObs.observe(document.body, { childList: true, subtree: true });
+
+  // Catch SPA pushState navigation
+  const _origPush = history.pushState.bind(history);
+  history.pushState = (...a) => { _origPush(...a); setTimeout(tryInject, 400); };
+  window.addEventListener('popstate', () => setTimeout(tryInject, 400));
+
+  tryInject();
 }
 
 function watchGteNav() {
