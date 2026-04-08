@@ -5689,20 +5689,21 @@ function _applyScrapDisableStyle() {
 
 let _gtModalTipTimer = null;
 
-function _showModalTip(anchor, lines) {
+function _showModalTip(e, lines) {
   document.getElementById('gt-modal-tip')?.remove();
   clearTimeout(_gtModalTipTimer);
+  const mx = e.clientX, my = e.clientY;
   _gtModalTipTimer = setTimeout(() => {
-    const rect = anchor.getBoundingClientRect();
     const tip = document.createElement('div');
     tip.id = 'gt-modal-tip';
     tip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d1f;border:1px solid #2a2a4a;border-radius:6px;padding:5px 10px;font-family:system-ui,sans-serif;font-size:11px;color:#b0b0cc;box-shadow:0 4px 16px rgba(0,0,0,0.7);pointer-events:none;white-space:pre;line-height:1.7;';
     tip.textContent = Array.isArray(lines) ? lines.join('\n') : lines;
     document.body.appendChild(tip);
     const tw = tip.offsetWidth, th = tip.offsetHeight;
-    const left = Math.max(8, Math.min(rect.left + rect.width / 2 - tw / 2, window.innerWidth - tw - 8));
+    const left = Math.max(8, Math.min(mx - tw / 2, window.innerWidth - tw - 8));
+    const top  = (my + 16 + th > window.innerHeight - 8) ? my - th - 10 : my + 16;
     tip.style.left = left + 'px';
-    tip.style.top = (rect.top - th - 6) + 'px';
+    tip.style.top  = top + 'px';
   }, 250);
 }
 
@@ -5727,13 +5728,14 @@ function _gtBtn(el, variant) {
   el.style.cssText = _GT_BTN_BASE + `border-color:${v.border};color:${v.color};`;
 }
 
-function _styleHkBtn(btn) {
-  _gtBtn(btn, !_settings.disableHotkeys ? 'on' : 'off');
+const _GT_TOGGLE_BASE = 'display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;font-family:inherit;font-weight:400;background:none;border:none;padding:2px 4px;border-radius:3px;color:inherit;opacity:0.75;transition:opacity .15s,background .15s;white-space:nowrap;line-height:1;';
+function _styleToggleBtn(btn, on) {
+  const dot = btn.querySelector('.gt-toggle-dot');
+  if (dot) { dot.style.background = on ? '#22c55e' : '#ef4444'; }
+  btn.style.cssText = _GT_TOGGLE_BASE;
 }
-
-function _styleScrapBtn(btn) {
-  _gtBtn(btn, _settings.disableScrap ? 'on' : 'off');
-}
+function _styleHkBtn(btn) { _styleToggleBtn(btn, !_settings.disableHotkeys); }
+function _styleScrapBtn(btn) { _styleToggleBtn(btn, _settings.disableScrap); }
 
 function _injectModalButtons(modal) {
   if (modal.querySelector('#gt-modal-btn-wrap')) return;
@@ -5743,13 +5745,18 @@ function _injectModalButtons(modal) {
 
   const wrap = document.createElement('div');
   wrap.id = 'gt-modal-btn-wrap';
-  wrap.style.cssText = 'display:inline-flex;gap:4px;align-items:center;margin-right:8px;';
+  wrap.style.cssText = 'display:inline-flex;gap:6px;align-items:center;margin-right:8px;';
 
   // Target level indicator
   const targetEl = document.createElement('span');
   targetEl.id = GT_MODAL_TARGET_ID;
-  targetEl.style.display = 'none';
+  targetEl.style.cssText = 'display:none;font-size:12px;font-family:inherit;opacity:0.85;white-space:nowrap;';
   wrap.appendChild(targetEl);
+
+  // Divider
+  const div1 = document.createElement('span');
+  div1.style.cssText = 'width:1px;height:14px;background:rgba(255,255,255,.12);flex-shrink:0;';
+  wrap.appendChild(div1);
 
   // Watch slot counter changes to update target indicator
   const slotCounter = header.querySelector('.btn-group .input-group-text');
@@ -5758,15 +5765,27 @@ function _injectModalButtons(modal) {
     _buildingSlotObs.observe(slotCounter, { characterData: true, childList: true, subtree: true });
   }
 
+  const makeToggle = (label) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    const dot = document.createElement('span');
+    dot.className = 'gt-toggle-dot';
+    dot.style.cssText = 'width:7px;height:7px;border-radius:50%;flex-shrink:0;transition:background .15s;';
+    const txt = document.createElement('span');
+    txt.textContent = label;
+    btn.appendChild(dot);
+    btn.appendChild(txt);
+    btn.addEventListener('mouseenter', () => { btn.style.opacity = '1'; btn.style.background = 'rgba(255,255,255,.06)'; });
+    btn.addEventListener('mouseleave', () => { btn.style.opacity = '0.75'; btn.style.background = 'none'; _hideModalTip(); });
+    return btn;
+  };
+
   // Hotkeys toggle
-  const hkBtn = document.createElement('button');
-  hkBtn.type = 'button';
-  hkBtn.textContent = 'Hotkeys';
+  const hkBtn = makeToggle('Hotkeys');
   _styleHkBtn(hkBtn);
-  hkBtn.addEventListener('mouseenter', () => _showModalTip(hkBtn, _settings.disableHotkeys
+  hkBtn.addEventListener('mouseenter', (e) => _showModalTip(e, _settings.disableHotkeys
     ? 'Hotkeys off — click to enable\n\u2190 \u2192 navigate  \u00B7  U upgrade  \u00B7  S scrap  \u00B7  R repair'
     : 'Hotkeys on — click to disable\n\u2190 \u2192 navigate  \u00B7  U upgrade  \u00B7  S scrap  \u00B7  R repair'));
-  hkBtn.addEventListener('mouseleave', _hideModalTip);
   hkBtn.addEventListener('click', () => {
     _settings.disableHotkeys = !_settings.disableHotkeys;
     saveSettings();
@@ -5775,14 +5794,11 @@ function _injectModalButtons(modal) {
   });
 
   // Scrap protection toggle
-  const scrapBtn = document.createElement('button');
-  scrapBtn.type = 'button';
-  scrapBtn.textContent = 'Scrap Lock';
+  const scrapBtn = makeToggle('Scrap Lock');
   _styleScrapBtn(scrapBtn);
-  scrapBtn.addEventListener('mouseenter', () => _showModalTip(scrapBtn, _settings.disableScrap
+  scrapBtn.addEventListener('mouseenter', (e) => _showModalTip(e, _settings.disableScrap
     ? 'Scrap protected — click to allow scrapping'
     : 'Scrap unprotected — click to prevent accidental scrapping'));
-  scrapBtn.addEventListener('mouseleave', _hideModalTip);
   scrapBtn.addEventListener('click', () => {
     _settings.disableScrap = !_settings.disableScrap;
     saveSettings();
@@ -6058,8 +6074,8 @@ function injectCompanionBar() {
   const helpBtn = document.createElement('span');
   helpBtn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid #4a4a6a;color:#6b6b8a;font-size:9px;font-weight:700;cursor:default;flex-shrink:0;line-height:1;';
   helpBtn.textContent = '?';
-  helpBtn.addEventListener('mouseenter', () => {
-    _showModalTip(helpBtn, [
+  helpBtn.addEventListener('mouseenter', (e) => {
+    _showModalTip(e, [
       'Load existing base snapshots from GT-Companion to help with base design and leveling.',
       'Level Lock will cap the maximum upgrade on that building slot to prevent accidents.',
       '',
@@ -6300,8 +6316,14 @@ function _updateModalTarget() {
   }
   const currentLvl = parseInt(document.querySelector(`button.btn-building[data-slot-id="${slotId}"] .badge.btn-badge`)?.textContent ?? '0');
   const done = currentLvl >= target.level;
-  el.textContent = done ? `✓ Lv.${target.level}` : `→ Lv.${target.level}`;
-  _gtBtn(el, done ? 'target-ok' : 'target-pend');
+  el.style.display = '';
+  if (done) {
+    el.textContent = `✓ Lv.${target.level} / ${target.level}`;
+    el.style.color = '#4ade80';
+  } else {
+    el.textContent = `Lv.${currentLvl} / ${target.level}`;
+    el.style.color = '#9090b0';
+  }
   _applyUpgradeBlock(done);
 }
 
