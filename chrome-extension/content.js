@@ -473,6 +473,11 @@ function makeIcon(matName, size = 14) {
 }
 
 const HEADER_H = 38; // px
+// Height of the game's fixed bottom navbar — measured at runtime to avoid clipping
+function getGameBottomNavH() {
+  const el = document.querySelector('nav.navbar.fixed-bottom, .navbar.fixed-bottom, nav[class*="bottom"]');
+  return el ? el.getBoundingClientRect().height : 0;
+}
 
 const COL_OK   = '#22c55e';
 const COL_LOW  = '#f59e0b';
@@ -533,7 +538,8 @@ const DEFAULT_SETTINGS = {
   showCosts:        true,
   showTooltips:     true,
   showFlights:      true,
-  disableScrap:     false,
+  showFlightCosts:  true,
+  disableScrap:     true,
   disableHotkeys:   false,
 };
 
@@ -1205,9 +1211,12 @@ function calcBaseNeeds(base, gamedata) {
   }
 
   for (const [bType, orders] of allInfiniteByType) {
-    // Only redistribute when there's at least one order not yet running
-    const hasQueued = orders.some(o => !recipeGroups.has(o.rId));
-    if (!hasQueued) continue;
+    // Always redistribute when there are multiple infinite orders for this building type.
+    // The hasQueued guard was too conservative — even when all recipes are in Pass 1,
+    // their totalMul reflects a snapshot of whichever buildings happened to be mid-cycle
+    // at fetch time, not the steady-state weighted split. Always override with the weighted
+    // distribution for building types with >=2 infinite orders.
+    if (orders.length < 2) continue;
 
     // Total capacity = all active tasks of this building type from Pass 1.
     // All buildings of this type are accounted for here — infinite-queue buildings
@@ -1261,19 +1270,26 @@ function calcBaseNeeds(base, gamedata) {
     }
   }
 
-  const inputs = [];
+  // Aggregate inputs by matId across all recipe groups (e.g. Tiridium Alloy used by
+  // multiple recipes on the same building type should appear as one combined row).
+  const inputsMap = new Map(); // matId → { matId, name, dailyNeed, inStock }
   for (const { recipe, totalMul, cyclesPerDay } of recipeGroups.values()) {
     for (const inp of (recipe.inputs ?? [])) {
       const dailyNeed = inp.am * totalMul * cyclesPerDay;
-      const inStock   = warehouseAmts.get(inp.id) ?? 0;
-      const days      = dailyNeed > 0 ? inStock / dailyNeed : Infinity;
-      inputs.push({
-        matId: inp.id,
-        name:  matMap.get(inp.id)?.name ?? `mat${inp.id}`,
-        dailyNeed, inStock, days,
-      });
+      if (inputsMap.has(inp.id)) {
+        inputsMap.get(inp.id).dailyNeed += dailyNeed;
+      } else {
+        const inStock = warehouseAmts.get(inp.id) ?? 0;
+        inputsMap.set(inp.id, {
+          matId: inp.id,
+          name:  matMap.get(inp.id)?.name ?? `mat${inp.id}`,
+          dailyNeed, inStock,
+          days: dailyNeed > 0 ? inStock / dailyNeed : Infinity,
+        });
+      }
     }
   }
+  const inputs = [...inputsMap.values()].map(i => ({ ...i, days: i.dailyNeed > 0 ? i.inStock / i.dailyNeed : Infinity }));
 
   // Worker consumables — rate is pre-calculated daily consumption
   const consumables = (base.workforce?.consumptionMaterials ?? []).map(c => {
@@ -1368,6 +1384,7 @@ let _detailBaseId = null;
 
 function removeProductionUI() {
   _headerResizeObs?.disconnect(); _headerResizeObs = null;
+  document.getElementById('gt-overscroll-fix')?.remove();
   document.getElementById(GT_HEADER_ID)?.remove();
   document.getElementById(GT_DETAIL_ID)?.remove();
   document.getElementById(GT_SPACER_ID)?.remove();
@@ -1393,7 +1410,7 @@ function buildDetailPanel(base, gamedata) {
   Object.assign(panel.style, {
     position: 'fixed', top: `${HEADER_H}px`, left: '0',
     minWidth: '300px', maxWidth: '420px',
-    maxHeight: 'calc(65vh - 38px)', overflowY: 'auto',
+    maxHeight: `calc(100vh - ${HEADER_H}px - ${getGameBottomNavH()}px)`, overflowY: 'auto',
     background: '#0a0a18', border: '1px solid #2a2a4a',
     borderTop: 'none', borderRadius: '0 8px 8px 8px',
     padding: '8px 10px 10px',
@@ -2303,7 +2320,7 @@ function buildSettingsPanel() {
   Object.assign(panel.style, {
     position: 'fixed', top: `${HEADER_H}px`, right: '0',
     width: '220px',
-    maxHeight: `calc(100vh - ${HEADER_H}px)`,
+    maxHeight: `calc(100vh - ${HEADER_H}px - ${getGameBottomNavH()}px)`,
     overflowY: 'auto',
     background: '#0a0a18', border: '1px solid #2a2a4a',
     borderTop: 'none', borderRadius: '0 0 0 8px',
@@ -2698,6 +2715,7 @@ function buildSettingsPanel() {
     { key: 'showWishlistAll',   label: 'Wishlist all panel' },
     { key: 'showWishlist',      label: '1-click wishlisting' },
     { key: 'showWishlistPanel', label: 'Wishlist panel tab' },
+    { key: 'showFlightCosts',   label: 'Flight cost rows' },
   ];
   for (const { key, label } of mainToggles) buildFeatToggle(featBody, key, label);
 
@@ -2727,7 +2745,7 @@ function buildSettingsPanel() {
     if (!_companionEnabled) return;
     _companionEnabled = false;
     _companionSnapshots = [];
-    _companionTargets = {};
+    _clearCompanionTargets();
     _baseSnapshotMap = {};
     chrome.storage.local.set({ gtCompanionEnabled: false, gtCompanionBaseMap: {} });
     injectSlotBadges();
@@ -3027,7 +3045,7 @@ function mkPanelBase(id, rightAligned = true) {
   Object.assign(p.style, {
     position: 'fixed', top: `${HEADER_H}px`,
     [rightAligned ? 'right' : 'left']: '0',
-    width: '260px', maxHeight: 'calc(75vh - 38px)', overflowY: 'auto',
+    width: '260px', maxHeight: `calc(100vh - ${HEADER_H}px - ${getGameBottomNavH()}px)`, overflowY: 'auto',
     background: '#0a0a18', border: '1px solid #2a2a4a',
     borderTop: 'none',
     borderRadius: rightAligned ? '0 0 0 8px' : '0 8px 8px 0',
@@ -3479,7 +3497,7 @@ async function openFlightPanel() {
 
     const cfg             = calcShipConfig(selectedShip.blueprint, emitter, reactor);
     const { weightEmpty } = cfg;
-    const repairKitsTotal = Math.ceil(weightEmpty / 10);
+    const repairKitsTotal = weightEmpty / 10;
     const fuelPrice       = effectivePrice(reactor.fuelId);
     const repairKitPrice  = effectivePrice(REPAIR_KIT_MAT_ID);
     const fuelMat         = matMap.get(reactor.fuelId);
@@ -4426,6 +4444,16 @@ async function loadAndInjectHeader() {
     spacer.id = GT_SPACER_ID;
     spacer.style.cssText = `height:${HEADER_H}px;width:100%;pointer-events:none;flex-shrink:0;`;
     document.body.insertBefore(spacer, document.body.firstChild);
+
+    // Add bottom padding so game content isn't hidden behind the fixed navbar.
+    if (!document.getElementById('gt-overscroll-fix')) {
+      const s = document.createElement('style');
+      s.id = 'gt-overscroll-fix';
+      const navH = getGameBottomNavH();
+      const extraPad = navH > 0 ? navH : 56; // fallback 56px if nav not yet in DOM
+      s.textContent = `body { padding-bottom: ${extraPad}px !important; }`;
+      document.head.appendChild(s);
+    }
 
     // Header bar — two-column layout: chip area (left, grows) + controls (right, fixed)
     const header = document.createElement('div');
@@ -5664,7 +5692,16 @@ let _companionTargets   = {}; // { [slotId]: { level, typeId } }
 let _companionSnapshots = []; // raw snapshots from last fetch
 let _baseSnapshotMap    = {}; // { [baseId]: snapshotId } — persisted in storage
 let _companionEnabled   = false; // requires explicit user consent
-let _levelLockEnabled   = true;  // when true, upgrade button is blocked at target level
+let _levelLockEnabled   = false; // enabled only when a snapshot is actively applied
+let _onLockBtnRefresh   = null;  // set by companion bar to sync lock button state
+
+function _clearCompanionTargets() {
+  _companionTargets = {};
+  _levelLockEnabled = false;
+  chrome.storage.local.set({ gtLevelLock: false });
+  _onLockBtnRefresh?.();
+  _updateModalTarget();
+}
 
 let _buildingKeyHandler = null;
 let _buildingModalObs   = null;
@@ -5680,7 +5717,7 @@ function _applyScrapDisableStyle() {
   if (_settings.disableScrap && !document.getElementById('gt-scrap-disable')) {
     const s = document.createElement('style');
     s.id = 'gt-scrap-disable';
-    s.textContent = '.modal.show .btn.btn-danger.btn-icon-split { opacity: 0.35 !important; pointer-events: none !important; }';
+    s.textContent = '.modal.show .btn.btn-danger { opacity: 0.35 !important; pointer-events: none !important; }';
     document.head.appendChild(s);
   } else if (!_settings.disableScrap) {
     document.getElementById('gt-scrap-disable')?.remove();
@@ -5758,11 +5795,28 @@ function _injectModalButtons(modal) {
   div1.style.cssText = 'width:1px;height:14px;background:rgba(255,255,255,.12);flex-shrink:0;';
   wrap.appendChild(div1);
 
-  // Watch slot counter changes to update target indicator
+  // Watch slot counter changes (navigating between slots) and building badge changes (upgrades)
   const slotCounter = header.querySelector('.btn-group .input-group-text');
+  _buildingSlotObs = new MutationObserver(() => {
+    _updateModalTarget();
+    // Re-observe the current slot's badge so live upgrades update the label
+    const slotId = _getCurrentSlotId();
+    if (slotId) {
+      const badge = document.querySelector(`button.btn-building[data-slot-id="${slotId}"] .badge.btn-badge`);
+      if (badge && !badge._gtWatched) {
+        badge._gtWatched = true;
+        new MutationObserver(() => _updateModalTarget()).observe(badge, { characterData: true, childList: true });
+      }
+    }
+  });
   if (slotCounter) {
-    _buildingSlotObs = new MutationObserver(() => _updateModalTarget());
     _buildingSlotObs.observe(slotCounter, { characterData: true, childList: true, subtree: true });
+  }
+  // Also watch the building grid container so badge text updates (after upgrade) trigger a refresh
+  const buildingGrid = document.querySelector('.btn-building')?.closest('div');
+  if (buildingGrid) {
+    new MutationObserver(_debounce(() => _updateModalTarget(), 150))
+      .observe(buildingGrid, { subtree: true, characterData: true, childList: true });
   }
 
   const makeToggle = (label) => {
@@ -5810,6 +5864,10 @@ function _injectModalButtons(modal) {
   wrap.appendChild(hkBtn);
   wrap.appendChild(scrapBtn);
   header.insertBefore(wrap, navGroup);
+
+  // Always sync scrap/upgrade state when buttons are injected, regardless of external timing
+  _applyScrapDisableStyle();
+  setTimeout(_updateModalTarget, 100);
 }
 
 function _bindBuildingKeys() {
@@ -5826,21 +5884,21 @@ function _bindBuildingKeys() {
       case 'u': case 'U': {
         const slotId = _getCurrentSlotId();
         const target = _companionTargets[slotId];
-        if (target && _levelLockEnabled) {
+        const hasSnapshot = Object.keys(_companionTargets).length > 0;
+        if (target && _levelLockEnabled && hasSnapshot) {
           const cur = parseInt(document.querySelector(`button.btn-building[data-slot-id="${slotId}"] .badge.btn-badge`)?.textContent ?? '0');
           if (cur >= target.level) break;
         }
         modal?.querySelector('.btn.btn-primary.btn-icon-split.w-100')?.click();
         break;
       }
-      case 's': case 'S': if (!_settings.disableScrap) modal?.querySelector('.btn.btn-danger.btn-icon-split')?.click(); break;
-      case 'r': case 'R': modal?.querySelector('.btn.btn-warning.btn-icon-split')?.click(); break;
+      case 's': case 'S': if (!_settings.disableScrap) modal?.querySelector('.btn.btn-danger')?.click(); break;
+      case 'r': case 'R': modal?.querySelector('.btn.btn-success.btn-icon-split')?.click(); break;
     }
   };
   document.addEventListener('keydown', _buildingKeyHandler);
-  _applyScrapDisableStyle();
   const modal = document.querySelector('.modal.show');
-  if (modal) { _injectModalButtons(modal); _updateModalTarget(); }
+  if (modal) _injectModalButtons(modal);
 }
 
 function _unbindBuildingKeys() {
@@ -5881,6 +5939,9 @@ function _parseSnapshot(snapshot) {
 
 function _applySnapshot(snapshot) {
   _companionTargets = _parseSnapshot(snapshot);
+  _levelLockEnabled = true;
+  chrome.storage.local.set({ gtLevelLock: true });
+  _onLockBtnRefresh?.();
   injectSlotBadges();
   _updateModalTarget();
 }
@@ -6049,7 +6110,8 @@ function injectCompanionBar() {
   chrome.storage.local.get(['gtCompanionBaseMap', 'gtCompanionEnabled', 'gtLevelLock'], ({ gtCompanionBaseMap, gtCompanionEnabled, gtLevelLock }) => {
     _baseSnapshotMap = gtCompanionBaseMap ?? {};
     _companionEnabled = gtCompanionEnabled ?? false;
-    _levelLockEnabled = gtLevelLock !== false; // default true
+    const hasSnapshot = Object.keys(_companionTargets).length > 0;
+    _levelLockEnabled = hasSnapshot && (gtLevelLock !== false);
     _renderCompanionBarState(bar);
   });
 
@@ -6172,6 +6234,7 @@ function injectCompanionBar() {
     lockBtn.textContent = _levelLockEnabled ? 'Lvl 🔒 On' : 'Lvl 🔓 Off';
     _gtBtn(lockBtn, _levelLockEnabled ? 'on' : 'off');
   };
+  _onLockBtnRefresh = _updateLockBtn;
   lockBtn.addEventListener('click', () => {
     _levelLockEnabled = !_levelLockEnabled;
     chrome.storage.local.set({ gtLevelLock: _levelLockEnabled });
@@ -6191,13 +6254,12 @@ function injectCompanionBar() {
   clearBtn.addEventListener('mouseleave', () => _clearHover(clearBtn, false));
   clearBtn.addEventListener('click', () => {
     const baseId = _detectCurrentBaseId();
-    _companionTargets = {};
+    _clearCompanionTargets();
     if (baseId) {
       delete _baseSnapshotMap[String(baseId)];
       chrome.storage.local.set({ gtCompanionBaseMap: _baseSnapshotMap });
     }
     injectSlotBadges();
-    _updateModalTarget();
     const sel = bar.querySelector('.gt-cb-picker select');
     if (sel) sel.value = '';
     statusEl.textContent = 'Overlay cleared';
@@ -6212,7 +6274,7 @@ function injectCompanionBar() {
   clearAllBtn.addEventListener('mouseenter', () => _clearHover(clearAllBtn, true));
   clearAllBtn.addEventListener('mouseleave', () => _clearHover(clearAllBtn, false));
   clearAllBtn.addEventListener('click', () => {
-    _companionTargets = {};
+    _clearCompanionTargets();
     _baseSnapshotMap = {};
     chrome.storage.local.set({ gtCompanionBaseMap: {} });
     injectSlotBadges();
@@ -6294,12 +6356,13 @@ function _getCurrentSlotId() {
 
 function _applyUpgradeBlock(block) {
   let s = document.getElementById('gt-upgrade-block');
-  if (block && _levelLockEnabled && !s) {
+  const hasSnapshot = Object.keys(_companionTargets).length > 0;
+  if (block && _levelLockEnabled && hasSnapshot && !s) {
     s = document.createElement('style');
     s.id = 'gt-upgrade-block';
     s.textContent = '.modal.show .btn.btn-primary.btn-icon-split.w-100 { opacity:0.4 !important; pointer-events:none !important; }';
     document.head.appendChild(s);
-  } else if (!block || !_levelLockEnabled) {
+  } else if (!block || !_levelLockEnabled || !hasSnapshot) {
     s?.remove();
   }
 }
@@ -6335,7 +6398,7 @@ function _onUrlChange() {
     // Force re-inject if base changed (different planet/base)
     if (baseId !== _companionBarBaseId) {
       document.getElementById(GT_COMPANION_BAR_ID)?.remove();
-      _companionTargets = {};
+      _clearCompanionTargets();
       _companionBarBaseId = baseId;
     }
     if (document.querySelector('button.btn-building[data-slot-id]')) {
@@ -6353,7 +6416,7 @@ function _onUrlChange() {
     }
   } else {
     document.getElementById(GT_COMPANION_BAR_ID)?.remove();
-    _companionTargets = {};
+    _clearCompanionTargets();
     _companionBarBaseId = null;
   }
 }
@@ -6376,7 +6439,16 @@ function watchBuildingModal() {
   if (_buildingModalObs) return;
   _buildingModalObs = new MutationObserver(() => {
     if (document.body.classList.contains('modal-open')) {
-      setTimeout(() => { if (_isBuildingModal()) _bindBuildingKeys(); }, 200);
+      // Retry until _isBuildingModal() is true (slot counter may not render immediately)
+      let attempts = 0;
+      const tryBind = () => {
+        if (_isBuildingModal()) {
+          _bindBuildingKeys();
+        } else if (++attempts < 10) {
+          setTimeout(tryBind, 100);
+        }
+      };
+      setTimeout(tryBind, 100);
     } else {
       _unbindBuildingKeys();
     }
@@ -6446,22 +6518,23 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
   const slider = modal.querySelector('input#customRange1');
   if (!slider) return;
 
-  // ── Dot bar — sits between the Efficiency/Power label row and the slider ──────
-  const sliderLabelRow = slider.previousElementSibling;
-  const dotBar = document.createElement('div');
-  dotBar.id = 'gt-fi';
-  dotBar.style.cssText = 'position:relative;height:14px;margin:4px 0 -2px;';
+  // ── Indicator bars — vertical rectangles overlaid on the slider track ──────────
+  // Wrap the slider in a relative container so indicators can be absolutely positioned
+  const sliderWrap = document.createElement('div');
+  sliderWrap.id = 'gt-fi';
+  sliderWrap.style.cssText = 'position:relative;';
+  slider.parentNode.insertBefore(sliderWrap, slider);
+  sliderWrap.appendChild(slider);
 
-  const mkDot = (col) => {
+  const mkBar = (col) => {
     const d = document.createElement('span');
     d.style.cssText = [
       'position:absolute;top:50%;transform:translate(-50%,-50%);',
-      `width:8px;height:8px;border-radius:50%;background:${col};`,
+      `width:8px;height:16px;border-radius:2px;background:${col};`,
       'cursor:pointer;opacity:0;transition:opacity .15s;pointer-events:none;',
       'z-index:10;',
     ].join('');
-    dotBar.appendChild(d);
-    // Tooltip with 1s delay
+    sliderWrap.appendChild(d);
     let _tipEl = null, _tipTimer = null;
     d.addEventListener('mouseenter', (e) => {
       _tipTimer = setTimeout(() => {
@@ -6469,24 +6542,21 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
         _tipEl.style.cssText = 'position:fixed;z-index:2147483647;background:#1a1a2e;border:1px solid #3a3a5a;border-radius:4px;padding:3px 8px;font-size:11px;color:#c0c0da;pointer-events:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.5);';
         _tipEl.textContent = d.dataset.gtTip ?? '';
         document.body.appendChild(_tipEl);
-        _tipEl.style.left = Math.min(e.clientX + 10, window.innerWidth  - _tipEl.offsetWidth  - 6) + 'px';
+        _tipEl.style.left = Math.min(e.clientX + 10, window.innerWidth - _tipEl.offsetWidth - 6) + 'px';
         _tipEl.style.top  = (e.clientY - _tipEl.offsetHeight - 8) + 'px';
       }, 500);
     });
     d.addEventListener('mousemove', (e) => {
       if (_tipEl) {
-        _tipEl.style.left = Math.min(e.clientX + 10, window.innerWidth  - _tipEl.offsetWidth  - 6) + 'px';
+        _tipEl.style.left = Math.min(e.clientX + 10, window.innerWidth - _tipEl.offsetWidth - 6) + 'px';
         _tipEl.style.top  = (e.clientY - _tipEl.offsetHeight - 8) + 'px';
       }
     });
     d.addEventListener('mouseleave', () => { clearTimeout(_tipTimer); _tipEl?.remove(); _tipEl = null; });
     return d;
   };
-  const greenDot = mkDot('#22c55e'); greenDot.dataset.gtTip = 'Cheapest';
-  const blueDot  = mkDot('#60a5fa'); blueDot.dataset.gtTip  = 'Best';
-
-  sliderLabelRow.after(dotBar);
-  dotBar.after(slider);
+  const greenDot = mkBar('#22c55e'); greenDot.dataset.gtTip = 'Cheapest';
+  const blueDot  = mkBar('#60a5fa'); blueDot.dataset.gtTip  = 'Best';
 
   // ── Cost rows — injected after the native "Fuel used" row ─────────────────────
   const allRows = [...modal.querySelectorAll('.card-body .row')];
@@ -6506,6 +6576,10 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
   fuelRow.after(totalCostRow);
   fuelRow.after(repairCostRow);
   fuelRow.after(fuelCostRow);
+  const setCostRowsVisible = (v) => {
+    [fuelCostRow, repairCostRow, totalCostRow].forEach(r => r.style.display = v ? '' : 'none');
+  };
+  setCostRowsVisible(_settings.showFlightCosts);
   const fuelValEl   = fuelCostRow.querySelector('span');
   const repairValEl = repairCostRow.querySelector('span');
   const totalValEl  = totalCostRow.querySelector('span');
@@ -6535,7 +6609,7 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
         fuelSavingMult, degradationMult,
         fuelPrice:       effectivePrice(reactor.fuelId),
         repairKitPrice:  effectivePrice(REPAIR_KIT_MAT_ID),
-        repairKitsTotal: Math.ceil(cfg.weightEmpty / 10),
+        repairKitsTotal: cfg.weightEmpty / 10,
         effectiveCargo:  bp.cargoCapacity * (1 + flightPerks.cargoCapPct / 100),
       },
     };
@@ -6634,7 +6708,7 @@ function _injectContractPins() {
   if (!document.getElementById('gt-contracts-style')) {
     const s = document.createElement('style');
     s.id = 'gt-contracts-style';
-    s.textContent = '.gt-pin-btn{opacity:.2;color:#f59e0b!important;} .gt-pin-btn.gt-starred{opacity:1!important;} .gt-pin-btn:hover{opacity:.55!important;}';
+    s.textContent = '.gt-pin-btn{opacity:.2;color:#f59e0b!important;transition:opacity .15s;} .gt-pin-btn.gt-starred{opacity:1!important;} .gt-pin-btn:not(.gt-starred):hover{opacity:.55!important;} .gt-pin-btn.gt-starred:hover{opacity:.8!important;}';
     document.head.appendChild(s);
   }
   const table = document.querySelector('table.table-hover.mb-0');
@@ -6693,13 +6767,19 @@ function _injectContractPins() {
     firstTd.appendChild(pinBtn);
   }
 
-  // Sort: pinned rows first, unpinned rows restored to original DOM order
+  // Sort: pinned rows first, unpinned rows restored to original DOM order.
+  // Use insertBefore with a position check so only rows that are actually out of
+  // place get moved — avoids unnecessary DOM mutations that cause button flashes.
   const sorted = [
     ...rows.filter(tr => pinned.has(_contractRowKey(tr))),
     ...rows.filter(tr => !pinned.has(_contractRowKey(tr)))
           .sort((a, b) => parseInt(a.dataset.gtOrigIdx, 10) - parseInt(b.dataset.gtOrigIdx, 10)),
   ];
-  sorted.forEach(tr => activeTbody.appendChild(tr));
+  sorted.forEach((tr, i) => {
+    if (activeTbody.children[i] !== tr) {
+      activeTbody.insertBefore(tr, activeTbody.children[i] ?? null);
+    }
+  });
 }
 
 let _contractsObs = null;
@@ -6717,8 +6797,10 @@ function watchContractsPage() {
     _lastActiveTbody = tbody;
     _injectContractPins();
 
-    // Re-inject if the game refreshes the tbody rows
+    // Re-inject only if the game adds fresh rows (not our own sort reorder)
     new MutationObserver(_debounce(() => {
+      const hasNew = [...tbody.querySelectorAll('tr')].some(tr => !tr.querySelector('.gt-pin-btn'));
+      if (!hasNew) return;
       _lastActiveTbody = null;
       _injectContractPins();
     }, 300)).observe(tbody, { childList: true });
