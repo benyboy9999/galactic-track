@@ -473,11 +473,6 @@ function makeIcon(matName, size = 14) {
 }
 
 const HEADER_H = 38; // px
-// Height of the game's fixed bottom navbar — measured at runtime to avoid clipping
-function getGameBottomNavH() {
-  const el = document.querySelector('nav.navbar.fixed-bottom, .navbar.fixed-bottom, nav[class*="bottom"]');
-  return el ? el.getBoundingClientRect().height : 0;
-}
 
 const COL_OK   = '#22c55e';
 const COL_LOW  = '#f59e0b';
@@ -1384,7 +1379,6 @@ let _detailBaseId = null;
 
 function removeProductionUI() {
   _headerResizeObs?.disconnect(); _headerResizeObs = null;
-  document.getElementById('gt-overscroll-fix')?.remove();
   document.getElementById(GT_HEADER_ID)?.remove();
   document.getElementById(GT_DETAIL_ID)?.remove();
   document.getElementById(GT_SPACER_ID)?.remove();
@@ -1410,7 +1404,7 @@ function buildDetailPanel(base, gamedata) {
   Object.assign(panel.style, {
     position: 'fixed', top: `${HEADER_H}px`, left: '0',
     minWidth: '300px', maxWidth: '420px',
-    maxHeight: `calc(100vh - ${HEADER_H}px - ${getGameBottomNavH()}px)`, overflowY: 'auto',
+    maxHeight: `calc(100vh - ${HEADER_H}px)`, overflowY: 'auto',
     background: '#0a0a18', border: '1px solid #2a2a4a',
     borderTop: 'none', borderRadius: '0 8px 8px 8px',
     padding: '8px 10px 10px',
@@ -1696,7 +1690,7 @@ function buildDetailPanel(base, gamedata) {
       oh.appendChild(ohLabel);
       contentArea.appendChild(oh);
 
-      for (const r of outputs) {
+      for (const r of outputs.filter(r => (r.netDailyOutput ?? r.dailyOutput) > 0)) {
         const netOutput  = r.netDailyOutput ?? r.dailyOutput;
         const unitPrice  = effectivePrice(r.matId);
         const dailyValue = unitPrice * netOutput;
@@ -2320,7 +2314,7 @@ function buildSettingsPanel() {
   Object.assign(panel.style, {
     position: 'fixed', top: `${HEADER_H}px`, right: '0',
     width: '220px',
-    maxHeight: `calc(100vh - ${HEADER_H}px - ${getGameBottomNavH()}px)`,
+    maxHeight: `calc(100vh - ${HEADER_H}px)`,
     overflowY: 'auto',
     background: '#0a0a18', border: '1px solid #2a2a4a',
     borderTop: 'none', borderRadius: '0 0 0 8px',
@@ -2781,7 +2775,7 @@ function buildSettingsPanel() {
 
   const ver = document.createElement('div');
   ver.style.cssText = 'text-align:center;font-size:10px;color:#2a2a4a;margin-top:6px;';
-  ver.textContent = 'v0.5.1';
+  ver.textContent = 'v0.5.2';
   panel.appendChild(ver);
 
   return panel;
@@ -3045,7 +3039,7 @@ function mkPanelBase(id, rightAligned = true) {
   Object.assign(p.style, {
     position: 'fixed', top: `${HEADER_H}px`,
     [rightAligned ? 'right' : 'left']: '0',
-    width: '260px', maxHeight: `calc(100vh - ${HEADER_H}px - ${getGameBottomNavH()}px)`, overflowY: 'auto',
+    width: '260px', maxHeight: `calc(100vh - ${HEADER_H}px)`, overflowY: 'auto',
     background: '#0a0a18', border: '1px solid #2a2a4a',
     borderTop: 'none',
     borderRadius: rightAligned ? '0 0 0 8px' : '0 8px 8px 0',
@@ -3910,6 +3904,8 @@ async function openCashPanel() {
   _cashOpen = true;
 
   const [company] = await Promise.all([fetchCompanyData(), fetchMatPrices()]);
+  const warehouseId = company?.exWhId;
+  const exchWarehouse = warehouseId ? await requestGTLocalAPI('getWarehouse', { warehouseId }) : null;
   loading.remove();
 
   // Cash balance — game API returns cents, divide by 100
@@ -3918,6 +3914,39 @@ async function openCashPanel() {
   if (cashNum !== null) {
     panel.appendChild(mkRow('Cash', fmtCr(cashNum), COL_OK));
     panel.appendChild(mkSep());
+  }
+
+  // Exchange warehouse — rendered first after cash
+  {
+    let exchangeWarehouseVal = 0;
+    const exchWarehouseMats = exchWarehouse?.mats ?? [];
+    if (exchWarehouseMats.length && _priceMap) {
+      const valued = exchWarehouseMats
+        .map(m => {
+          const matId   = Number(m.id);
+          const qty     = m.am ?? 0;
+          const price   = effectivePrice(matId);
+          const lineVal = qty * price;
+          const name    = _loadedHeaderGamedata?.materials?.find(mat => mat.id === matId)?.name ?? `mat${matId}`;
+          return { matId, qty, price, lineVal, name };
+        })
+        .filter(m => m.qty > 0)
+        .sort((a, b) => b.lineVal - a.lineVal);
+
+      if (valued.length) {
+        valued.forEach(m => { exchangeWarehouseVal += m.lineVal; });
+        const row = mkRow('Exchange Warehouse', fmtCr(exchangeWarehouseVal));
+        row.style.cursor = 'default';
+        attachTooltip(row, tip => {
+          for (const m of valued) {
+            const valStr = m.price > 0 ? `@ ${fmtCr(m.price)} ($${Math.round(m.lineVal).toLocaleString()})` : null;
+            tip.appendChild(mkIconLine(m.name, `${m.name} x${m.qty.toLocaleString()}`, valStr));
+          }
+        }, true);
+        panel.appendChild(row);
+        panel.appendChild(mkSep());
+      }
+    }
   }
 
   // Base inventory value — collapsible header like Ship Cargo
@@ -4012,40 +4041,6 @@ async function openCashPanel() {
     }
     panel.appendChild(mkRow('Listings total', fmtCr(exchangeListingsVal), COL_OK));
     panel.appendChild(mkSep());
-  }
-
-  // Exchange warehouse — all items
-  let exchangeWarehouseVal = 0;
-  const warehouseId = company?.exWhId;
-  const exchWarehouse = warehouseId ? await requestGTLocalAPI('getWarehouse', { warehouseId }) : null;
-  const exchWarehouseMats = exchWarehouse?.mats ?? [];
-  if (exchWarehouseMats.length && _priceMap) {
-    const valued = exchWarehouseMats
-      .map(m => {
-        const matId   = Number(m.id);
-        const qty     = m.am ?? 0;
-        const price   = effectivePrice(matId);
-        const lineVal = qty * price;
-        const name    = _loadedHeaderGamedata?.materials?.find(mat => mat.id === matId)?.name ?? `mat${matId}`;
-        return { matId, qty, price, lineVal, name };
-      })
-      .filter(m => m.qty > 0)
-      .sort((a, b) => b.lineVal - a.lineVal);
-
-    if (valued.length) {
-      valued.forEach(m => { exchangeWarehouseVal += m.lineVal; });
-
-      const row = mkRow('Exchange Warehouse', fmtCr(exchangeWarehouseVal));
-      row.style.cursor = 'default';
-      attachTooltip(row, tip => {
-        for (const m of valued) {
-          const valStr = m.price > 0 ? `@ ${fmtCr(m.price)} ($${Math.round(m.lineVal).toLocaleString()})` : null;
-          tip.appendChild(mkIconLine(m.name, `${m.name} x${m.qty.toLocaleString()}`, valStr));
-        }
-      }, true);
-      panel.appendChild(row);
-      panel.appendChild(mkSep());
-    }
   }
 
   // Ship cargo
@@ -4158,66 +4153,23 @@ function toggleCashPanel() {
 
 let _summaryOpen      = false;
 let _summaryPerBase   = false;
-let _summaryShowStock = false;
 let _wishlistAllOpen  = false;
 
 function buildSummaryContent(container, perBase) {
   container.innerHTML = '';
   if (!_loadedHeaderBases || !_loadedHeaderGamedata) return;
 
-  const bases = sortBases(_loadedHeaderBases).filter(b => !_settings.hiddenBases.includes(String(b.id)));
+  // All bases included — hidden bases are excluded from header chips only
+  const bases = sortBases(_loadedHeaderBases);
 
-  const attachTip = (el, buildFn) => {
-    let tip = null;
-    el.style.cursor = 'default';
-    el.addEventListener('mouseenter', () => {
-      tip = buildFn();
-      if (tip) document.body.appendChild(tip);
-    });
-    el.addEventListener('mousemove', (e) => {
-      if (!tip) return;
-      const x = Math.max(8, e.clientX - tip.offsetWidth - 12);
-      const y = Math.min(e.clientY + 12, window.innerHeight - tip.offsetHeight - 8);
-      tip.style.left = x + 'px'; tip.style.top = y + 'px';
-    });
-    el.addEventListener('mouseleave', () => { tip?.remove(); tip = null; });
-  };
-
-  const mkTipEl = () => {
-    const t = document.createElement('div');
-    t.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:6px;padding:8px 10px;font-size:11px;color:#b0b0cc;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
-    return t;
-  };
-
-  const mkTipLine = (lbl, val, vc) => {
-    const d = document.createElement('div');
-    d.style.cssText = 'display:flex;justify-content:space-between;gap:16px;padding:1px 0;';
-    const l = document.createElement('span'); l.style.color = '#6b6b8a'; l.textContent = lbl;
-    const v = document.createElement('span'); v.style.cssText = `color:${vc};font-weight:600;`; v.textContent = val;
-    d.appendChild(l); d.appendChild(v);
-    return d;
-  };
-
-  const mkTipSep = () => {
-    const s = document.createElement('div');
-    s.style.cssText = 'border-top:1px solid #1a1a30;margin:4px 0 2px;';
-    return s;
-  };
-
-  const mkSection = (label, parent) => {
-    parent.appendChild(mkLabel(label, 'margin:8px 0 3px;'));
-  };
-
-  // Renders a single flow row: name | stock (bold) | qty/d | ±$/d
-  const renderFlowRow = (name, matId, flow, inStock, parent) => {
-    const isOut     = flow > 0;
+  // ── Row renderer: [icon+name] | [qty/d] | [±$/d] ─────────────────────────
+  const renderSummaryRow = (name, matId, dailyAmt, isOutput) => {
     const unitPrice = _priceMap ? effectivePrice(matId) : 0;
-    const dailyVal  = Math.abs(flow) * unitPrice;
-    const valCol    = isOut ? COL_OK : COL_CRIT;
+    const dailyVal  = dailyAmt * unitPrice;
+    const valCol    = isOutput ? COL_OK : COL_CRIT;
 
-    const cols = _summaryShowStock ? '1fr auto auto auto' : '1fr auto auto';
     const row = document.createElement('div');
-    row.style.cssText = `display:grid;grid-template-columns:${cols};gap:4px;align-items:center;padding:3px 0;border-bottom:1px solid #12122a;cursor:default;`;
+    row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;gap:4px;align-items:center;padding:3px 0;border-bottom:1px solid #12122a;cursor:default;';
 
     const nameSpan = document.createElement('span');
     nameSpan.style.cssText = 'color:#c0c0da;display:flex;align-items:center;gap:4px;min-width:0;';
@@ -4230,59 +4182,52 @@ function buildSummaryContent(container, perBase) {
 
     const qtySpan = document.createElement('span');
     qtySpan.style.cssText = 'color:#6b6b8a;font-size:10px;white-space:nowrap;text-align:right;';
-    qtySpan.textContent = Math.round(Math.abs(flow)).toLocaleString() + '/d';
+    qtySpan.textContent = Math.round(dailyAmt).toLocaleString() + '/d';
 
     const valSpan = document.createElement('span');
     valSpan.style.cssText = `color:${valCol};font-size:10px;white-space:nowrap;text-align:right;`;
     valSpan.textContent = dailyVal > 0
-      ? (isOut ? '+' : '\u2212') + fmtCr(dailyVal) + '/d'
+      ? (isOutput ? '+' : '\u2212') + fmtCr(dailyVal) + '/d'
       : '\u2014';
 
     row.appendChild(nameSpan);
-    if (_summaryShowStock) {
-      const stockSpan = document.createElement('span');
-      stockSpan.style.cssText = 'color:#c0c0da;font-size:10px;font-weight:700;white-space:nowrap;text-align:right;';
-      stockSpan.textContent = Math.round(inStock).toLocaleString();
-      row.appendChild(stockSpan);
+    row.appendChild(qtySpan);
+    row.appendChild(valSpan);
+
+    if (unitPrice > 0) {
+      attachTooltip(row, tip => {
+        tip.appendChild(mkIconLine(
+          name,
+          `${name} x${Math.round(dailyAmt).toLocaleString()}/d`,
+          `@ ${fmtCr(unitPrice)} ($${Math.round(dailyVal).toLocaleString()}/d)`
+        ));
+      });
     }
-    row.appendChild(qtySpan); row.appendChild(valSpan);
 
-    // Tooltip — matches expanded panel style exactly
-    let rowTip = null;
-    row.addEventListener('mouseenter', () => {
-      rowTip = document.createElement('div');
-      rowTip.style.cssText = 'position:fixed;z-index:2147483647;background:#0d0d20;border:1px solid #2a2a4a;border-radius:5px;padding:6px 9px;font-size:11px;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.6);';
-      const tipRows = [
-        ['Current stock', Math.round(inStock).toLocaleString(),                    '#c0c0da'],
-        [isOut ? 'Net output /day' : 'Net input /day', Math.round(Math.abs(flow)).toLocaleString() + '/d', '#9090b0'],
-      ];
-      if (dailyVal > 0) tipRows.push([(isOut ? 'Income' : 'Cost') + ' /day', (isOut ? '+' : '\u2212') + fmtCr(dailyVal) + '/d', valCol]);
-      for (const [lbl, val, vc] of tipRows) {
-        const line = document.createElement('div');
-        line.style.cssText = 'display:flex;justify-content:space-between;gap:16px;padding:1px 0;';
-        const l = document.createElement('span'); l.style.color = '#6b6b8a'; l.textContent = lbl;
-        const v = document.createElement('span'); v.style.cssText = `color:${vc};font-weight:600;`; v.textContent = val;
-        line.appendChild(l); line.appendChild(v);
-        rowTip.appendChild(line);
-      }
-      document.body.appendChild(rowTip);
-    });
-    row.addEventListener('mousemove', (e) => {
-      if (!rowTip) return;
-      const x = Math.min(e.clientX + 12, window.innerWidth  - rowTip.offsetWidth  - 8);
-      const y = Math.min(e.clientY + 12, window.innerHeight - rowTip.offsetHeight - 8);
-      rowTip.style.left = x + 'px'; rowTip.style.top = y + 'px';
-    });
-    row.addEventListener('mouseleave', () => { rowTip?.remove(); rowTip = null; });
-
-    parent.appendChild(row);
+    container.appendChild(row);
   };
 
-  const mkNetProfitRow = (parent, dailyIncome, dailyCost, styleStr) => {
+  // ── Net profit footer ─────────────────────────────────────────────────────
+  const renderSummaryTotal = (label, amount, col) => {
+    if (!_priceMap || amount <= 0) return;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:flex-end;gap:4px;padding:3px 0 1px;border-top:1px solid #1a1a2e;margin-top:1px;';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = 'color:#6b6b8a;font-size:10px;';
+    lbl.textContent = `${label}:`;
+    const val = document.createElement('span');
+    val.style.cssText = `color:${col};font-size:10px;font-weight:600;`;
+    val.textContent = `${fmtCr(amount)}/d`;
+    row.appendChild(lbl);
+    row.appendChild(val);
+    container.appendChild(row);
+  };
+
+  const renderSummaryNetProfit = (dailyIncome, dailyCost, borderStyle) => {
     const net    = dailyIncome - dailyCost;
     const netCol = net >= 0 ? COL_OK : COL_CRIT;
     const nr = document.createElement('div');
-    nr.style.cssText = styleStr;
+    nr.style.cssText = `display:flex;justify-content:space-between;align-items:center;padding:4px 0 2px;border-top:${borderStyle};margin-top:3px;cursor:default;`;
     const nl = document.createElement('span');
     nl.style.cssText = 'color:#6b6b8a;font-size:10px;';
     nl.textContent = 'Net profit';
@@ -4290,52 +4235,40 @@ function buildSummaryContent(container, perBase) {
     nv.style.cssText = `color:${netCol};font-size:11px;font-weight:700;`;
     nv.textContent = (net >= 0 ? '+' : '\u2212') + fmtCr(Math.abs(net)) + '/d';
     nr.appendChild(nl); nr.appendChild(nv);
-    attachTip(nr, () => {
-      const t = mkTipEl();
-      if (dailyIncome > 0) t.appendChild(mkTipLine('Income',      '+' + fmtCr(dailyIncome) + '/d', COL_OK));
-      if (dailyCost   > 0) t.appendChild(mkTipLine('Input costs', '\u2212' + fmtCr(dailyCost) + '/d', COL_CRIT));
-      t.appendChild(mkTipSep());
-      t.appendChild(mkTipLine('Net', (net >= 0 ? '+' : '\u2212') + fmtCr(Math.abs(net)) + '/d', netCol));
-      return t;
+    attachTooltip(nr, tip => {
+      const mkLine = (lbl, val, vc) => {
+        const d = document.createElement('div');
+        d.style.cssText = 'display:flex;justify-content:space-between;gap:16px;padding:1px 0;';
+        const l = document.createElement('span'); l.style.color = '#6b6b8a'; l.textContent = lbl;
+        const v = document.createElement('span'); v.style.cssText = `color:${vc};font-weight:600;`; v.textContent = val;
+        d.appendChild(l); d.appendChild(v);
+        tip.appendChild(d);
+      };
+      if (dailyIncome > 0) mkLine('Income',      '+' + fmtCr(dailyIncome) + '/d', COL_OK);
+      if (dailyCost   > 0) mkLine('Input costs', '\u2212' + fmtCr(dailyCost) + '/d', COL_CRIT);
+      const sep = document.createElement('div');
+      sep.style.cssText = 'border-top:1px solid #1a1a30;margin:4px 0 2px;';
+      tip.appendChild(sep);
+      mkLine('Net', (net >= 0 ? '+' : '\u2212') + fmtCr(Math.abs(net)) + '/d', netCol);
     });
-    parent.appendChild(nr);
-  };
-
-  // Build a per-material net flow map across all bases:
-  //   flow = Σ(netDailyOutput) - Σ(dailyNeed for inputs/consumables)
-  // Materials with flow > 0 → net outputs; flow < 0 → net inputs
-  const buildFlowMap = (baseList) => {
-    const flowMap = new Map(); // matId → { name, flow, inStock }
-    for (const base of baseList) {
-      const { inputs, consumables, outputs } = calcBaseNeeds(base, _loadedHeaderGamedata);
-      for (const r of [...inputs, ...consumables]) {
-        const ex = flowMap.get(r.matId);
-        if (ex) { ex.flow -= r.dailyNeed; ex.inStock += r.inStock; }
-        else flowMap.set(r.matId, { name: r.name, matId: r.matId, flow: -r.dailyNeed, inStock: r.inStock });
-      }
-      for (const r of outputs) {
-        const netOut = r.netDailyOutput ?? r.dailyOutput;
-        const ex = flowMap.get(r.matId);
-        if (ex) { ex.flow += netOut; ex.inStock = Math.max(ex.inStock, r.inStock); }
-        else flowMap.set(r.matId, { name: r.name, matId: r.matId, flow: netOut, inStock: r.inStock });
-      }
-    }
-    return flowMap;
+    container.appendChild(nr);
   };
 
   if (perBase) {
-    // ── Per-base view — net flow per base ──
+    // ── Per-base view ─────────────────────────────────────────────────────
     for (const base of bases) {
+      const { inputs, consumables, outputs } = calcBaseNeeds(base, _loadedHeaderGamedata);
+
+      const visInputs      = inputs.filter(r => !r.selfProduced);
+      const visOutputs     = outputs.filter(r => (r.netDailyOutput ?? r.dailyOutput) > 0);
+      const hasProduction  = visInputs.length || consumables.length || visOutputs.length;
+
       const hdr = document.createElement('div');
       hdr.style.cssText = 'color:#d1d5db;font-size:12px;font-weight:600;margin:10px 0 3px;padding-top:6px;border-top:1px solid #1e1e3a;';
       hdr.textContent = base.name;
       container.appendChild(hdr);
 
-      const flowMap = buildFlowMap([base]);
-      const netInputs  = [...flowMap.values()].filter(r => r.flow < -0.01).sort((a, b) => a.flow - b.flow);
-      const netOutputs = [...flowMap.values()].filter(r => r.flow >  0.01).sort((a, b) => b.flow - a.flow);
-
-      if (!netInputs.length && !netOutputs.length) {
+      if (!hasProduction) {
         const empty = document.createElement('div');
         empty.style.cssText = 'color:#6b6b8a;font-size:11px;font-style:italic;padding:2px 0;';
         empty.textContent = 'No active production';
@@ -4343,18 +4276,52 @@ function buildSummaryContent(container, perBase) {
         continue;
       }
 
-      if (netInputs.length)  { mkSection('Net Inputs',  container); netInputs.forEach(r  => renderFlowRow(r.name, r.matId, r.flow, r.inStock, container)); }
-      if (netOutputs.length) { mkSection('Net Outputs', container); netOutputs.forEach(r => renderFlowRow(r.name, r.matId, r.flow, r.inStock, container)); }
+      if (visInputs.length) {
+        container.appendChild(mkLabel('Production Inputs', 'margin:6px 0 3px;'));
+        for (const r of visInputs) renderSummaryRow(r.name, r.matId, r.dailyNeed, false);
+        const inputCost = visInputs.reduce((s, r) => s + effectivePrice(r.matId) * r.dailyNeed, 0);
+        renderSummaryTotal('Total cost', inputCost, COL_CRIT);
+      }
+      if (consumables.length) {
+        container.appendChild(mkLabel('Worker Consumables', 'margin:6px 0 3px;'));
+        for (const r of consumables) renderSummaryRow(r.name, r.matId, r.dailyNeed, false);
+        const consumableCost = consumables.reduce((s, r) => s + effectivePrice(r.matId) * r.dailyNeed, 0);
+        renderSummaryTotal('Total cost', consumableCost, COL_CRIT);
+      }
+      if (visOutputs.length) {
+        container.appendChild(mkLabel('Net Outputs', 'margin:6px 0 3px;'));
+        for (const r of visOutputs) renderSummaryRow(r.name, r.matId, r.netDailyOutput ?? r.dailyOutput, true);
+        const outputRevenue = visOutputs.reduce((s, r) => s + effectivePrice(r.matId) * (r.netDailyOutput ?? r.dailyOutput), 0);
+        renderSummaryTotal('Total revenue', outputRevenue, COL_OK);
+      }
 
-      if (_priceMap && (netInputs.length || netOutputs.length)) {
-        const dailyIncome = netOutputs.reduce((s, r) => s + effectivePrice(r.matId) * r.flow, 0);
-        const dailyCost   = netInputs.reduce((s, r) => s + effectivePrice(r.matId) * Math.abs(r.flow), 0);
-        mkNetProfitRow(container, dailyIncome, dailyCost, 'display:flex;justify-content:space-between;align-items:center;padding:4px 0 2px;border-top:1px solid #1e1e3a;margin-top:3px;');
+      if (_priceMap) {
+        const dailyIncome = visOutputs.reduce((s, r) => s + effectivePrice(r.matId) * (r.netDailyOutput ?? r.dailyOutput), 0);
+        const dailyCost   = [...visInputs, ...consumables].reduce((s, r) => s + effectivePrice(r.matId) * r.dailyNeed, 0);
+        if (dailyIncome > 0 || dailyCost > 0) renderSummaryNetProfit(dailyIncome, dailyCost, '1px solid #1e1e3a');
       }
     }
   } else {
-    // ── Aggregate view — net flow across all bases ──
-    const flowMap    = buildFlowMap(bases);
+    // ── Aggregate view ────────────────────────────────────────────────────
+    // Build fleet-level flow: flow > 0 → surplus to sell; flow < 0 → must import
+    const flowMap = new Map(); // matId → { name, matId, flow }
+    for (const base of bases) {
+      const { inputs, consumables, outputs } = calcBaseNeeds(base, _loadedHeaderGamedata);
+      for (const r of [...inputs, ...consumables]) {
+        if (r.selfProduced) continue;
+        const need = r.netDailyNeed ?? r.dailyNeed;
+        const ex = flowMap.get(r.matId);
+        if (ex) ex.flow -= need;
+        else flowMap.set(r.matId, { name: r.name, matId: r.matId, flow: -need });
+      }
+      for (const r of outputs) {
+        const net = r.netDailyOutput ?? r.dailyOutput;
+        const ex = flowMap.get(r.matId);
+        if (ex) ex.flow += net;
+        else flowMap.set(r.matId, { name: r.name, matId: r.matId, flow: net });
+      }
+    }
+
     const netInputs  = [...flowMap.values()].filter(r => r.flow < -0.01).sort((a, b) => a.flow - b.flow);
     const netOutputs = [...flowMap.values()].filter(r => r.flow >  0.01).sort((a, b) => b.flow - a.flow);
 
@@ -4364,13 +4331,22 @@ function buildSummaryContent(container, perBase) {
       empty.textContent = 'No active production detected.';
       container.appendChild(empty);
     } else {
-      if (netInputs.length)  { mkSection('Net Inputs',  container); netInputs.forEach(r  => renderFlowRow(r.name, r.matId, r.flow, r.inStock, container)); }
-      if (netOutputs.length) { mkSection('Net Outputs', container); netOutputs.forEach(r => renderFlowRow(r.name, r.matId, r.flow, r.inStock, container)); }
-
+      if (netInputs.length) {
+        container.appendChild(mkLabel('Net Inputs', 'margin:6px 0 3px;'));
+        for (const r of netInputs) renderSummaryRow(r.name, r.matId, Math.abs(r.flow), false);
+        const inputCost = netInputs.reduce((s, r) => s + effectivePrice(r.matId) * Math.abs(r.flow), 0);
+        renderSummaryTotal('Total cost', inputCost, COL_CRIT);
+      }
+      if (netOutputs.length) {
+        container.appendChild(mkLabel('Net Outputs', 'margin:6px 0 3px;'));
+        for (const r of netOutputs) renderSummaryRow(r.name, r.matId, r.flow, true);
+        const outputRevenue = netOutputs.reduce((s, r) => s + effectivePrice(r.matId) * r.flow, 0);
+        renderSummaryTotal('Total revenue', outputRevenue, COL_OK);
+      }
       if (_priceMap && (netInputs.length || netOutputs.length)) {
         const dailyIncome = netOutputs.reduce((s, r) => s + effectivePrice(r.matId) * r.flow, 0);
         const dailyCost   = netInputs.reduce((s, r) => s + effectivePrice(r.matId) * Math.abs(r.flow), 0);
-        mkNetProfitRow(container, dailyIncome, dailyCost, 'display:flex;justify-content:space-between;align-items:center;padding:5px 0 2px;border-top:2px solid #1e1e3a;margin-top:4px;');
+        if (dailyIncome > 0 || dailyCost > 0) renderSummaryNetProfit(dailyIncome, dailyCost, '2px solid #1e1e3a');
       }
     }
   }
@@ -4399,17 +4375,8 @@ function toggleSummaryPanel() {
     updateViewToggle();
     buildSummaryContent(content, _summaryPerBase);
   });
-  const stockToggle = document.createElement('button');
-  stockToggle.style.cssText = 'background:none;border:none;cursor:pointer;font-size:10px;color:#6b6b8a;padding:0;font-family:inherit;';
-  stockToggle.textContent = _summaryShowStock ? 'Hide stock' : 'Show stock';
-  stockToggle.addEventListener('click', () => {
-    _summaryShowStock = !_summaryShowStock;
-    stockToggle.textContent = _summaryShowStock ? 'Hide stock' : 'Show stock';
-    buildSummaryContent(content, _summaryPerBase);
-  });
   const hdrRight = document.createElement('div');
   hdrRight.style.cssText = 'display:flex;align-items:center;gap:10px;';
-  hdrRight.appendChild(stockToggle);
   hdrRight.appendChild(viewToggle);
   hdr.appendChild(titleEl); hdr.appendChild(hdrRight);
   panel.appendChild(hdr);
@@ -4445,15 +4412,6 @@ async function loadAndInjectHeader() {
     spacer.style.cssText = `height:${HEADER_H}px;width:100%;pointer-events:none;flex-shrink:0;`;
     document.body.insertBefore(spacer, document.body.firstChild);
 
-    // Add bottom padding so game content isn't hidden behind the fixed navbar.
-    if (!document.getElementById('gt-overscroll-fix')) {
-      const s = document.createElement('style');
-      s.id = 'gt-overscroll-fix';
-      const navH = getGameBottomNavH();
-      const extraPad = navH > 0 ? navH : 56; // fallback 56px if nav not yet in DOM
-      s.textContent = `body { padding-bottom: ${extraPad}px !important; }`;
-      document.head.appendChild(s);
-    }
 
     // Header bar — two-column layout: chip area (left, grows) + controls (right, fixed)
     const header = document.createElement('div');
@@ -5724,6 +5682,51 @@ function _applyScrapDisableStyle() {
   }
 }
 
+function _setScrapBlock(block) {
+  if (block && !document.getElementById('gt-scrap-disable')) {
+    const s = document.createElement('style');
+    s.id = 'gt-scrap-disable';
+    s.textContent = '.modal.show .btn.btn-danger { opacity: 0.35 !important; pointer-events: none !important; }';
+    document.head.appendChild(s);
+  } else if (!block) {
+    document.getElementById('gt-scrap-disable')?.remove();
+  }
+}
+
+function _applyContextLocks(slotId) {
+  const hasSnapshot = Object.keys(_companionTargets).length > 0;
+  if (!hasSnapshot || !_levelLockEnabled) {
+    _applyUpgradeBlock(false);
+    _applyScrapDisableStyle();
+    return;
+  }
+  const target = slotId ? _companionTargets[slotId] : null;
+  if (!target) {
+    _applyUpgradeBlock(false);
+    _applyScrapDisableStyle();
+    return;
+  }
+  const btn = document.querySelector(`button.btn-building[data-slot-id="${slotId}"]`);
+  const currentTypeId = _getBuildingTypeId(btn);
+  const typeMatch = currentTypeId === null || currentTypeId === target.typeId;
+  const currentLvl = parseInt(btn?.querySelector('.badge.btn-badge')?.textContent ?? '0');
+  const levelDone = currentLvl >= target.level;
+
+  if (!typeMatch) {
+    // Wrong building type — block upgrade, allow scrap (user needs to remove it)
+    _applyUpgradeBlock(true);
+    _setScrapBlock(false);
+  } else if (levelDone) {
+    // Finished — block both to protect completed work
+    _applyUpgradeBlock(true);
+    _setScrapBlock(true);
+  } else {
+    // In progress — allow upgrade, block scrap to protect progress
+    _applyUpgradeBlock(false);
+    _setScrapBlock(true);
+  }
+}
+
 let _gtModalTipTimer = null;
 
 function _showModalTip(e, lines) {
@@ -5886,8 +5889,11 @@ function _bindBuildingKeys() {
         const target = _companionTargets[slotId];
         const hasSnapshot = Object.keys(_companionTargets).length > 0;
         if (target && _levelLockEnabled && hasSnapshot) {
-          const cur = parseInt(document.querySelector(`button.btn-building[data-slot-id="${slotId}"] .badge.btn-badge`)?.textContent ?? '0');
-          if (cur >= target.level) break;
+          const btn = document.querySelector(`button.btn-building[data-slot-id="${slotId}"]`);
+          const currentTypeId = _getBuildingTypeId(btn);
+          const typeMatch = currentTypeId === null || currentTypeId === target.typeId;
+          const cur = parseInt(btn?.querySelector('.badge.btn-badge')?.textContent ?? '0');
+          if (!typeMatch || cur >= target.level) break;
         }
         modal?.querySelector('.btn.btn-primary.btn-icon-split.w-100')?.click();
         break;
@@ -5942,6 +5948,18 @@ function _applySnapshot(snapshot) {
   _levelLockEnabled = true;
   chrome.storage.local.set({ gtLevelLock: true });
   _onLockBtnRefresh?.();
+  // Persist raw snapshot so it can be auto-applied on next page load
+  const baseId = _detectCurrentBaseId();
+  if (baseId) {
+    chrome.storage.local.get('gtCompanionSnapshot', ({ gtCompanionSnapshot }) => {
+      const store = gtCompanionSnapshot ?? {};
+      store[String(baseId)] = snapshot;
+      chrome.storage.local.set({ gtCompanionSnapshot: store });
+    });
+  }
+  // Force scrap lock on whenever a plan is loaded
+  _settings.disableScrap = true;
+  saveSettings();
   injectSlotBadges();
   _updateModalTarget();
 }
@@ -5954,9 +5972,9 @@ function _fmtSnapshotLabel(s) {
 async function _fetchCompanionSnapshots() {
   if (!_companionEnabled) return;
   const bar = document.getElementById(GT_COMPANION_BAR_ID);
-  const setStatus = (msg, err = false) => {
+  const setStatus = (msg, color = '#9090b0') => {
     const el = bar?.querySelector('.gt-cb-status');
-    if (el) { el.textContent = msg; el.style.color = err ? '#f87171' : '#9090b0'; }
+    if (el) { el.textContent = msg; el.style.color = color; }
   };
   setStatus('Fetching…');
   try {
@@ -5969,9 +5987,29 @@ async function _fetchCompanionSnapshots() {
     if (!snaps.length) throw new Error('No snapshots found');
     _companionSnapshots = snaps;
     _renderSnapshotPicker(bar, snaps);
+    // Check if currently applied snapshot is still in the returned list
+    const currentBaseId = _detectCurrentBaseId();
+    const currentSnapId = currentBaseId && _baseSnapshotMap[String(currentBaseId)];
+    if (currentSnapId && Object.keys(_companionTargets).length > 0) {
+      const found = snaps.find(s => s.id === currentSnapId);
+      if (!found) {
+        setStatus('⚠ Removed from GT-Companion', '#f87171');
+        return;
+      }
+      // Refresh persisted snapshot with fresh data
+      chrome.storage.local.get('gtCompanionSnapshot', ({ gtCompanionSnapshot }) => {
+        const store = gtCompanionSnapshot ?? {};
+        store[String(currentBaseId)] = found;
+        chrome.storage.local.set({ gtCompanionSnapshot: store });
+      });
+    }
     setStatus(`${snaps.length} snapshot${snaps.length > 1 ? 's' : ''} loaded`);
   } catch (err) {
-    setStatus(err.message, true);
+    if (Object.keys(_companionTargets).length > 0) {
+      setStatus('⚠ Cached', '#f59e0b');
+    } else {
+      setStatus(err.message, '#f87171');
+    }
   }
 }
 
@@ -6106,13 +6144,29 @@ function injectCompanionBar() {
   const cardBody = firstBtn.closest('.card-body');
   if (!cardBody?.parentElement) return;
 
-  // Load persisted state
-  chrome.storage.local.get(['gtCompanionBaseMap', 'gtCompanionEnabled', 'gtLevelLock'], ({ gtCompanionBaseMap, gtCompanionEnabled, gtLevelLock }) => {
+  // Load persisted state and auto-apply stored snapshot if present
+  chrome.storage.local.get(['gtCompanionBaseMap', 'gtCompanionEnabled', 'gtLevelLock', 'gtCompanionSnapshot'], ({ gtCompanionBaseMap, gtCompanionEnabled, gtLevelLock, gtCompanionSnapshot }) => {
     _baseSnapshotMap = gtCompanionBaseMap ?? {};
     _companionEnabled = gtCompanionEnabled ?? false;
-    const hasSnapshot = Object.keys(_companionTargets).length > 0;
-    _levelLockEnabled = hasSnapshot && (gtLevelLock !== false);
-    _renderCompanionBarState(bar);
+    const baseId = _detectCurrentBaseId();
+    const storedSnap = _companionEnabled && baseId && (gtCompanionSnapshot ?? {})[String(baseId)];
+    if (storedSnap) {
+      _companionTargets = _parseSnapshot(storedSnap);
+      _levelLockEnabled = gtLevelLock !== false;
+      _renderCompanionBarState(bar);
+      injectSlotBadges();
+      _updateModalTarget();
+      // Show refresh button + status without picker (no fetch done yet)
+      const importBtn = bar.querySelector('.gt-cb-import');
+      const refreshBtn = bar.querySelector('.gt-cb-refresh');
+      if (importBtn) importBtn.style.display = 'none';
+      if (refreshBtn) refreshBtn.style.display = '';
+      const statusEl = bar.querySelector('.gt-cb-status');
+      if (statusEl) { statusEl.textContent = `${Object.keys(_companionTargets).length} slots applied`; statusEl.style.color = '#4ade80'; }
+    } else {
+      _levelLockEnabled = false;
+      _renderCompanionBarState(bar);
+    }
   });
 
   // ── Outer wrapper ───────────────────────────────────────────────────────
@@ -6257,7 +6311,11 @@ function injectCompanionBar() {
     _clearCompanionTargets();
     if (baseId) {
       delete _baseSnapshotMap[String(baseId)];
-      chrome.storage.local.set({ gtCompanionBaseMap: _baseSnapshotMap });
+      chrome.storage.local.get('gtCompanionSnapshot', ({ gtCompanionSnapshot }) => {
+        const store = gtCompanionSnapshot ?? {};
+        delete store[String(baseId)];
+        chrome.storage.local.set({ gtCompanionBaseMap: _baseSnapshotMap, gtCompanionSnapshot: store });
+      });
     }
     injectSlotBadges();
     const sel = bar.querySelector('.gt-cb-picker select');
@@ -6276,7 +6334,7 @@ function injectCompanionBar() {
   clearAllBtn.addEventListener('click', () => {
     _clearCompanionTargets();
     _baseSnapshotMap = {};
-    chrome.storage.local.set({ gtCompanionBaseMap: {} });
+    chrome.storage.local.set({ gtCompanionBaseMap: {}, gtCompanionSnapshot: {} });
     injectSlotBadges();
     _updateModalTarget();
     const sel = bar.querySelector('.gt-cb-picker select');
@@ -6368,26 +6426,32 @@ function _applyUpgradeBlock(block) {
 }
 
 function _updateModalTarget() {
-  const el = document.getElementById(GT_MODAL_TARGET_ID);
-  if (!el) return;
   const slotId = _getCurrentSlotId();
+  const el = document.getElementById(GT_MODAL_TARGET_ID);
   const target = slotId ? _companionTargets[slotId] : null;
   if (!target) {
-    el.style.display = 'none';
-    _applyUpgradeBlock(false);
+    if (el) el.style.display = 'none';
+    _applyContextLocks(slotId);
     return;
   }
-  const currentLvl = parseInt(document.querySelector(`button.btn-building[data-slot-id="${slotId}"] .badge.btn-badge`)?.textContent ?? '0');
-  const done = currentLvl >= target.level;
-  el.style.display = '';
-  if (done) {
-    el.textContent = `✓ Lv.${target.level} / ${target.level}`;
-    el.style.color = '#4ade80';
-  } else {
-    el.textContent = `Lv.${currentLvl} / ${target.level}`;
-    el.style.color = '#9090b0';
+  const btn = document.querySelector(`button.btn-building[data-slot-id="${slotId}"]`);
+  const currentTypeId = _getBuildingTypeId(btn);
+  const typeMatch = currentTypeId === null || currentTypeId === target.typeId;
+  const currentLvl = parseInt(btn?.querySelector('.badge.btn-badge')?.textContent ?? '0');
+  if (el) {
+    el.style.display = '';
+    if (!typeMatch) {
+      el.textContent = `→ ${_getBuildingTypeName(target.typeId)}`;
+      el.style.color = '#f87171';
+    } else if (currentLvl >= target.level) {
+      el.textContent = `✓ Lv.${target.level} / ${target.level}`;
+      el.style.color = '#4ade80';
+    } else {
+      el.textContent = `Lv.${currentLvl} / ${target.level}`;
+      el.style.color = '#9090b0';
+    }
   }
-  _applyUpgradeBlock(done);
+  _applyContextLocks(slotId);
 }
 
 let _companionBarBaseId = null; // baseId the bar was last injected for
@@ -6451,6 +6515,7 @@ function watchBuildingModal() {
       setTimeout(tryBind, 100);
     } else {
       _unbindBuildingKeys();
+      setTimeout(injectSlotBadges, 100);
     }
   });
   _buildingModalObs.observe(document.body, { attributes: true, attributeFilter: ['class'], subtree: false });
