@@ -2781,7 +2781,7 @@ function buildSettingsPanel() {
 
   const ver = document.createElement('div');
   ver.style.cssText = 'text-align:center;font-size:10px;color:#2a2a4a;margin-top:6px;';
-  ver.textContent = 'v0.5';
+  ver.textContent = 'v0.5.1';
   panel.appendChild(ver);
 
   return panel;
