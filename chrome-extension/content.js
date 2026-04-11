@@ -538,6 +538,7 @@ const DEFAULT_SETTINGS = {
   disableHotkeys:   false,
   headerCollapsed:      false,
   companionBarCollapsed: false,
+  useTargets:       false,
 };
 
 let _settings = { ...DEFAULT_SETTINGS };
@@ -595,6 +596,23 @@ async function clearPanelBase(baseId) {
 }
 function clearPanelAll() {
   savePanelWishlist({});
+}
+
+// ── Wishlist target overrides ─────────────────────────────────────────────────
+
+let _wishlistTargets  = {}; // { [baseId]: { [matId]: number } }
+let _targetClipboard  = null; // { [matId]: number } | null
+
+function loadWishlistTargets() {
+  return new Promise(resolve => {
+    chrome.storage.local.get('gtWishlistTargets', ({ gtWishlistTargets }) => {
+      _wishlistTargets = gtWishlistTargets ?? {};
+      resolve();
+    });
+  });
+}
+function saveWishlistTargets() {
+  chrome.storage.local.set({ gtWishlistTargets: _wishlistTargets });
 }
 
 // ── Gamedata loader ───────────────────────────────────────────────────────────
@@ -1606,6 +1624,16 @@ function buildDetailPanel(base, gamedata) {
               line.appendChild(l); line.appendChild(v);
               rowTip.appendChild(line);
             }
+            // Show target stock if set
+            const matTarget = (_wishlistTargets[String(base.id)] ?? {})[String(r.matId)];
+            if (matTarget != null) {
+              const tLine = document.createElement('div');
+              tLine.style.cssText = 'display:flex;justify-content:space-between;gap:16px;padding:1px 0;margin-top:2px;border-top:1px solid #1a1a30;';
+              const tLbl = document.createElement('span'); tLbl.style.color = '#818cf8'; tLbl.textContent = 'Target stock';
+              const tVal = document.createElement('span'); tVal.style.cssText = 'color:#818cf8;font-weight:600;'; tVal.textContent = Math.round(matTarget).toLocaleString();
+              tLine.appendChild(tLbl); tLine.appendChild(tVal);
+              rowTip.appendChild(tLine);
+            }
           }
           document.body.appendChild(rowTip);
         });
@@ -1957,6 +1985,7 @@ async function handleWishlistAll(btn, opts = {}) {
   const inclConsumables = opts.includeConsumables ?? _settings.includeConsumables;
   const inclStock       = opts.includeStock       ?? _settings.includeStock;
   const td              = opts.targetDays         ?? _settings.targetDays;
+  const useTargets      = opts.useTargets         ?? _settings.useTargets ?? false;
 
   if (!bases.length) return;
 
@@ -1971,14 +2000,18 @@ async function handleWishlistAll(btn, opts = {}) {
     const eligible = [
       ...(inclInputs      ? inputs      : []),
       ...(inclConsumables ? consumables : []),
-    ];
+    ].filter(r => !r.selfProduced);
+    const baseTargets = useTargets ? (_wishlistTargets[String(base.id)] ?? {}) : {};
     const mats = eligible
-      .map(r => ({
-        id: r.matId,
-        am: inclStock
-          ? Math.max(0, Math.ceil(r.dailyNeed * td - r.inStock))
-          : Math.ceil(r.dailyNeed * td),
-      }))
+      .map(r => {
+        const target = baseTargets[String(r.matId)];
+        const am = target != null
+          ? Math.max(0, Math.ceil(target - r.inStock))
+          : inclStock
+            ? Math.max(0, Math.ceil(r.dailyNeed * td - r.inStock))
+            : Math.ceil(r.dailyNeed * td);
+        return { id: r.matId, am };
+      })
       .filter(m => m.am > 0);
     if (!mats.length) { skip++; continue; }
 
@@ -2029,6 +2062,251 @@ async function handleWishlistAll(btn, opts = {}) {
   else             showToast(`\u2713 ${ok} wishlists created`);
 }
 
+// ── Wishlist Targets Modal ────────────────────────────────────────────────────
+
+function showWishlistTargetsModal(bases, gamedata) {
+  document.getElementById('gt-wt-modal')?.remove();
+
+  const _mkTextBtn = (label) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:10px;color:#4a4a6a;padding:1px 4px;border-radius:3px;font-family:inherit;flex-shrink:0;transition:color .1s,background .1s;white-space:nowrap;';
+    btn.addEventListener('mouseenter', () => { btn.style.color = '#9090b0'; btn.style.background = '#1a1a30'; });
+    btn.addEventListener('mouseleave', () => { btn.style.color = '#4a4a6a'; btn.style.background = 'none'; });
+    return btn;
+  };
+
+  // ── Backdrop ────────────────────────────────────────────────────────────────
+  const backdrop = document.createElement('div');
+  backdrop.id = 'gt-wt-modal';
+  backdrop.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,0.7);display:flex;align-items:stretch;justify-content:center;font-family:system-ui,sans-serif;font-size:12px;color:#b0b0cc;';
+
+  const container = document.createElement('div');
+  container.style.cssText = 'display:flex;flex-direction:column;width:100%;max-width:780px;margin:24px;background:#0a0a18;border:1px solid #2a2a4a;border-radius:8px;overflow:hidden;';
+
+  // Header
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid #1a1a2e;flex-shrink:0;';
+  const title = document.createElement('span');
+  title.style.cssText = 'font-size:14px;font-weight:700;color:#e0e0f0;';
+  title.textContent = 'Set Wishlist Targets';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '×';
+  closeBtn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:18px;color:#6b6b8a;line-height:1;padding:0 4px;';
+  closeBtn.addEventListener('click', () => backdrop.remove());
+  header.append(title, closeBtn);
+
+  // Body — two panels
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex:1;overflow:hidden;min-height:0;';
+
+  // Left: material list
+  const leftPanel = document.createElement('div');
+  leftPanel.style.cssText = 'flex:1;display:flex;flex-direction:column;border-right:1px solid #1a1a2e;overflow:hidden;';
+  const leftHeader = document.createElement('div');
+  leftHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 14px;border-bottom:1px solid #1a1a2e;flex-shrink:0;min-height:32px;';
+  const leftHeaderLabel = document.createElement('span');
+  leftHeaderLabel.style.cssText = 'font-size:11px;color:#6b6b8a;';
+  leftHeaderLabel.textContent = 'Select a base to edit its targets';
+  leftHeader.appendChild(leftHeaderLabel);
+  const leftScroll = document.createElement('div');
+  leftScroll.style.cssText = 'flex:1;overflow-y:auto;padding:8px 14px;';
+  leftPanel.append(leftHeader, leftScroll);
+
+  // Right: base list
+  const rightPanel = document.createElement('div');
+  rightPanel.style.cssText = 'width:240px;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;';
+  const rightHeader = document.createElement('div');
+  rightHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #1a1a2e;font-size:11px;color:#6b6b8a;flex-shrink:0;';
+  const rightHeaderLabel = document.createElement('span');
+  rightHeaderLabel.textContent = 'Bases';
+  const resetAllBtn = _mkTextBtn('Reset all');
+  resetAllBtn.addEventListener('click', () => {
+    _wishlistTargets = {};
+    saveWishlistTargets();
+    // Refresh dots on all base rows
+    rightScroll.querySelectorAll('[data-gt-base-dot]').forEach(d => { d.style.background = 'transparent'; });
+    // Refresh material list if a base is selected
+    if (selectedBase) renderMaterials(selectedBase);
+  });
+  rightHeader.append(rightHeaderLabel, resetAllBtn);
+  const rightScroll = document.createElement('div');
+  rightScroll.style.cssText = 'flex:1;overflow-y:auto;';
+  rightPanel.append(rightHeader, rightScroll);
+
+  // Footer
+  const footer = document.createElement('div');
+  footer.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-top:1px solid #1a1a2e;flex-shrink:0;';
+  const footNote = document.createElement('span');
+  footNote.style.cssText = 'font-size:10px;color:#4a4a6a;';
+  footNote.textContent = 'Targets override days × daily need when "Use Targets" is on';
+  const doneBtn = document.createElement('button');
+  doneBtn.textContent = 'Done';
+  doneBtn.style.cssText = 'background:#166534;border:none;border-radius:5px;color:#22c55e;font-size:12px;padding:5px 16px;cursor:pointer;font-family:inherit;font-weight:600;';
+  doneBtn.addEventListener('click', () => backdrop.remove());
+  footer.append(footNote, doneBtn);
+
+  body.append(leftPanel, rightPanel);
+  container.append(header, body, footer);
+  backdrop.appendChild(container);
+  document.body.appendChild(backdrop);
+
+  // ── Render material list for a selected base ─────────────────────────────
+  let _debounceTimer = null;
+  let selectedBase = null;
+
+  const renderMaterials = (base) => {
+    leftScroll.innerHTML = '';
+    leftHeaderLabel.textContent = base.name;
+
+    // Reset button for this base
+    leftHeader.querySelector('.gt-wt-reset-base')?.remove();
+    const resetBaseBtn = _mkTextBtn('Reset');
+    resetBaseBtn.className = 'gt-wt-reset-base';
+    resetBaseBtn.addEventListener('click', () => {
+      const bid = String(base.id);
+      delete _wishlistTargets[bid];
+      saveWishlistTargets();
+      // Clear all inputs
+      leftScroll.querySelectorAll('input').forEach(inp => { inp.value = ''; });
+      // Refresh dot
+      const dot = rightScroll.querySelector(`[data-gt-base-dot="${bid}"]`);
+      if (dot) dot.style.background = 'transparent';
+    });
+    leftHeader.appendChild(resetBaseBtn);
+
+    const { inputs, consumables } = calcBaseNeeds(base, gamedata);
+    const baseId = String(base.id);
+    if (!_wishlistTargets[baseId]) _wishlistTargets[baseId] = {};
+
+    const mkSection = (label, items) => {
+      if (!items.length) return;
+      const sec = document.createElement('div');
+      sec.style.cssText = 'font-size:10px;color:#4a4a6a;text-transform:uppercase;letter-spacing:.06em;margin:10px 0 4px;';
+      sec.textContent = label;
+      leftScroll.appendChild(sec);
+
+      items.forEach(r => {
+        const row = document.createElement('div');
+        row.style.cssText = `display:grid;grid-template-columns:auto 1fr auto auto;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid #0d0d20;${r.selfProduced ? 'opacity:0.45;' : ''}`;
+
+        const icon = makeIcon(r.name, 16);
+        const iconWrap = document.createElement('span');
+        iconWrap.style.cssText = 'display:flex;align-items:center;flex-shrink:0;';
+        if (icon) iconWrap.appendChild(icon);
+        else iconWrap.style.width = '16px';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.style.cssText = 'color:#c0c0da;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        nameSpan.textContent = r.name;
+
+        const needSpan = document.createElement('span');
+        needSpan.style.cssText = 'color:#4a4a6a;font-size:10px;white-space:nowrap;text-align:right;';
+        needSpan.textContent = Math.round(r.dailyNeed).toLocaleString() + '/d';
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.placeholder = '—';
+        const existing = _wishlistTargets[baseId][String(r.matId)];
+        if (existing != null) input.value = existing;
+        input.style.cssText = 'width:80px;background:#12122a;border:1px solid #2a2a4a;border-radius:4px;color:#c0c0da;font-size:11px;padding:2px 6px;text-align:right;font-family:inherit;';
+        input.addEventListener('focus', () => { input.style.borderColor = '#6366f1'; });
+        input.addEventListener('blur',  () => { input.style.borderColor = '#2a2a4a'; });
+        input.addEventListener('input', () => {
+          clearTimeout(_debounceTimer);
+          _debounceTimer = setTimeout(() => {
+            const v = parseFloat(input.value);
+            if (v > 0) {
+              if (!_wishlistTargets[baseId]) _wishlistTargets[baseId] = {};
+              _wishlistTargets[baseId][String(r.matId)] = v;
+            } else {
+              delete _wishlistTargets[baseId]?.[String(r.matId)];
+            }
+            if (_wishlistTargets[baseId] && !Object.keys(_wishlistTargets[baseId]).length) delete _wishlistTargets[baseId];
+            saveWishlistTargets();
+            // Update dot
+            const dot = rightScroll.querySelector(`[data-gt-base-dot="${baseId}"]`);
+            if (dot) dot.style.background = Object.keys(_wishlistTargets[baseId] ?? {}).length ? '#818cf8' : 'transparent';
+          }, 300);
+        });
+
+        row.append(iconWrap, nameSpan, needSpan, input);
+        leftScroll.appendChild(row);
+      });
+    };
+
+    mkSection('Inputs', inputs);
+    mkSection('Consumables', consumables);
+  };
+
+  // ── Render base rows ─────────────────────────────────────────────────────
+  let selectedBaseId = null;
+  bases.forEach(base => {
+    const bid = String(base.id);
+    const row = document.createElement('div');
+    const hasTargets = Object.keys(_wishlistTargets[bid] ?? {}).length > 0;
+    row.style.cssText = 'display:flex;align-items:center;padding:5px 10px;cursor:pointer;border-bottom:1px solid #0d0d20;gap:5px;';
+    row.addEventListener('mouseenter', () => { if (bid !== selectedBaseId) row.style.background = '#0d0d1f'; });
+    row.addEventListener('mouseleave', () => { if (bid !== selectedBaseId) row.style.background = ''; });
+
+    const nameSpan = document.createElement('span');
+    nameSpan.style.cssText = 'flex:1;color:#c0c0da;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;';
+    nameSpan.textContent = base.name;
+
+    const dot = document.createElement('span');
+    dot.dataset.gtBaseDot = bid;
+    dot.style.cssText = `width:5px;height:5px;border-radius:50%;flex-shrink:0;background:${hasTargets ? '#818cf8' : 'transparent'};`;
+
+    const copyBtn = _mkTextBtn('Copy');
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _targetClipboard = { ...(_wishlistTargets[bid] ?? {}) };
+      copyBtn.style.color = '#4ade80';
+      setTimeout(() => { copyBtn.style.color = '#4a4a6a'; }, 600);
+      // Update all paste button opacity
+      rightScroll.querySelectorAll('[data-gt-paste-btn]').forEach(b => { b.style.opacity = '1'; });
+    });
+
+    const pasteBtn = _mkTextBtn('Paste');
+    pasteBtn.dataset.gtPasteBtn = bid;
+    pasteBtn.style.opacity = _targetClipboard ? '1' : '0.35';
+    pasteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!_targetClipboard) return;
+      const { inputs, consumables } = calcBaseNeeds(base, gamedata);
+      const validMatIds = new Set([...inputs, ...consumables].map(r => String(r.matId)));
+      if (!_wishlistTargets[bid]) _wishlistTargets[bid] = {};
+      for (const [matId, val] of Object.entries(_targetClipboard)) {
+        if (validMatIds.has(matId)) _wishlistTargets[bid][matId] = val;
+      }
+      if (!Object.keys(_wishlistTargets[bid]).length) delete _wishlistTargets[bid];
+      saveWishlistTargets();
+      pasteBtn.style.color = '#4ade80';
+      setTimeout(() => { pasteBtn.style.color = '#4a4a6a'; }, 600);
+      dot.style.background = Object.keys(_wishlistTargets[bid] ?? {}).length ? '#818cf8' : 'transparent';
+      if (bid === selectedBaseId) renderMaterials(base);
+    });
+
+    row.addEventListener('click', () => {
+      rightScroll.querySelectorAll('[data-gt-base-row]').forEach(r => { r.style.background = ''; r.style.borderLeft = '3px solid transparent'; });
+      row.style.background = '#0d0d1f';
+      row.style.borderLeft = '3px solid #6366f1';
+      selectedBaseId = bid;
+      selectedBase = base;
+      renderMaterials(base);
+    });
+
+    row.dataset.gtBaseRow = bid;
+    row.style.borderLeft = '3px solid transparent';
+    row.append(nameSpan, dot, copyBtn, pasteBtn);
+    rightScroll.appendChild(row);
+  });
+
+  // Auto-select first base
+  if (bases.length) rightScroll.querySelector('[data-gt-base-row]')?.click();
+}
+
 // Wishlist-all panel
 // onConfirm receives opts: { bases, includeInputs, includeConsumables, includeStock }
 function showWishlistAllModal(onConfirm) {
@@ -2041,12 +2319,13 @@ function showWishlistAllModal(onConfirm) {
 
   closeAllPanels();
 
-  // Local state — does not affect _settings
+  // Local state — does not affect _settings (except useTargets which persists immediately)
   const localState = {
     targetDays:         _settings.targetDays,
     includeInputs:      _settings.includeInputs,
     includeConsumables: _settings.includeConsumables,
     includeStock:       _settings.includeStock,
+    useTargets:         _settings.useTargets ?? false,
     addToPanel:         false,
     panelOnly:          false,
   };
@@ -2079,7 +2358,9 @@ function showWishlistAllModal(onConfirm) {
   };
   const selAllBtn   = _mkSelBtn('Select all');
   const deselAllBtn = _mkSelBtn('Deselect all');
-  selAllRow.append(selAllBtn, deselAllBtn);
+  const setTargetsBtn = _mkSelBtn('Set targets');
+  setTargetsBtn.addEventListener('click', () => showWishlistTargetsModal(sortBases(_loadedHeaderBases), _loadedHeaderGamedata));
+  selAllRow.append(selAllBtn, deselAllBtn, setTargetsBtn);
   modal.appendChild(selAllRow);
 
   const basesList = document.createElement('div');
@@ -2147,15 +2428,20 @@ function showWishlistAllModal(onConfirm) {
     { label: 'Subtract current stock', key: 'includeStock' },
     { label: 'Production inputs',      key: 'includeInputs' },
     { label: 'Worker consumables',     key: 'includeConsumables' },
+    { label: 'Use manual targets',     key: 'useTargets', persist: true },
   ];
-  toggleRows.forEach(({ label, key }) => {
+  toggleRows.forEach(({ label, key, persist }) => {
     const row = document.createElement('div');
     row.style.cssText = `display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:4px 0;border-bottom:1px solid #12122a;`;
     const lbl = document.createElement('span'); lbl.style.color = '#6b6b8a'; lbl.textContent = label;
-    const tog = buildMiniToggle(localState[key], val => { localState[key] = val; });
+    const tog = buildMiniToggle(localState[key], val => {
+      localState[key] = val;
+      if (persist) { _settings[key] = val; saveSettings(); }
+    });
     row.append(lbl, tog);
     settingsBox.appendChild(row);
   });
+
 
   // Panel wishlist toggles (mutually exclusive)
   let addToPanelTog, panelOnlyTog;
@@ -2206,6 +2492,7 @@ function showWishlistAllModal(onConfirm) {
       includeInputs:      localState.includeInputs,
       includeConsumables: localState.includeConsumables,
       includeStock:       localState.includeStock,
+      useTargets:         localState.useTargets,
       addToPanel:         localState.addToPanel,
       panelOnly:          localState.panelOnly,
     });
@@ -3760,8 +4047,19 @@ function _renderPanelWishlistContent(panel, data) {
       nameLbl.textContent = item.name;
 
       const amtLbl = document.createElement('span');
-      amtLbl.style.cssText = 'font-size:11px;color:#9090b0;white-space:nowrap;';
+      amtLbl.style.cssText = 'font-size:11px;color:#9090b0;white-space:nowrap;cursor:pointer;';
       amtLbl.textContent = `x${item.am.toLocaleString()}`;
+      amtLbl.title = 'Click to copy number';
+      amtLbl.addEventListener('mouseenter', () => { amtLbl.style.textDecoration = 'underline'; });
+      amtLbl.addEventListener('mouseleave', () => { amtLbl.style.textDecoration = ''; });
+      amtLbl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(String(item.am)).then(() => {
+          const prev = amtLbl.style.color;
+          amtLbl.style.color = '#4ade80';
+          setTimeout(() => { amtLbl.style.color = prev; }, 700);
+        });
+      });
 
       const clearBtn = document.createElement('span');
       clearBtn.style.cssText = 'color:#6b6b8a;font-size:11px;cursor:pointer;opacity:0;transition:opacity 0.15s;margin-left:2px;flex-shrink:0;';
@@ -4399,6 +4697,7 @@ function toggleSummaryPanel() {
 
 async function loadAndInjectHeader() {
   await loadSettings();
+  await loadWishlistTargets();
 
   try {
     const gamedata = await loadGamedata();
