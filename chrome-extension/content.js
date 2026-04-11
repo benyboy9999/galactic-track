@@ -536,6 +536,8 @@ const DEFAULT_SETTINGS = {
   showFlightCosts:  true,
   disableScrap:     true,
   disableHotkeys:   false,
+  headerCollapsed:      false,
+  companionBarCollapsed: false,
 };
 
 let _settings = { ...DEFAULT_SETTINGS };
@@ -4627,30 +4629,43 @@ async function loadAndInjectHeader() {
     header.style.transition = 'transform 0.25s ease';
     spacer.style.transition  = 'height 0.25s ease';
 
-    tab.addEventListener('click', () => {
-      _headerCollapsed = !_headerCollapsed;
-      if (_headerCollapsed) {
+    const _applyHeaderCollapse = (collapsed, animate) => {
+      _headerCollapsed = collapsed;
+      if (!animate) header.style.transition = 'none';
+      if (collapsed) {
         header.style.transform = `translateY(-${header.offsetHeight}px)`;
         tab.style.top = '0';
         tab.textContent = '\u25bc'; // ▼
         tab.title = 'Expand GT header';
         spacer.style.height = '0';
-        document.getElementById(GT_DETAIL_ID)?.remove();
-        document.getElementById(GT_SETTINGS_ID)?.remove();
-        _detailBaseId = null; _settingsOpen = false;
+        if (animate) {
+          document.getElementById(GT_DETAIL_ID)?.remove();
+          document.getElementById(GT_SETTINGS_ID)?.remove();
+          _detailBaseId = null; _settingsOpen = false;
+        }
       } else {
         header.style.transform = '';
         tab.style.top = `${header.offsetHeight}px`;
         tab.textContent = '\u25b2';
         tab.title = 'Collapse GT header';
-        // spacer will be synced by RO after transition
-        setTimeout(() => {
-          spacer.style.height = header.offsetHeight + 'px';
-        }, 260);
+        setTimeout(() => { spacer.style.height = header.offsetHeight + 'px'; }, animate ? 260 : 0);
       }
+      if (!animate) setTimeout(() => { header.style.transition = 'transform 0.25s ease'; }, 0);
+    };
+
+    tab.addEventListener('click', () => {
+      _settings.headerCollapsed = !_headerCollapsed;
+      saveSettings();
+      _applyHeaderCollapse(_settings.headerCollapsed, true);
     });
     document.body.appendChild(tab);
     document.body.appendChild(header);
+
+    // Restore persisted collapsed state
+    if (_settings.headerCollapsed) {
+      // Defer until layout is available so offsetHeight is correct
+      requestAnimationFrame(() => _applyHeaderCollapse(true, false));
+    }
 
     // Right-edge panel wishlist button
     if (_settings.showWishlistPanel !== false) {
@@ -5671,11 +5686,14 @@ function _isBuildingModal() {
   return !!modal?.querySelector('.modal-header .btn-group .input-group-text');
 }
 
+const _GT_SCRAP_CSS = 'body.gt-building-modal .modal.show .btn.btn-danger { opacity: 0.35 !important; pointer-events: none !important; }';
+const _GT_UPGRADE_CSS = 'body.gt-building-modal .modal.show .btn.btn-primary.btn-icon-split.w-100 { opacity:0.4 !important; pointer-events:none !important; }';
+
 function _applyScrapDisableStyle() {
   if (_settings.disableScrap && !document.getElementById('gt-scrap-disable')) {
     const s = document.createElement('style');
     s.id = 'gt-scrap-disable';
-    s.textContent = '.modal.show .btn.btn-danger { opacity: 0.35 !important; pointer-events: none !important; }';
+    s.textContent = _GT_SCRAP_CSS;
     document.head.appendChild(s);
   } else if (!_settings.disableScrap) {
     document.getElementById('gt-scrap-disable')?.remove();
@@ -5686,7 +5704,7 @@ function _setScrapBlock(block) {
   if (block && !document.getElementById('gt-scrap-disable')) {
     const s = document.createElement('style');
     s.id = 'gt-scrap-disable';
-    s.textContent = '.modal.show .btn.btn-danger { opacity: 0.35 !important; pointer-events: none !important; }';
+    s.textContent = _GT_SCRAP_CSS;
     document.head.appendChild(s);
   } else if (!block) {
     document.getElementById('gt-scrap-disable')?.remove();
@@ -5708,8 +5726,8 @@ function _applyContextLocks(slotId) {
   }
   const btn = document.querySelector(`button.btn-building[data-slot-id="${slotId}"]`);
   const currentTypeId = _getBuildingTypeId(btn);
-  const typeMatch = currentTypeId === null || currentTypeId === target.typeId;
   const currentLvl = parseInt(btn?.querySelector('.badge.btn-badge')?.textContent ?? '0');
+  const typeMatch = (currentTypeId === null && currentLvl > 0) || currentTypeId === target.typeId;
   const levelDone = currentLvl >= target.level;
 
   if (!typeMatch) {
@@ -5875,6 +5893,7 @@ function _injectModalButtons(modal) {
 
 function _bindBuildingKeys() {
   if (_buildingKeyHandler) return;
+  document.body.classList.add('gt-building-modal');
   _buildingKeyHandler = (e) => {
     if (_settings.disableHotkeys) return;
     if (!_isBuildingModal()) return;
@@ -5909,6 +5928,7 @@ function _bindBuildingKeys() {
 
 function _unbindBuildingKeys() {
   if (!_buildingKeyHandler) return;
+  document.body.classList.remove('gt-building-modal');
   document.removeEventListener('keydown', _buildingKeyHandler);
   _buildingKeyHandler = null;
   _buildingSlotObs?.disconnect();
@@ -6221,9 +6241,9 @@ function injectCompanionBar() {
   lipBtn.addEventListener('mouseleave', () => { lipArrow.style.color = '#6b6b8a'; });
 
   let _barCollapsed = false;
-  const toggleCollapse = () => {
-    _barCollapsed = !_barCollapsed;
-    if (_barCollapsed) {
+  const _applyBarCollapse = (collapsed) => {
+    _barCollapsed = collapsed;
+    if (collapsed) {
       panel.style.maxHeight = '0';
       panel.style.padding = '0 10px';
       lipArrow.textContent = '▼';
@@ -6233,7 +6253,13 @@ function injectCompanionBar() {
       lipArrow.textContent = '▲';
     }
   };
-  lipBtn.addEventListener('click', toggleCollapse);
+  lipBtn.addEventListener('click', () => {
+    _settings.companionBarCollapsed = !_barCollapsed;
+    saveSettings();
+    _applyBarCollapse(_settings.companionBarCollapsed);
+  });
+  // Restore persisted state
+  if (_settings.companionBarCollapsed) _applyBarCollapse(true);
 
   // ── Activation toggle ───────────────────────────────────────────────────
   const activateBtn = document.createElement('button');
@@ -6379,7 +6405,8 @@ function injectSlotBadges() {
 
     const currentLvl = parseInt(btn.querySelector('.badge.btn-badge')?.textContent ?? '0');
     const currentTypeId = _getBuildingTypeId(btn);
-    const typeMatch = currentTypeId === null || currentTypeId === target.typeId;
+    // null means empty slot (lvl 0) or unrecognised sprite; only treat as "type unknown/OK" if a building is actually present
+    const typeMatch = (currentTypeId === null && currentLvl > 0) || currentTypeId === target.typeId;
     const levelMatch = currentLvl >= target.level;
 
     let bg, color, text;
@@ -6418,7 +6445,7 @@ function _applyUpgradeBlock(block) {
   if (block && _levelLockEnabled && hasSnapshot && !s) {
     s = document.createElement('style');
     s.id = 'gt-upgrade-block';
-    s.textContent = '.modal.show .btn.btn-primary.btn-icon-split.w-100 { opacity:0.4 !important; pointer-events:none !important; }';
+    s.textContent = _GT_UPGRADE_CSS;
     document.head.appendChild(s);
   } else if (!block || !_levelLockEnabled || !hasSnapshot) {
     s?.remove();
@@ -6436,8 +6463,8 @@ function _updateModalTarget() {
   }
   const btn = document.querySelector(`button.btn-building[data-slot-id="${slotId}"]`);
   const currentTypeId = _getBuildingTypeId(btn);
-  const typeMatch = currentTypeId === null || currentTypeId === target.typeId;
   const currentLvl = parseInt(btn?.querySelector('.badge.btn-badge')?.textContent ?? '0');
+  const typeMatch = (currentTypeId === null && currentLvl > 0) || currentTypeId === target.typeId;
   if (el) {
     el.style.display = '';
     if (!typeMatch) {
@@ -6702,7 +6729,7 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
     const res     = calcFlight(dist, ship, cargoWeight, emitter, reactor, totalSpeedMult, currentPF, opts);
 
     const fuelCost   = res.fuelUsed * opts.fuelPrice;
-    const repairCost = Math.ceil(opts.repairKitsTotal * res.condWear) * opts.repairKitPrice;
+    const repairCost = opts.repairKitsTotal * res.condWear * opts.repairKitPrice;
     const hasFuel    = (ship.fuel ?? 0) >= Math.ceil(res.fuelUsed);
 
     const posLeft = pf => {
