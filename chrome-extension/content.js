@@ -3064,7 +3064,7 @@ function buildSettingsPanel() {
 
   const ver = document.createElement('div');
   ver.style.cssText = 'text-align:center;font-size:10px;color:#2a2a4a;margin-top:6px;';
-  ver.textContent = 'v0.5.3';
+  ver.textContent = 'v0.5.4';
   panel.appendChild(ver);
 
   return panel;
@@ -5975,14 +5975,16 @@ function _clearCompanionTargets() {
   _updateModalTarget();
 }
 
-let _buildingKeyHandler = null;
-let _buildingModalObs   = null;
-let _buildingSlotObs    = null;
-let _buildingGridObs    = null;
+let _buildingKeyHandler  = null;
+let _buildingModalObs    = null;
+let _buildingSlotObs     = null;
+let _buildingGridObs     = null;
+let _lastClickedSlotId   = null;
 
 function _isBuildingModal() {
   const modal = document.querySelector('.modal.show');
-  return !!modal?.querySelector('.modal-header .btn-group .input-group-text');
+  return !!(modal?.querySelector('.modal-header .btn-group .input-group-text') ||
+            modal?.querySelector('.card.border-left-danger'));
 }
 
 const _GT_SCRAP_CSS = 'body.gt-building-modal .modal.show .btn.btn-danger { opacity: 0.35 !important; pointer-events: none !important; }';
@@ -6097,8 +6099,8 @@ function _styleScrapBtn(btn) { _styleToggleBtn(btn, _settings.disableScrap); }
 function _injectModalButtons(modal) {
   if (modal.querySelector('#gt-modal-btn-wrap')) return;
   const header = modal.querySelector('.modal-header');
-  const navGroup = header?.querySelector('.btn-group');
-  if (!header || !navGroup) return;
+  if (!header) return;
+  const navGroup = header.querySelector('.btn-group'); // null when only 1 building
 
   const wrap = document.createElement('div');
   wrap.id = 'gt-modal-btn-wrap';
@@ -6116,7 +6118,7 @@ function _injectModalButtons(modal) {
   wrap.appendChild(div1);
 
   // Watch slot counter changes (navigating between slots) and building badge changes (upgrades)
-  const slotCounter = header.querySelector('.btn-group .input-group-text');
+  const slotCounter = navGroup?.querySelector('.input-group-text') ?? null;
   _buildingSlotObs = new MutationObserver(() => {
     _updateModalTarget();
     // Re-observe the current slot's badge so live upgrades update the label
@@ -6183,7 +6185,11 @@ function _injectModalButtons(modal) {
 
   wrap.appendChild(hkBtn);
   wrap.appendChild(scrapBtn);
-  header.insertBefore(wrap, navGroup);
+  if (navGroup) {
+    header.insertBefore(wrap, navGroup);
+  } else {
+    header.insertBefore(wrap, header.querySelector('.btn-close'));
+  }
 
   // Always sync scrap/upgrade state when buttons are injected, regardless of external timing
   _applyScrapDisableStyle();
@@ -6464,14 +6470,15 @@ function injectCompanionBar() {
   if (!cardBody?.parentElement) return;
 
   // Load persisted state and auto-apply stored snapshot if present
-  chrome.storage.local.get(['gtCompanionBaseMap', 'gtCompanionEnabled', 'gtLevelLock', 'gtCompanionSnapshot'], ({ gtCompanionBaseMap, gtCompanionEnabled, gtLevelLock, gtCompanionSnapshot }) => {
+  chrome.storage.local.get(['gtCompanionBaseMap', 'gtCompanionEnabled', 'gtCompanionSnapshot'], ({ gtCompanionBaseMap, gtCompanionEnabled, gtCompanionSnapshot }) => {
     _baseSnapshotMap = gtCompanionBaseMap ?? {};
     _companionEnabled = gtCompanionEnabled ?? false;
     const baseId = _detectCurrentBaseId();
     const storedSnap = _companionEnabled && baseId && (gtCompanionSnapshot ?? {})[String(baseId)];
     if (storedSnap) {
       _companionTargets = _parseSnapshot(storedSnap);
-      _levelLockEnabled = gtLevelLock !== false;
+      _levelLockEnabled = true;
+      _onLockBtnRefresh?.();
       _renderCompanionBarState(bar);
       injectSlotBadges();
       _updateModalTarget();
@@ -6730,12 +6737,22 @@ function injectSlotBadges() {
     btn.style.position = 'relative';
     btn.appendChild(badge);
   });
+
+  // Capture which slot was clicked so _getCurrentSlotId() works when there's only 1 building (no nav group)
+  // Run on all buttons, not just those with targets
+  document.querySelectorAll('button.btn-building[data-slot-id]').forEach(btn => {
+    if (!btn._gtSlotClick) {
+      btn._gtSlotClick = true;
+      btn.addEventListener('click', () => { _lastClickedSlotId = btn.dataset.slotId; }, { capture: true });
+    }
+  });
 }
 
 // ── Modal target indicator ────────────────────────────────────────────────
 
 function _getCurrentSlotId() {
-  return document.querySelector('.modal.show .modal-header .btn-group .input-group-text')?.textContent?.trim();
+  return document.querySelector('.modal.show .modal-header .btn-group .input-group-text')?.textContent?.trim()
+    ?? _lastClickedSlotId ?? null;
 }
 
 function _applyUpgradeBlock(block) {
@@ -6788,7 +6805,9 @@ function _onUrlChange() {
     // Force re-inject if base changed (different planet/base)
     if (baseId !== _companionBarBaseId) {
       document.getElementById(GT_COMPANION_BAR_ID)?.remove();
-      _clearCompanionTargets();
+      _companionTargets = {};
+      _levelLockEnabled = false;  // reset; injectCompanionBar sets true if snapshot found
+      _onLockBtnRefresh?.();
       _companionBarBaseId = baseId;
     }
     if (document.querySelector('button.btn-building[data-slot-id]')) {
@@ -6806,7 +6825,9 @@ function _onUrlChange() {
     }
   } else {
     document.getElementById(GT_COMPANION_BAR_ID)?.remove();
-    _clearCompanionTargets();
+    _companionTargets = {};
+    _levelLockEnabled = false;
+    _onLockBtnRefresh?.();
     _companionBarBaseId = null;
   }
 }
@@ -6825,15 +6846,79 @@ function watchBuildingGrid() {
   _buildingGridObs = true;
 }
 
+function _isNewBuildingModal() {
+  const modal = document.querySelector('.modal.show');
+  return modal?.querySelector('h5.modal-title')?.textContent?.trim() === 'New building';
+}
+
+function _injectNewBuildingHints(modal) {
+  if (modal.querySelector('#gt-new-building-hint')) return;
+  const slotId = _lastClickedSlotId;
+  const target = slotId ? _companionTargets[slotId] : null;
+  if (!target || !_levelLockEnabled) return;
+
+  const building = _gamedata?.buildings?.find(b => b.id === target.typeId);
+  if (!building) return;
+
+  const targetTier = building.tier ?? 1;
+  const targetName = building.name;
+
+  // Sentinel so we only inject once
+  const sentinel = document.createElement('span');
+  sentinel.id = 'gt-new-building-hint';
+  sentinel.style.display = 'none';
+  modal.appendChild(sentinel);
+
+  // Blue dot prefix on the correct tier label
+  const tierRadio = modal.querySelector(`input.btn-check[name="btnradio"][value="${targetTier}"]`);
+  const tierLabel = tierRadio && modal.querySelector(`label[for="${tierRadio.id}"]`);
+  if (tierLabel && !tierLabel.querySelector('.gt-tier-dot')) {
+    const dot = document.createElement('span');
+    dot.className = 'gt-tier-dot';
+    dot.style.cssText = 'display:inline-block;width:6px;height:6px;border-radius:50%;background:#60a5fa;margin-right:5px;vertical-align:middle;flex-shrink:0;';
+    tierLabel.insertBefore(dot, tierLabel.firstChild);
+  }
+
+  // Apply highlights to currently visible rows
+  const applyHighlights = () => {
+    const rows = [...modal.querySelectorAll('.modal-body .mt-2.p-2.bg-body.box-section-hover.rounded-3')];
+    let matchRow = null;
+    for (const row of rows) {
+      const name = row.querySelector('.fw-bold')?.textContent?.trim();
+      const buildBtn = row.querySelector('button.btn-primary.btn-icon-split');
+      if (name === targetName) {
+        matchRow = row;
+        row.style.boxShadow = '';
+        if (buildBtn) { buildBtn.style.opacity = ''; buildBtn.style.pointerEvents = ''; }
+      } else {
+        row.style.boxShadow = '';
+        if (buildBtn) { buildBtn.style.opacity = '0.25'; buildBtn.style.pointerEvents = 'none'; }
+      }
+    }
+    if (matchRow) {
+      const list = matchRow.parentElement;
+      const firstRow = list.querySelector('.mt-2.p-2.bg-body.box-section-hover.rounded-3');
+      if (firstRow && matchRow !== firstRow) list.insertBefore(matchRow, firstRow);
+    }
+  };
+
+  applyHighlights();
+
+  // Re-apply when tier changes (list re-renders)
+  new MutationObserver(_debounce(applyHighlights, 80))
+    .observe(modal.querySelector('.modal-body'), { childList: true, subtree: true });
+}
+
 function watchBuildingModal() {
   if (_buildingModalObs) return;
   _buildingModalObs = new MutationObserver(() => {
     if (document.body.classList.contains('modal-open')) {
-      // Retry until _isBuildingModal() is true (slot counter may not render immediately)
       let attempts = 0;
       const tryBind = () => {
         if (_isBuildingModal()) {
           _bindBuildingKeys();
+        } else if (_isNewBuildingModal()) {
+          _injectNewBuildingHints(document.querySelector('.modal.show'));
         } else if (++attempts < 10) {
           setTimeout(tryBind, 100);
         }
