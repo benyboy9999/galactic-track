@@ -539,6 +539,14 @@ const DEFAULT_SETTINGS = {
   headerCollapsed:      false,
   companionBarCollapsed: false,
   useTargets:       false,
+  chatShortcutsEnabled:       true,
+  materialAutocompleteEnabled: true,
+  chatLinksEnabled:           true,
+  chatShortcuts: [
+    { trigger: 'extension', message: 'https://galactic-track.com/extension' },
+    { trigger: 'gtc',       message: 'https://gt-companion.com' },
+    { trigger: 'bawk',      message: 'BAWK BAWK \uD83D\uDC14' },
+  ],
 };
 
 let _settings = { ...DEFAULT_SETTINGS };
@@ -547,6 +555,11 @@ async function loadSettings() {
   return new Promise(resolve => {
     chrome.storage.local.get(['gtSettings'], ({ gtSettings }) => {
       _settings = { ...DEFAULT_SETTINGS, ...(gtSettings ?? {}) };
+      // Seed default shortcuts for users who have an empty array from before defaults existed
+      if (!_settings.chatShortcuts?.length) {
+        _settings.chatShortcuts = [...DEFAULT_SETTINGS.chatShortcuts];
+        saveSettings();
+      }
       resolve(_settings);
     });
   });
@@ -3047,6 +3060,14 @@ function buildSettingsPanel() {
   customPricesBtn.addEventListener('click', () => openCustomPricesModal());
   panel.appendChild(customPricesBtn);
 
+  const shortcutsBtn = document.createElement('button');
+  shortcutsBtn.textContent = '\u{1F4AC} Chat Shortcuts';
+  shortcutsBtn.style.cssText = 'width:100%;background:#1a1a30;border:1px solid #2a2a4a;border-radius:4px;color:#9090b0;font-size:11px;padding:5px 8px;cursor:pointer;text-align:left;margin-top:4px;transition:color 0.15s,border-color 0.15s;';
+  shortcutsBtn.addEventListener('mouseenter', () => { shortcutsBtn.style.color = '#d8d8f0'; shortcutsBtn.style.borderColor = '#4a4a6a'; });
+  shortcutsBtn.addEventListener('mouseleave', () => { shortcutsBtn.style.color = '#9090b0'; shortcutsBtn.style.borderColor = '#2a2a4a'; });
+  shortcutsBtn.addEventListener('click', () => openChatShortcutsModal());
+  panel.appendChild(shortcutsBtn);
+
   // Visit link
   const sepLink = document.createElement('div');
   sepLink.style.cssText = 'border-top:1px solid #1a1a30;margin:10px 0 8px;';
@@ -3288,6 +3309,181 @@ async function openCustomPricesModal() {
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
   searchInput.focus();
+}
+
+function openChatShortcutsModal() {
+  const MODAL_ID = 'gt-chat-shortcuts-modal';
+  document.getElementById(MODAL_ID)?.remove();
+
+  // Overlay
+  const overlay = document.createElement('div');
+  overlay.id = MODAL_ID;
+  Object.assign(overlay.style, {
+    position: 'fixed', inset: '0',
+    background: 'rgba(0,0,0,0.72)',
+    zIndex: '2147483646',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontFamily: 'system-ui, sans-serif',
+  });
+
+  // Modal box
+  const modal = document.createElement('div');
+  Object.assign(modal.style, {
+    background: '#0d0d20',
+    border: '1px solid #2a2a4a',
+    borderRadius: '10px',
+    width: '560px',
+    maxWidth: '96vw',
+    maxHeight: '88vh',
+    display: 'flex',
+    flexDirection: 'column',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.7)',
+    overflow: 'hidden',
+    fontSize: '12px',
+    color: '#b0b0cc',
+  });
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 14px 10px;border-bottom:1px solid #1a1a30;flex-shrink:0;';
+  const titleSpan = document.createElement('span');
+  titleSpan.style.cssText = 'font-size:13px;font-weight:700;color:#d8d8f0;';
+  titleSpan.textContent = 'Chat Shortcuts';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '\u00d7';
+  closeBtn.style.cssText = 'background:none;border:none;color:#6b6b8a;font-size:18px;cursor:pointer;line-height:1;padding:0 2px;';
+  closeBtn.addEventListener('click', () => overlay.remove());
+  hdr.appendChild(titleSpan);
+  hdr.appendChild(closeBtn);
+  modal.appendChild(hdr);
+
+  // ── Toggles ───────────────────────────────────────────────────────────────
+  const togglesWrap = document.createElement('div');
+  togglesWrap.style.cssText = 'display:flex;gap:16px;align-items:center;padding:8px 14px;border-bottom:1px solid #1a1a30;flex-shrink:0;flex-wrap:wrap;';
+
+  const mkToggleRow = (label, settingKey) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:7px;';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = 'font-size:11px;color:#9090b0;';
+    lbl.textContent = label;
+    const tog = buildMiniToggle(_settings[settingKey] !== false, (val) => {
+      _settings[settingKey] = val;
+      saveSettings();
+    });
+    row.appendChild(lbl);
+    row.appendChild(tog);
+    return row;
+  };
+
+  togglesWrap.appendChild(mkToggleRow('/ Shortcuts', 'chatShortcutsEnabled'));
+  togglesWrap.appendChild(mkToggleRow(': Material autocomplete', 'materialAutocompleteEnabled'));
+  togglesWrap.appendChild(mkToggleRow('Hyperlinks', 'chatLinksEnabled'));
+  modal.appendChild(togglesWrap);
+
+  // ── Add form ──────────────────────────────────────────────────────────────
+  const formWrap = document.createElement('div');
+  formWrap.style.cssText = 'display:flex;gap:6px;align-items:flex-start;padding:10px 14px;border-bottom:1px solid #1a1a30;flex-shrink:0;';
+
+  const inpStyle = 'background:#1a1a30;border:1px solid #2a2a4a;border-radius:5px;color:#d8d8f0;font-size:12px;padding:5px 8px;outline:none;box-sizing:border-box;';
+
+  const triggerInp = document.createElement('input');
+  triggerInp.type = 'text';
+  triggerInp.placeholder = 'shortcut';
+  triggerInp.style.cssText = inpStyle + 'width:120px;flex-shrink:0;';
+
+  const messageInp = document.createElement('input');
+  messageInp.type = 'text';
+  messageInp.placeholder = 'Message text\u2026';
+  messageInp.style.cssText = inpStyle + 'flex:1;';
+
+  const errSpan = document.createElement('span');
+  errSpan.style.cssText = 'color:#f87171;font-size:11px;display:none;white-space:nowrap;align-self:center;';
+
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '+ Add';
+  addBtn.style.cssText = 'background:#1e1440;border:1px solid #4c1d95;border-radius:4px;color:#a78bfa;font-size:11px;padding:5px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;';
+
+  formWrap.appendChild(triggerInp);
+  formWrap.appendChild(messageInp);
+  formWrap.appendChild(errSpan);
+  formWrap.appendChild(addBtn);
+  modal.appendChild(formWrap);
+
+  // ── Scrollable list ───────────────────────────────────────────────────────
+  const list = document.createElement('div');
+  list.style.cssText = 'overflow-y:auto;flex:1;padding:6px 14px 10px;';
+
+  const renderList = () => {
+    list.innerHTML = '';
+    const shortcuts = _settings.chatShortcuts ?? [];
+    if (!shortcuts.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color:#3a3a5a;font-size:12px;text-align:center;padding:24px 0;';
+      empty.textContent = 'No shortcuts yet. Add one above.';
+      list.appendChild(empty);
+      return;
+    }
+    shortcuts.forEach((sc, idx) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #0f0f22;';
+
+      const triggerSpan = document.createElement('span');
+      triggerSpan.style.cssText = 'color:#a78bfa;font-weight:600;white-space:nowrap;font-size:12px;flex-shrink:0;min-width:80px;';
+      triggerSpan.textContent = '/' + sc.trigger;
+
+      const msgSpan = document.createElement('span');
+      msgSpan.style.cssText = 'flex:1;color:#9090b0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      msgSpan.textContent = sc.message;
+
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '\u2715';
+      delBtn.style.cssText = 'background:none;border:none;color:#4a4a6a;font-size:13px;cursor:pointer;padding:0 2px;flex-shrink:0;line-height:1;';
+      delBtn.addEventListener('mouseenter', () => { delBtn.style.color = '#f87171'; });
+      delBtn.addEventListener('mouseleave', () => { delBtn.style.color = '#4a4a6a'; });
+      delBtn.addEventListener('click', () => {
+        _settings.chatShortcuts.splice(idx, 1);
+        saveSettings();
+        renderList();
+      });
+
+      row.appendChild(triggerSpan);
+      row.appendChild(msgSpan);
+      row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  };
+
+  renderList();
+  modal.appendChild(list);
+
+  // ── Add logic ─────────────────────────────────────────────────────────────
+  const showErr = (msg) => { errSpan.textContent = msg; errSpan.style.display = ''; setTimeout(() => { errSpan.style.display = 'none'; }, 2500); };
+
+  const doAdd = () => {
+    const trigger = triggerInp.value.trim().replace(/^\/+/, '');
+    const message = messageInp.value.trim();
+    if (!trigger) { showErr('Shortcut required'); triggerInp.focus(); return; }
+    if (!message) { showErr('Message required'); messageInp.focus(); return; }
+    if (!_settings.chatShortcuts) _settings.chatShortcuts = [];
+    if (_settings.chatShortcuts.some(sc => sc.trigger.toLowerCase() === trigger.toLowerCase())) {
+      showErr('Already exists'); triggerInp.focus(); return;
+    }
+    _settings.chatShortcuts.push({ trigger, message });
+    saveSettings();
+    triggerInp.value = '';
+    messageInp.value = '';
+    renderList();
+    triggerInp.focus();
+  };
+
+  addBtn.addEventListener('click', doAdd);
+  messageInp.addEventListener('keydown', e => { if (e.key === 'Enter') doAdd(); });
+
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  triggerInp.focus();
 }
 
 // Cached references for live chip updates
@@ -6262,6 +6458,10 @@ function _isOnCommsPage() {
   return /\/comms\//.test(location.pathname);
 }
 
+function _isOnGalaxyPage() {
+  return /^\/galaxy/.test(location.pathname);
+}
+
 function _parseSnapshot(snapshot) {
   const targets = {};
   for (const slot of snapshot.buildingSlotOverrides ?? []) {
@@ -6835,8 +7035,15 @@ function _onUrlChange() {
     _companionBarBaseId = null;
     if (_isOnCommsPage()) {
       _watchCommsInput();
+      _watchCommsLinks();
     } else {
       _disconnectCommsObs();
+      _disconnectCommsLinksObs();
+    }
+    if (_isOnGalaxyPage()) {
+      watchGalaxyOffcanvas();
+    } else {
+      _disconnectGalaxyOffcanvasObs();
     }
   }
 }
@@ -6862,6 +7069,65 @@ function _disconnectCommsObs() {
   document.getElementById('gt-chat-autocomplete')?.remove();
 }
 
+// ── Comms chat link detection ─────────────────────────────────────────────────
+
+let _commsLinksObs = null;
+const _GT_LINK_REGEX = /https?:\/\/[^\s<>"')\]]+/g;
+
+function _linkifyElement(el) {
+  if (!el || el.nodeType !== Node.ELEMENT_NODE) return;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: n => (n.parentElement?.tagName === 'A' || n.parentElement?.dataset?.gtLinkified)
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const textNodes = [];
+  let n;
+  while ((n = walker.nextNode())) {
+    if (_GT_LINK_REGEX.test(n.textContent)) textNodes.push(n);
+    _GT_LINK_REGEX.lastIndex = 0;
+  }
+  textNodes.forEach(node => {
+    const text = node.textContent;
+    _GT_LINK_REGEX.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let last = 0, m;
+    while ((m = _GT_LINK_REGEX.exec(text)) !== null) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const a = document.createElement('a');
+      a.href = m[0];
+      a.textContent = m[0];
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.style.cssText = 'color:inherit;word-break:break-all;text-decoration:underline;text-underline-offset:2px;opacity:0.85;transition:opacity 0.15s;';
+      a.addEventListener('mouseenter', () => { a.style.opacity = '1'; a.style.textDecorationColor = 'currentColor'; });
+      a.addEventListener('mouseleave', () => { a.style.opacity = '0.85'; });
+      frag.appendChild(a);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode?.replaceChild(frag, node);
+  });
+}
+
+function _watchCommsLinks() {
+  if (_commsLinksObs) return;
+  if (_settings.chatLinksEnabled !== false) {
+    document.querySelectorAll('.card-body').forEach(_linkifyElement);
+  }
+  _commsLinksObs = new MutationObserver(mutations => {
+    if (_settings.chatLinksEnabled === false) return;
+    mutations.forEach(mut => {
+      mut.addedNodes.forEach(node => _linkifyElement(node));
+    });
+  });
+  _commsLinksObs.observe(document.body, { childList: true, subtree: true });
+}
+
+function _disconnectCommsLinksObs() {
+  _commsLinksObs?.disconnect();
+  _commsLinksObs = null;
+}
+
 async function _attachChatAutocomplete(input) {
   input._gtAutocomplete = true;
   const gamedata = await loadGamedata();
@@ -6877,12 +7143,21 @@ async function _attachChatAutocomplete(input) {
   document.body.appendChild(drop);
 
   let _activeIdx = -1;
+  let _applyFns  = [];
 
   function getQuery() {
     const val = input.value;
     const cursor = input.selectionStart ?? val.length;
     const before = val.slice(0, cursor);
     const m = before.match(/:([^:\s]*)$/);
+    return m ? m[1] : null;
+  }
+
+  function getShortcutQuery() {
+    const val = input.value;
+    const cursor = input.selectionStart ?? val.length;
+    const before = val.slice(0, cursor);
+    const m = before.match(/\/([^\s]*)$/);
     return m ? m[1] : null;
   }
 
@@ -6918,9 +7193,20 @@ async function _attachChatAutocomplete(input) {
     input.focus();
   }
 
+  function applyShortcut(message) {
+    input.value = message;
+    input.selectionStart = input.selectionEnd = message.length;
+    drop.style.display = 'none';
+    _activeIdx = -1;
+    _suppressInput = true;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+  }
+
   function showDrop(matches) {
     drop.innerHTML = '';
     _activeIdx = -1;
+    _applyFns = [];
     if (!matches.length) { drop.style.display = 'none'; return; }
     matches.slice(0, 8).forEach((mat, i) => {
       const li = document.createElement('li');
@@ -6934,9 +7220,45 @@ async function _attachChatAutocomplete(input) {
       label.textContent = ':' + mat.name;
       li.appendChild(label);
 
+      const fn = () => applyMatch(mat.name);
+      _applyFns[i] = fn;
       li.addEventListener('mouseenter', () => setActive(i));
       li.addEventListener('mousedown', e => e.preventDefault());
-      li.addEventListener('click', () => applyMatch(mat.name));
+      li.addEventListener('click', fn);
+      drop.appendChild(li);
+    });
+    positionDrop();
+    drop.style.display = 'block';
+    setActive(0);
+  }
+
+  function showShortcutDrop(matches) {
+    drop.innerHTML = '';
+    _activeIdx = -1;
+    _applyFns = [];
+    if (!matches.length) { drop.style.display = 'none'; return; }
+    matches.slice(0, 8).forEach((sc, i) => {
+      const li = document.createElement('li');
+      li.className = 'dropdown-item d-flex align-items-center gap-2';
+      li.style.cursor = 'pointer';
+
+      const triggerSpan = document.createElement('span');
+      triggerSpan.className = 'fw-semibold text-nowrap';
+      triggerSpan.textContent = '/' + sc.trigger;
+
+      const preview = document.createElement('span');
+      preview.className = 'text-body-tertiary text-truncate';
+      preview.style.fontSize = '11px';
+      preview.textContent = sc.message.length > 60 ? sc.message.slice(0, 57) + '\u2026' : sc.message;
+
+      li.appendChild(triggerSpan);
+      li.appendChild(preview);
+
+      const fn = () => applyShortcut(sc.message);
+      _applyFns[i] = fn;
+      li.addEventListener('mouseenter', () => setActive(i));
+      li.addEventListener('mousedown', e => e.preventDefault());
+      li.addEventListener('click', fn);
       drop.appendChild(li);
     });
     positionDrop();
@@ -6946,10 +7268,26 @@ async function _attachChatAutocomplete(input) {
 
   input.addEventListener('input', () => {
     if (_suppressInput) { _suppressInput = false; return; }
-    const q = getQuery();
-    if (q === null || q.length === 0) { drop.style.display = 'none'; return; }
-    const matches = materials.filter(m => m.name.toLowerCase().includes(q.toLowerCase()));
-    showDrop(matches);
+
+    if (_settings.chatShortcutsEnabled !== false) {
+      const sq = getShortcutQuery();
+      if (sq !== null) {
+        const shortcuts = _settings.chatShortcuts ?? [];
+        const matches = shortcuts.filter(sc => sc.trigger.toLowerCase().startsWith(sq.toLowerCase()));
+        showShortcutDrop(matches);
+        return;
+      }
+    }
+
+    if (_settings.materialAutocompleteEnabled !== false) {
+      const q = getQuery();
+      if (q === null || q.length === 0) { drop.style.display = 'none'; return; }
+      const matches = materials.filter(m => m.name.toLowerCase().includes(q.toLowerCase()));
+      showDrop(matches);
+      return;
+    }
+
+    drop.style.display = 'none';
   });
 
   input.addEventListener('keydown', e => {
@@ -6963,8 +7301,7 @@ async function _attachChatAutocomplete(input) {
       setActive(Math.max(_activeIdx - 1, 0));
     } else if ((e.key === 'Enter' || e.key === 'Tab') && _activeIdx >= 0) {
       e.preventDefault();
-      const name = items[_activeIdx].querySelector('span')?.textContent?.slice(1) ?? '';
-      if (name) applyMatch(name);
+      _applyFns[_activeIdx]?.();
     } else if (e.key === 'Escape') {
       drop.style.display = 'none';
     }
@@ -7077,7 +7414,8 @@ function watchBuildingModal() {
 
 // ── Flight modal injection ─────────────────────────────────────────────────────
 
-let _flightModalObs = null;
+let _flightModalObs    = null;
+let _galaxyOffcanvasObs = null;
 
 function watchFlightModal() {
   if (_flightModalObs) return;
@@ -7091,6 +7429,34 @@ function watchFlightModal() {
     }, 300);
   });
   _flightModalObs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+}
+
+function watchGalaxyOffcanvas() {
+  if (_galaxyOffcanvasObs) return;
+
+  const tryObserve = () => {
+    const panel = document.getElementById('offcanvasGalaxy');
+    if (!panel) return false;
+    _galaxyOffcanvasObs = new MutationObserver(() => {
+      if (!panel.classList.contains('show')) return;
+      if (!panel.querySelector('button[data-btn-start-flight]')) return;
+      if (panel.querySelector('#gt-fi')) return;
+      _setupFlightModalInjection(panel);
+    });
+    _galaxyOffcanvasObs.observe(panel, { attributes: true, attributeFilter: ['class'] });
+    return true;
+  };
+
+  if (!tryObserve()) {
+    const bodyObs = new MutationObserver(() => { if (tryObserve()) bodyObs.disconnect(); });
+    bodyObs.observe(document.body, { childList: true, subtree: true });
+    _galaxyOffcanvasObs = { disconnect: () => bodyObs.disconnect() };
+  }
+}
+
+function _disconnectGalaxyOffcanvasObs() {
+  _galaxyOffcanvasObs?.disconnect();
+  _galaxyOffcanvasObs = null;
 }
 
 async function _setupFlightModalInjection(modal) {
@@ -7129,7 +7495,7 @@ async function _setupFlightModalInjection(modal) {
     if (!modal.isConnected) { cardObs.disconnect(); return; }
     if (!modal.querySelector('#gt-fi')) inject();
   }, 200));
-  cardObs.observe(modal.querySelector('.modal-body') ?? modal, { childList: true, subtree: true });
+  cardObs.observe(modal.querySelector('.modal-body, .offcanvas-body') ?? modal, { childList: true, subtree: true });
 }
 
 function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
