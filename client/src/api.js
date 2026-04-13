@@ -66,9 +66,7 @@ export const api = {
   revokeAccount: ()       => del('/auth/account', true),
 
   // ── Items ──────────────────────────────────────────────────────────────────
-  allItems:    ()       => get('/items'),
-  trackItem:   (matId)  => post('/items/track', { matId }, true),
-  untrackItem: (matId)  => del(`/items/track/${matId}`, true),
+  allItems: () => get('/items'),
 
   // ── Exchange ───────────────────────────────────────────────────────────────
   prices:      () => get('/exchange/prices'),

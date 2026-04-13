@@ -1,21 +1,16 @@
 /**
  * Market Tracker Service
  *
- * Polls mat-details every 60 seconds for all actively tracked items.
- * Items and their owner API keys are loaded from the DB each cycle so new
- * registrations are picked up without a server restart.
+ * Polls /public/exchange/mat-details every 60 seconds using the master API key,
+ * fetching all materials in a single call (60 units). All materials are tracked
+ * automatically — no user registration required.
  *
- * Each item is polled using its owner's API key (their own 500-unit budget).
- * Items with no owner (unclaimed) are skipped until a user claims them.
- *
- * Rate budget: 5 units per item per poll.
- * Revoke detection: 401/403 from GT API marks the owner as revoked.
+ * Rate budget: 60 units per poll (master key: 2500 units / 10-min window).
  * Retention: tracker_orders pruned to the 2 most recent snapshots per item (hourly via index.js).
  */
 
 import pool from '../database/db.js';
-import { gtFetch } from './gtApi.js';
-import { decryptApiKey, hashApiKey } from '../utils/apiKeyCrypto.js';
+import { gtFetch, MASTER_KEY } from './gtApi.js';
 
 // ── Game price increment lookup ────────────────────────────────────────────────
 function gameIncrement(priceCents) {
@@ -30,36 +25,13 @@ function gameIncrement(priceCents) {
 }
 
 const POLL_INTERVAL_MS = 60_000;
-const UNITS_PER_ITEM   = 5;
+const UNITS_ALL        = 60;
 
 let intervalHandle = null;
 let lastError      = null;
 let pollCount      = 0;
 let lastPollAt     = null;
 const recentErrors = []; // rolling last-50 errors for admin panel
-
-// ── Load tracked items from DB ─────────────────────────────────────────────────
-
-async function loadTrackedItems() {
-  const r = await pool.query(
-    `SELECT ti.mat_id          AS "matId",
-            ti.mat_name        AS "matName",
-            u.api_key_encrypted AS "apiKeyEnc"
-     FROM tracked_items ti
-     LEFT JOIN users u ON u.id = ti.owner_user_id AND u.revoked = FALSE
-     WHERE ti.active = TRUE`
-  );
-  return r.rows.map((row) => ({
-    ...row,
-    apiKey: row.apiKeyEnc ? decryptApiKey(row.apiKeyEnc) : null,
-  }));
-}
-
-// ── API fetch ──────────────────────────────────────────────────────────────────
-
-function fetchMatDetails(matId, apiKey) {
-  return gtFetch(`/public/exchange/mat-details/${matId}`, UNITS_PER_ITEM, apiKey);
-}
 
 // ── DB helpers ─────────────────────────────────────────────────────────────────
 
@@ -147,16 +119,25 @@ function diffOrderBooks(prevOrders, currOrders, matId, snapshotAId, snapshotBId)
   return events;
 }
 
-// ── Poll one item ──────────────────────────────────────────────────────────────
+// ── Process one material from the bulk response ────────────────────────────────
 
-async function pollItem(item) {
-  const data = await fetchMatDetails(item.matId, item.apiKey);
+async function processMaterial(mat) {
+  const matId   = mat.matId;
+  const matName = mat.matName;
 
   const todayStr     = new Date().toISOString().slice(0, 10);
-  const priceHistory = data.priceHistory ?? [];
+  const priceHistory = mat.priceHistory ?? [];
   const todayHistory = priceHistory.find((h) => h.date === todayStr) ?? priceHistory[0] ?? null;
   const apiQtySold     = todayHistory?.qtySold ?? null;
   const apiQtySoldDate = todayHistory?.date    ?? null;
+
+  // Auto-register in tracked_items if not already present
+  await pool.query(
+    `INSERT INTO tracked_items(mat_id, mat_name, active)
+     VALUES($1, $2, TRUE)
+     ON CONFLICT(mat_id) DO NOTHING`,
+    [matId, matName]
+  );
 
   // Read-only aggregate — run before opening the transaction to keep it short
   const qspSalesRes = await pool.query(
@@ -164,7 +145,7 @@ async function pollItem(item) {
              THEN ABS(qty_change) ELSE 0 END), 0)::bigint AS sold
      FROM tracker_events
      WHERE mat_id = $1 AND recorded_at > NOW() - INTERVAL '6 hours'`,
-    [item.matId]
+    [matId]
   );
   const hourly_rate = Number(qspSalesRes.rows[0].sold) / 6;
 
@@ -172,8 +153,8 @@ async function pollItem(item) {
   try {
     await client.query('BEGIN');
 
-    const prevSnap = await getLastSnapshot(item.matId);
-    const snapId   = await saveSnapshot(client, data, apiQtySold, apiQtySoldDate);
+    const prevSnap = await getLastSnapshot(matId);
+    const snapId   = await saveSnapshot(client, mat, apiQtySold, apiQtySoldDate);
 
     let attributedSold = 0;
     let qtyListed      = 0;
@@ -184,11 +165,11 @@ async function pollItem(item) {
         orderId: o.orderId, companyId: o.companyId, companyName: o.companyName,
         unitPrice: o.unitPrice, qty: Number(o.qty),
       }));
-      const currOrders = (data.orders ?? []).map((o) => ({
+      const currOrders = (mat.orders ?? []).map((o) => ({
         orderId: o.id, companyId: o.cId, companyName: o.cName, unitPrice: o.unitPrice, qty: o.qty,
       }));
 
-      const events = diffOrderBooks(prevOrders, currOrders, item.matId, prevSnap.id, snapId);
+      const events = diffOrderBooks(prevOrders, currOrders, matId, prevSnap.id, snapId);
 
       if (events.length > 0) {
         await saveEvents(client, events);
@@ -206,7 +187,7 @@ async function pollItem(item) {
         if (attributedSold) parts.push(`${attributedSold.toLocaleString()} sold`);
         if (qtyListed)      parts.push(`${qtyListed.toLocaleString()} listed`);
         if (qtyCancelled)   parts.push(`${qtyCancelled.toLocaleString()} cancelled`);
-        if (parts.length)   console.log(`[tracker] ${item.matName}: ${parts.join(', ')}`);
+        if (parts.length)   console.log(`[tracker] ${matName}: ${parts.join(', ')}`);
       }
     }
 
@@ -223,7 +204,7 @@ async function pollItem(item) {
         const flash     = Math.max(0, deltaSold - attributedSold);
         if (flash > 0) {
           await client.query(`UPDATE tracker_snapshots SET flash_qty = $1 WHERE id = $2`, [flash, snapId]);
-          console.log(`[tracker] ${item.matName}: ${flash.toLocaleString()} flash sales`);
+          console.log(`[tracker] ${matName}: ${flash.toLocaleString()} flash sales`);
         }
       }
     }
@@ -231,7 +212,7 @@ async function pollItem(item) {
     // ── Quick sell price ──────────────────────────────────────────────────────
     if (hourly_rate > 0) {
       const priceMap = new Map();
-      for (const o of data.orders ?? []) {
+      for (const o of mat.orders ?? []) {
         priceMap.set(Number(o.unitPrice), (priceMap.get(Number(o.unitPrice)) ?? 0) + Number(o.qty));
       }
       const tiers = [...priceMap.entries()].sort(([a], [b]) => a - b);
@@ -256,7 +237,7 @@ async function pollItem(item) {
   }
 
   // Check price alerts outside the transaction (fire-and-forget)
-  checkPriceAlerts(item.matId, data.currentPrice).catch((e) =>
+  checkPriceAlerts(matId, mat.currentPrice).catch((e) =>
     console.error('[tracker] price alert check failed:', e.message)
   );
 }
@@ -290,81 +271,42 @@ async function checkPriceAlerts(matId, currentPrice) {
   }
 }
 
-
 // ── Poll cycle ─────────────────────────────────────────────────────────────────
 
-async function pollAll() {
+async function runPoll() {
   lastPollAt = new Date().toISOString();
   pollCount++;
 
-  const items = await loadTrackedItems();
-
-  for (const item of items) {
-    if (!item.apiKey) {
-      // Unclaimed item — no key to poll with
-      continue;
-    }
-    try {
-      await pollItem(item);
-    } catch (err) {
-      if (err.status === 401 || err.status === 403) {
-        // Key revoked in-game — mark user as revoked and disable their tracked items
-        try {
-          const revoked = await pool.query(
-            `UPDATE users SET revoked = TRUE WHERE api_key = $1 RETURNING id, company_name`,
-            [hashApiKey(item.apiKey)]
-          );
-          if (revoked.rows.length > 0) {
-            const { id: userId, company_name: companyName } = revoked.rows[0];
-            const items = await pool.query(
-              `UPDATE tracked_items SET active = FALSE
-               WHERE owner_user_id = $1 AND active = TRUE
-               RETURNING mat_id, mat_name`,
-              [userId]
-            );
-            if (items.rows.length > 0) {
-              await pool.query(
-                `UPDATE users SET credits_used = GREATEST(0, credits_used - $1) WHERE id = $2`,
-                [items.rows.length, userId]
-              );
-              for (const { mat_id, mat_name } of items.rows) {
-                await pool.query(
-                  `INSERT INTO tracking_log(mat_id, mat_name, user_id, company_name, action, by_admin)
-                   VALUES($1, $2, $3, $4, 'untracked', FALSE)`,
-                  [mat_id, mat_name, userId, companyName]
-                ).catch(e => console.error('[tracker] tracking_log insert failed:', e.message));
-                pool.query(
-                  `INSERT INTO notifications(user_id, type, mat_name, from_company)
-                   SELECT id, 'untracked', $1, $2 FROM users WHERE role = 'admin'`,
-                  [mat_name, companyName]
-                ).catch(e => console.error('[tracker] notification insert failed:', e.message));
-              }
-            }
-          }
-          console.warn(`[tracker] API key revoked for ${item.matName} owner — stopping their polls`);
-        } catch { /* ignore */ }
-      } else if (err.rateLimited) {
-        console.warn(`[tracker] rate limited — skipping ${item.matName} this cycle`);
-      } else {
-        lastError = { item: item.matName, message: err.message, at: new Date().toISOString() };
+  try {
+    const data      = await gtFetch('/public/exchange/mat-details', UNITS_ALL, MASTER_KEY);
+    const materials = data?.materials ?? [];
+    console.log(`[tracker] poll #${pollCount} — processing ${materials.length} materials`);
+    await Promise.allSettled(materials.map((m) =>
+      processMaterial(m).catch((err) => {
+        lastError = { item: m.matName, message: err.message, at: new Date().toISOString() };
         recentErrors.unshift(lastError);
         if (recentErrors.length > 50) recentErrors.pop();
-        console.error(`[tracker] error for ${item.matName}:`, err.message);
-      }
-    }
+        console.error(`[tracker] error for ${m.matName}:`, err.message);
+      })
+    ));
+  } catch (err) {
+    lastError = { item: 'pollAll', message: err.message, at: new Date().toISOString() };
+    recentErrors.unshift(lastError);
+    if (recentErrors.length > 50) recentErrors.pop();
+    console.error('[tracker] poll failed:', err.message);
   }
-
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 export function startTracker() {
-  loadTrackedItems().then((items) => {
-    const names = items.map((i) => i.matName).join(', ') || '(none — awaiting user registration)';
-    console.log(`[tracker] starting — polling: ${names} every ${POLL_INTERVAL_MS / 1000}s`);
-  });
-  pollAll();
-  intervalHandle = setInterval(pollAll, POLL_INTERVAL_MS);
+  if (!MASTER_KEY) {
+    console.warn('[tracker] GT_MASTER_API_KEY not set — tracker disabled');
+    return;
+  }
+  console.log(`[tracker] starting — polling all materials every ${POLL_INTERVAL_MS / 1000}s`);
+  runPoll();
+  intervalHandle = setInterval(runPoll, POLL_INTERVAL_MS);
 }
 
 export function stopTracker() {

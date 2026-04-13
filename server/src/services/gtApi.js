@@ -3,15 +3,21 @@ import pool from '../database/db.js';
 
 const BASE = process.env.GT_API_BASE;
 
-const TOTAL_BUDGET = 500; // points per 10-min window per API key
+const TOTAL_BUDGET  = 500;  // points per 10-min window for regular keys
+const MASTER_BUDGET = 2500; // elevated budget for the master key
+export const MASTER_KEY = process.env.GT_MASTER_API_KEY ?? null;
+
+function _budget(apiKey) {
+  return (MASTER_KEY && apiKey === MASTER_KEY) ? MASTER_BUDGET : TOTAL_BUDGET;
+}
 
 // ── Per-key rate limit state ───────────────────────────────────────────────────
-// Each user's API key has its own independent 500-unit budget.
+// Each API key has its own independent budget tracked in memory.
 const rlMap = new Map(); // apiKey → { remaining, resetSec, updatedAt, ourSpend }
 
 function getRl(apiKey) {
   if (!rlMap.has(apiKey)) {
-    rlMap.set(apiKey, { remaining: TOTAL_BUDGET, resetSec: 600, updatedAt: 0, ourSpend: 0 });
+    rlMap.set(apiKey, { remaining: _budget(apiKey), resetSec: 600, updatedAt: 0, ourSpend: 0 });
   }
   return rlMap.get(apiKey);
 }
@@ -33,7 +39,7 @@ function _estimated(apiKey) {
   // call can get through and refresh the actual remaining count from headers.
   if (rl.updatedAt > 0) {
     const elapsed = (Date.now() - rl.updatedAt) / 1000;
-    if (elapsed >= rl.resetSec) return TOTAL_BUDGET;
+    if (elapsed >= rl.resetSec) return _budget(apiKey);
   }
   return Math.max(0, rl.remaining - rl.ourSpend);
 }
@@ -164,7 +170,7 @@ export function getRateLimitStatus(apiKey = null) {
   return {
     remaining:   rl.remaining,
     resetIn:     Math.round(Math.max(0, rl.resetSec - elapsed)),
-    totalBudget: TOTAL_BUDGET,
+    totalBudget: _budget(apiKey),
   };
 }
 
@@ -177,7 +183,7 @@ export function getRateLimitStatusAll() {
       apiKey,   // will be joined with company name in admin route
       remaining:   rl.remaining,
       resetIn:     Math.round(Math.max(0, rl.resetSec - elapsed)),
-      totalBudget: TOTAL_BUDGET,
+      totalBudget: _budget(apiKey),
     });
   }
   return out;

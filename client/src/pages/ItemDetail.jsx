@@ -989,8 +989,6 @@ export default function ItemDetail() {
   const [status,      setStatus]      = useState(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [pollsInWindow, setPollsInWindow] = useState(null);
-  const [tracking,    setTracking]    = useState(false);
-  const [trackErr,    setTrackErr]    = useState('');
   const [alertsOpen,   setAlertsOpen]   = useState(false);
   const [alerts,       setAlerts]       = useState([]);
   const [alertPrice,   setAlertPrice]   = useState('');
@@ -1064,21 +1062,6 @@ export default function ItemDetail() {
     setAlerts((prev) => prev.filter((a) => a.id !== id));
   }
 
-  async function handleTrack() {
-    setTracking(true);
-    setTrackErr('');
-    try {
-      await api.trackItem(item.matId);
-      await Promise.all([loadItem(), refreshUser()]);
-    } catch (e) {
-      setTrackErr(e.message);
-    } finally {
-      setTracking(false);
-    }
-  }
-
-  const hasCredits = (user?.creditsUsed ?? 0) < (user?.creditsTotal ?? 3);
-
   if (itemLoading) return <div style={{ padding: 40, textAlign: 'center' }}><Spinner /></div>;
   if (!item)       return <div style={{ padding: 40, color: '#f87171' }}>Item not found.</div>;
 
@@ -1099,8 +1082,8 @@ export default function ItemDetail() {
 
         <div style={{ flex: 1 }} />
 
-        {/* Unified time controls (only when tracked) */}
-        {item.tracked && (
+        {/* Unified time controls */}
+        {(
           <>
             {/* Rolling / Daily pill toggle */}
             <div style={{ display: 'flex', background: '#13132a', border: '1px solid #1e1e3a', borderRadius: 6, padding: 2 }}>
@@ -1154,7 +1137,7 @@ export default function ItemDetail() {
         )}
 
         {/* Poll status */}
-        {status && item.tracked && (() => {
+        {status && (() => {
           const expected = status.intervalMs
             ? Math.round(hours * 3_600_000 / status.intervalMs)
             : null;
@@ -1174,7 +1157,7 @@ export default function ItemDetail() {
           );
         })()}
 
-        {item.tracked && (
+        {(
           <button
             onClick={() => setRefreshTick((t) => t + 1)}
             style={{ padding: '2px 10px', fontSize: 11, borderRadius: 4, cursor: 'pointer', border: '1px solid #2e2e5a', background: 'transparent', color: '#6b6b8a' }}
@@ -1184,7 +1167,7 @@ export default function ItemDetail() {
         )}
 
         {/* Price alerts button + dropdown */}
-        {item.tracked && user && (
+        {user && (
           <div ref={alertsRef} style={{ position: 'relative' }}>
             {(() => {
               const itemAlerts = alerts.filter((a) => a.mat_id === item.matId);
@@ -1270,48 +1253,16 @@ export default function ItemDetail() {
         )}
       </div>
 
-      {/* Untracked state */}
-      {!item.tracked && (
-        <div style={{ padding: '60px 0', textAlign: 'center' }}>
-          <p style={{ color: '#4a4a6a', fontSize: 14, marginBottom: 4 }}>
-            Nobody is tracking {item.matName} yet.
-          </p>
-          <p style={{ color: '#3a3a55', fontSize: 12, marginBottom: 28 }}>
-            Tracking starts collecting market data every 60 seconds, visible to everyone on the platform.
-          </p>
-          {hasCredits ? (
-            <>
-              {trackErr && <p style={{ color: '#f87171', fontSize: 13, marginBottom: 12 }}>{trackErr}</p>}
-              <button
-                onClick={handleTrack}
-                disabled={tracking}
-                style={{
-                  background: '#1e0a3a', border: '1px solid #4c1d95', borderRadius: 6,
-                  padding: '10px 28px', color: '#a78bfa', fontSize: 14,
-                  cursor: tracking ? 'not-allowed' : 'pointer', opacity: tracking ? 0.6 : 1,
-                }}
-              >
-                {tracking ? 'Starting…' : 'Start tracking'}
-              </button>
-              <p style={{ color: '#3a3a55', fontSize: 11, marginTop: 16, lineHeight: 1.6 }}>
-                Data populates gradually — expect up to 24 hours before charts and company activity are fully representative.
-              </p>
-            </>
-          ) : (
-            <div style={{ maxWidth: 320, margin: '0 auto' }}>
-              <p style={{ color: '#6b6b8a', fontSize: 13, marginBottom: 12 }}>
-                You're already tracking your full allocation of items.
-              </p>
-              <p style={{ color: '#4a4a6a', fontSize: 12, lineHeight: 1.7 }}>
-                Want this item tracked? Share the platform with a friend — each new member can track up to 3 items, adding data for everyone.
-              </p>
-            </div>
-          )}
+      {/* Collecting state — tracked but not enough data yet */}
+      {!item.dataReady && (
+        <div style={{ padding: '40px 0', textAlign: 'center' }}>
+          <p style={{ color: '#6b6b8a', fontSize: 14, marginBottom: 4 }}>Data is being collected for {item.matName}.</p>
+          <p style={{ color: '#3a3a55', fontSize: 12 }}>Charts and activity will appear once enough snapshots have accumulated.</p>
         </div>
       )}
 
-      {/* Tracked — full panel */}
-      {item.tracked && (
+      {/* Full panel */}
+      {item.dataReady && (
         <ItemPanel
           key={`${item.matId}-${hours}`}
           item={panelItem}

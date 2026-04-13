@@ -72,9 +72,8 @@ export default function ItemGrid() {
     });
   }
 
-  const pinnedItems    = filtered.filter((i) => i.tracked && favourites.has(i.matId));
-  const trackedItems   = filtered.filter((i) => i.tracked && !favourites.has(i.matId));
-  const untrackedItems = filtered.filter((i) => !i.tracked);
+  const pinnedItems  = filtered.filter((i) => favourites.has(i.matId));
+  const regularItems = filtered.filter((i) => !favourites.has(i.matId));
 
   function SectionLabel({ icon, label, count }) {
     return (
@@ -92,49 +91,37 @@ export default function ItemGrid() {
 
   function ItemCard({ item }) {
     const isFav = favourites.has(item.matId);
-    const borderColor = item.tracked ? '#1e1e3a' : '#131328';
-    const bg          = item.tracked ? '#0d0d22' : '#09091a';
     return (
       <div
         onClick={() => navigate(`/${toSlug(item.matName)}`)}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.borderColor = item.tracked ? '#3a3a70' : '#1e1e3a';
-          e.currentTarget.style.opacity = '1';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.borderColor = borderColor;
-          e.currentTarget.style.opacity = item.tracked ? '1' : '0.4';
-        }}
+        onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#3a3a70'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#1e1e3a'; }}
         style={{
-          background: bg, border: `1px solid ${borderColor}`, borderRadius: 7,
+          background: '#0d0d22', border: '1px solid #1e1e3a', borderRadius: 7,
           padding: '9px 10px', cursor: 'pointer', transition: 'border-color 0.12s',
           display: 'flex', flexDirection: 'column', gap: 5, position: 'relative',
-          opacity: item.tracked ? 1 : 0.4,
         }}
       >
-        {item.tracked && (
-          <button
-            onClick={(e) => toggleFavourite(e, item.matId)}
-            title={isFav ? 'Unpin' : 'Pin'}
-            style={{
-              position: 'absolute', top: 6, right: 6,
-              background: 'none', border: 'none', cursor: 'pointer',
-              fontSize: 11, padding: 2, lineHeight: 1,
-              color: isFav ? '#fbbf24' : '#1e1e3a',
-            }}
-          >★</button>
-        )}
-        <svg width="28" height="28" style={{ flexShrink: 0, filter: item.tracked ? 'none' : 'grayscale(1)' }}>
+        <button
+          onClick={(e) => toggleFavourite(e, item.matId)}
+          title={isFav ? 'Unpin' : 'Pin'}
+          style={{
+            position: 'absolute', top: 6, right: 6,
+            background: 'none', border: 'none', cursor: 'pointer',
+            fontSize: 11, padding: 2, lineHeight: 1,
+            color: isFav ? '#fbbf24' : '#1e1e3a',
+          }}
+        >★</button>
+        <svg width="28" height="28" style={{ flexShrink: 0 }}>
           <use href={`${spriteUrl}#${toIconId(item.matName)}`} width="28" height="28" />
         </svg>
-        <span style={{ fontSize: 12, fontWeight: 500, color: item.tracked ? '#d8d8f0' : '#4a4a6a', lineHeight: 1.3 }}>
+        <span style={{ fontSize: 12, fontWeight: 500, color: '#d8d8f0', lineHeight: 1.3 }}>
           {item.matName}
         </span>
-        {item.tracked && (
-          item.dataReady
-            ? <span style={{ fontSize: 10, color: '#34d399', background: '#0a1f18', border: '1px solid #065f46', borderRadius: 4, padding: '1px 5px', alignSelf: 'flex-start' }}>Active</span>
-            : <span style={{ fontSize: 10, color: '#a78bfa', background: '#1e1440', border: '1px solid #4c1d95', borderRadius: 4, padding: '1px 5px', alignSelf: 'flex-start' }}>New</span>
-        )}
+        {item.dataReady
+          ? <span style={{ fontSize: 10, color: '#34d399', background: '#0a1f18', border: '1px solid #065f46', borderRadius: 4, padding: '1px 5px', alignSelf: 'flex-start' }}>Active</span>
+          : <span style={{ fontSize: 10, color: '#a78bfa', background: '#1e1440', border: '1px solid #4c1d95', borderRadius: 4, padding: '1px 5px', alignSelf: 'flex-start' }}>Collecting</span>
+        }
       </div>
     );
   }
@@ -223,25 +210,16 @@ export default function ItemGrid() {
               </div>
             )}
 
-            {trackedItems.length > 0 && (
+            {regularItems.length > 0 && (
               <div>
-                <SectionLabel label="Tracked" count={trackedItems.length} />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8, marginTop: 8 }}>
-                  {trackedItems.map((item) => <ItemCard key={item.matId} item={item} />)}
+                {pinnedItems.length > 0 && <SectionLabel label="All Items" count={regularItems.length} />}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8, marginTop: pinnedItems.length > 0 ? 8 : 0 }}>
+                  {regularItems.map((item) => <ItemCard key={item.matId} item={item} />)}
                 </div>
               </div>
             )}
 
-            {untrackedItems.length > 0 && (
-              <div>
-                <SectionLabel label="Untracked" count={untrackedItems.length} />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8, marginTop: 8 }}>
-                  {untrackedItems.map((item) => <ItemCard key={item.matId} item={item} />)}
-                </div>
-              </div>
-            )}
-
-            {pinnedItems.length === 0 && trackedItems.length === 0 && untrackedItems.length === 0 && (
+            {pinnedItems.length === 0 && regularItems.length === 0 && (
               <div style={{ padding: '32px 16px', color: '#4a4a6a', fontSize: 13, textAlign: 'center' }}>
                 No items match your search.
               </div>
