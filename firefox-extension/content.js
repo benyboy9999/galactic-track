@@ -542,6 +542,7 @@ const DEFAULT_SETTINGS = {
   chatShortcutsEnabled:       true,
   materialAutocompleteEnabled: true,
   chatLinksEnabled:           true,
+  showCargoDestinations:      true,
   chatShortcuts: [
     { trigger: 'extension', message: 'https://galactic-track.com/extension' },
     { trigger: 'gtc',       message: 'https://gt-companion.com' },
@@ -2994,6 +2995,9 @@ function buildSettingsPanel() {
         }
       } else if (key === 'showGuildPrices') {
         if (val) run(); else removeInjection();
+      } else if (key === 'showCargoDestinations') {
+        if (val) { if (_isOnExchangePage() || _isOnBaseWarehousePage()) _watchCargoDestinations(); }
+        else _teardownCargoDestinations();
       } else {
         loadAndInjectHeader();
       }
@@ -3011,7 +3015,8 @@ function buildSettingsPanel() {
     { key: 'showWishlistAll',   label: 'Wishlist all panel' },
     { key: 'showWishlist',      label: '1-click wishlisting' },
     { key: 'showWishlistPanel', label: 'Wishlist panel tab' },
-    { key: 'showFlightCosts',   label: 'Flight cost rows' },
+    { key: 'showFlightCosts',        label: 'Flight cost rows' },
+    { key: 'showCargoDestinations',  label: 'Cargo destinations' },
   ];
   for (const { key, label } of mainToggles) buildFeatToggle(featBody, key, label);
 
@@ -6462,6 +6467,15 @@ function _isOnGalaxyPage() {
   return /^\/galaxy/.test(location.pathname);
 }
 
+function _isOnExchangePage() {
+  return location.pathname.startsWith('/exchange/');
+}
+
+function _isOnBaseWarehousePage() {
+  return /\/base\/\d+/.test(location.pathname) &&
+    new URLSearchParams(location.search).get('tab') === 'warehouse';
+}
+
 function _parseSnapshot(snapshot) {
   const targets = {};
   for (const slot of snapshot.buildingSlotOverrides ?? []) {
@@ -7045,7 +7059,545 @@ function _onUrlChange() {
     } else {
       _disconnectGalaxyOffcanvasObs();
     }
+    if (_isOnExchangePage() || _isOnBaseWarehousePage()) {
+      _watchCargoDestinations();
+    } else {
+      _teardownCargoDestinations();
+    }
   }
+}
+
+// ── Cargo destination filter ──────────────────────────────────────────────────
+
+let _cargoState        = { shipId: null, activeDest: null };
+let _cargoObs          = null;
+let _cargoApplying     = false; // true while _applyCargoFilter is writing to DOM
+let _cargoPopoverObs   = null;
+let _cargoSetupObs     = null;
+let _lastTransferRow   = null;
+let _lastTransferMat   = null;   // material name of last WHTransfer click
+let _lastTransferDir   = null;   // 'toShip' | 'fromShip'
+let _cargoCol          = null;
+let _cargoDestOptions  = [];     // base/planet names fetched once
+const _cargoSnapshot   = new Map();     // matName → real qty from game DOM
+
+const GT_CARGO_ROW_ID = 'gt-cargo-dest-row';
+
+// ── Manifest storage ──────────────────────────────────────────────────────────
+
+function _getManifest() {
+  try { return JSON.parse(localStorage.getItem('gt-ship-manifest') ?? '{}'); }
+  catch { return {}; }
+}
+function _saveManifest(m) {
+  localStorage.setItem('gt-ship-manifest', JSON.stringify(m));
+}
+function _getShipManifest(shipId) {
+  const m = _getManifest();
+  return m[shipId] ? JSON.parse(JSON.stringify(m[shipId])) : { destinations: [], items: {} };
+}
+function _saveShipManifest(shipId, sm) {
+  const m = _getManifest();
+  if (!sm.destinations.length && !Object.keys(sm.items).length) {
+    delete m[shipId];
+  } else {
+    m[shipId] = sm;
+  }
+  _saveManifest(m);
+}
+
+// ── Row data helpers ──────────────────────────────────────────────────────────
+
+function _reconcileManifest() {
+  if (!_cargoState.shipId || !_cargoCol) return;
+  const tbody = _cargoCol.querySelector('table.table tbody');
+  if (!tbody) return;
+  // All rows currently in DOM (visible or hidden by us)
+  const currentMats = new Set(
+    Array.from(tbody.querySelectorAll('tr')).map(tr => _getRowMatName(tr)).filter(Boolean)
+  );
+  const sm = _getShipManifest(_cargoState.shipId);
+  let changed = false;
+  Object.keys(sm.items).forEach(mat => {
+    if (!currentMats.has(mat)) {
+      delete sm.items[mat];
+      changed = true;
+    }
+  });
+  if (changed) {
+    sm.destinations = sm.destinations.filter(d =>
+      Object.values(sm.items).some(dests => dests[d] !== undefined)
+    );
+    _saveShipManifest(_cargoState.shipId, sm);
+    _rebuildFilterSelect(_cargoCol);
+  }
+}
+
+function _getRowMatName(tr) {
+  return tr.querySelector('td.text-start span.link-primary')?.textContent?.trim() ?? '';
+}
+function _getRowQty(tr) {
+  // Qty td is always immediately after the material td; skip our injected gt-dest-td
+  const matTd = tr.querySelector('td.text-start');
+  if (!matTd) return 0;
+  let next = matTd.nextElementSibling;
+  while (next && next.classList.contains('gt-dest-td')) next = next.nextElementSibling;
+  return parseInt((next?.textContent ?? '0').replace(/,/g, ''), 10) || 0;
+}
+
+function _seedCargoSnapshot(tbody) {
+  _cargoSnapshot.clear();
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const matName = _getRowMatName(tr);
+    if (matName) _cargoSnapshot.set(matName, _getRowQty(tr));
+  });
+}
+
+// ── Ship column detection ─────────────────────────────────────────────────────
+
+function _getShipCol() {
+  const radio = document.querySelector('input[name="btnradio"]');
+  return radio?.closest('.col-12') ?? null;
+}
+
+function _getActiveShipId(col) {
+  const checked = (col ?? document).querySelector('input[name="btnradio"]:checked');
+  if (!checked) return null;
+  const lbl = (col ?? document).querySelector(`label[for="${checked.id}"]`);
+  return lbl?.dataset?.shipId ?? null;
+}
+
+// ── Destination option list ───────────────────────────────────────────────────
+
+async function _loadDestOptions() {
+  if (_cargoDestOptions.length) return _cargoDestOptions;
+  try {
+    const co = await requestGTLocalAPI('getMyCompany');
+    const gamedata = await loadGamedata();
+    const bases = co?.bases ?? co?.buildingBases ?? [];
+    _cargoDestOptions = [
+      'Exchange',
+      ...bases.map(b => {
+        const planet = getPlanetById(gamedata, b.planetId);
+        return [b.name, planet?.name].filter(Boolean).join(' — ');
+      }).filter(Boolean),
+    ];
+  } catch { _cargoDestOptions = []; }
+  return _cargoDestOptions;
+}
+
+// ── Filter select rebuild ─────────────────────────────────────────────────────
+
+function _rebuildFilterSelect(col) {
+  const sel = col.querySelector('#gt-dest-filter');
+  if (!sel) return;
+  const sm = _getShipManifest(_cargoState.shipId);
+  // Use the state's activeDest as the intended value (covers fresh builds after navigation)
+  const intended = _cargoState.activeDest ?? '';
+  sel.innerHTML = '<option value="">View all cargo</option>';
+  sm.destinations.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d;
+    opt.textContent = d;
+    sel.appendChild(opt);
+  });
+  sel.value = sm.destinations.includes(intended) ? intended : '';
+  _cargoState.activeDest = sel.value || null;
+}
+
+// ── Filter apply ──────────────────────────────────────────────────────────────
+
+function _applyCargoFilter(col) {
+  _cargoApplying = true;
+  _applyCargoFilterInner(col);
+  _cargoApplying = false;
+}
+
+function _applyCargoFilterInner(col) {
+  const table = col?.querySelector('table.table');
+  if (!table) return;
+  const thead = table.querySelector('thead tr');
+  const tbody = table.querySelector('tbody');
+  const { shipId, activeDest } = _cargoState;
+  const sm = _getShipManifest(shipId);
+
+  // Manage the destination column header
+  const existingTh = thead?.querySelector('.gt-dest-th');
+  if (activeDest && thead && !existingTh) {
+    const th = document.createElement('th');
+    th.className = 'gt-dest-th col-2';
+    th.textContent = 'Dest.';
+    // Insert before the Quantity th (second column)
+    thead.insertBefore(th, thead.children[1]);
+  } else if (!activeDest && existingTh) {
+    existingTh.remove();
+  }
+
+  tbody.querySelectorAll('tr').forEach(tr => {
+    // Remove any existing dest td
+    tr.querySelector('.gt-dest-td')?.remove();
+
+    const matName = _getRowMatName(tr);
+
+    if (!activeDest) {
+      tr.style.display = '';
+      return;
+    }
+
+    // Handle the "Empty" colspan row on base warehouse page
+    if (!matName) {
+      tr.style.display = '';
+      return;
+    }
+
+    const destQty = sm.items[matName]?.[activeDest] ?? null;
+    if (destQty === null) {
+      tr.style.display = 'none';
+    } else {
+      tr.style.display = '';
+      const td = document.createElement('td');
+      td.className = 'gt-dest-td';
+      td.style.color = 'var(--bs-primary)';
+      td.textContent = destQty.toLocaleString();
+      // Insert before the Quantity td (second column)
+      tr.insertBefore(td, tr.children[1]);
+    }
+  });
+}
+
+// ── Destination input autocomplete ────────────────────────────────────────────
+
+function _attachDestAutocomplete(inp, col) {
+  let _destDrop = document.createElement('ul');
+  _destDrop.className = 'dropdown-menu shadow';
+  _destDrop.style.cssText = 'position:fixed;z-index:99999;max-height:200px;overflow-y:auto;min-width:220px;display:none;padding:4px 0;';
+  document.body.appendChild(_destDrop);
+
+  let _activeIdx = -1;
+
+  function posDrop() {
+    const r = inp.getBoundingClientRect();
+    _destDrop.style.left = r.left + 'px';
+    _destDrop.style.top  = (r.bottom + 2) + 'px';
+    _destDrop.style.minWidth = r.width + 'px';
+  }
+
+  function setActive(i) {
+    Array.from(_destDrop.children).forEach((li, j) => li.classList.toggle('active', i === j));
+    _activeIdx = i;
+  }
+
+  function showOpts(opts) {
+    _destDrop.innerHTML = '';
+    _activeIdx = -1;
+    if (!opts.length) { _destDrop.style.display = 'none'; return; }
+    opts.slice(0, 10).forEach((opt, i) => {
+      const li = document.createElement('li');
+      li.className = 'dropdown-item';
+      li.style.cursor = 'pointer';
+      li.textContent = opt;
+      li.addEventListener('mouseenter', () => setActive(i));
+      li.addEventListener('mousedown', e => e.preventDefault());
+      li.addEventListener('click', () => applyDest(opt));
+      _destDrop.appendChild(li);
+    });
+    posDrop();
+    _destDrop.style.display = 'block';
+    setActive(0);
+  }
+
+  function applyDest(dest) {
+    dest = dest.trim();
+    if (!dest) return;
+    inp.value = '';
+    _destDrop.style.display = 'none';
+    const sm = _getShipManifest(_cargoState.shipId);
+    if (!sm.destinations.includes(dest)) {
+      sm.destinations.push(dest);
+      _saveShipManifest(_cargoState.shipId, sm);
+    }
+    _rebuildFilterSelect(col);
+    // Auto-select newly added destination
+    const sel = col.querySelector('#gt-dest-filter');
+    if (sel) { sel.value = dest; sel.dispatchEvent(new Event('change')); }
+  }
+
+  inp.addEventListener('focus', async () => {
+    await _loadDestOptions();
+    const q = inp.value.trim().toLowerCase();
+    const sm = _getShipManifest(_cargoState.shipId);
+    const existing = sm.destinations;
+    const all = [...new Set([...existing, ..._cargoDestOptions])];
+    showOpts(q ? all.filter(o => o.toLowerCase().includes(q)) : all);
+  });
+
+  inp.addEventListener('input', async () => {
+    await _loadDestOptions();
+    const q = inp.value.trim().toLowerCase();
+    const sm = _getShipManifest(_cargoState.shipId);
+    const existing = sm.destinations;
+    const all = [...new Set([...existing, ..._cargoDestOptions])];
+    showOpts(q ? all.filter(o => o.toLowerCase().includes(q)) : all);
+  });
+
+  inp.addEventListener('keydown', e => {
+    const items = _destDrop.children;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(Math.min(_activeIdx + 1, items.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(_activeIdx - 1, 0)); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (_activeIdx >= 0 && items[_activeIdx]) applyDest(items[_activeIdx].textContent);
+      else if (inp.value.trim()) applyDest(inp.value);
+    }
+    else if (e.key === 'Escape') { _destDrop.style.display = 'none'; }
+  });
+
+  inp.addEventListener('blur', () => setTimeout(() => { _destDrop.style.display = 'none'; }, 160));
+
+  return () => _destDrop.remove(); // cleanup fn
+}
+
+// ── Setup ─────────────────────────────────────────────────────────────────────
+
+function _setupCargoDestinations(col) {
+  document.getElementById(GT_CARGO_ROW_ID)?.remove();
+  _cargoCol = col;
+
+  const shipId = _getActiveShipId(col);
+  // Preserve activeDest across exchange page navigations; only reset ship
+  _cargoState = { shipId, activeDest: _cargoState.activeDest };
+
+  // ── Build injection row ───────────────────────────────────────────────────
+  const row = document.createElement('div');
+  row.id = GT_CARGO_ROW_ID;
+  row.className = 'row gx-2 align-items-center mt-1 mb-1';
+
+  // Destination search input
+  const destInputWrap = document.createElement('div');
+  destInputWrap.className = 'col-auto';
+  const destInput = document.createElement('input');
+  destInput.type = 'search';
+  destInput.className = 'form-control form-control-sm';
+  destInput.id = 'gt-dest-input';
+  destInput.placeholder = 'Add destination\u2026';
+  destInput.autocomplete = 'off';
+  destInput.style.width = '155px';
+  destInputWrap.appendChild(destInput);
+  row.appendChild(destInputWrap);
+
+  // Destination filter select
+  const destSelWrap = document.createElement('div');
+  destSelWrap.className = 'col-auto';
+  const destSel = document.createElement('select');
+  destSel.className = 'form-select form-select-sm';
+  destSel.id = 'gt-dest-filter';
+  destSel.style.width = '155px';
+  const viewAllOpt = document.createElement('option');
+  viewAllOpt.value = '';
+  viewAllOpt.textContent = 'View all cargo';
+  destSel.appendChild(viewAllOpt);
+  destSelWrap.appendChild(destSel);
+  row.appendChild(destSelWrap);
+
+  // Remove all filters button
+  const clearWrap = document.createElement('div');
+  clearWrap.className = 'col-auto';
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'btn btn-sm btn-outline-secondary';
+  clearBtn.id = 'gt-dest-clear';
+  clearBtn.textContent = 'Remove all filters';
+  clearWrap.appendChild(clearBtn);
+  row.appendChild(clearWrap);
+
+  // Insert between progress bar and table
+  const table = col.querySelector('table.table');
+  if (table) col.insertBefore(row, table);
+  else col.appendChild(row);
+
+  // Populate select from manifest (restores preserved activeDest if valid)
+  _rebuildFilterSelect(col);
+  _applyCargoFilter(col);
+
+  // Wire destination input autocomplete
+  const cleanupDrop = _attachDestAutocomplete(destInput, col);
+
+  // Filter select change
+  destSel.addEventListener('change', () => {
+    _cargoState.activeDest = destSel.value || null;
+    _applyCargoFilter(col);
+  });
+
+  // Clear button
+  clearBtn.addEventListener('click', () => {
+    const { shipId } = _cargoState;
+    if (shipId) _saveShipManifest(shipId, { destinations: [], items: {} });
+    _cargoState.activeDest = null;
+    destSel.value = '';
+    _rebuildFilterSelect(col);
+    _applyCargoFilter(col);
+  });
+
+  // Ship radio change
+  col.querySelectorAll('input[name="btnradio"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const newShipId = _getActiveShipId(col);
+      if (newShipId === _cargoState.shipId) return;
+      _cargoState = { shipId: newShipId, activeDest: null };
+      _rebuildFilterSelect(col);
+      _applyCargoFilter(col);
+      _observeShipTbody(col);
+    });
+  });
+
+  // Track all WHTransfer clicks (both warehouse and ship sides) with direction
+  if (!document._gtCargoClickAttached) {
+    document._gtCargoClickAttached = true;
+    document.addEventListener('click', e => {
+      const btn = e.target.closest('[data-popup-id="WHTransfer"]');
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      _lastTransferRow = tr;
+      _lastTransferMat = _getRowMatName(tr);
+      _lastTransferDir = _cargoCol?.contains(tr) ? 'fromShip' : 'toShip';
+    }, true);
+  }
+
+  // Start observers
+  _observeShipTbody(col);
+  _observePopover();
+
+  // Cleanup hook stored for teardown
+  col._gtCargoCleanup = cleanupDrop;
+}
+
+// ── tbody observer ────────────────────────────────────────────────────────────
+
+function _observeShipTbody(col) {
+  _cargoObs?.disconnect();
+  const initialTbody = col.querySelector('table.table tbody');
+  if (initialTbody) _seedCargoSnapshot(initialTbody);
+
+  let _reconcileTimer = null;
+  _cargoObs = new MutationObserver(() => {
+    if (_cargoApplying) return; // ignore our own DOM writes
+    clearTimeout(_reconcileTimer);
+    _reconcileTimer = setTimeout(() => {
+      _cargoObs.disconnect();
+
+      const tbody = col.querySelector('table.table tbody');
+      if (!tbody) {
+        _cargoObs.observe(col, { childList: true, subtree: true, characterData: true });
+        return;
+      }
+      const { shipId, activeDest } = _cargoState;
+
+      // Read real qtys directly — game DOM is never overridden by us
+      const newSnapshot = new Map();
+      tbody.querySelectorAll('tr').forEach(tr => {
+        const matName = _getRowMatName(tr);
+        if (matName) newSnapshot.set(matName, _getRowQty(tr));
+      });
+
+      // Diff and record
+      if (activeDest && shipId) {
+        newSnapshot.forEach((newQty, matName) => {
+          const prevQty = _cargoSnapshot.get(matName) ?? 0;
+          const delta = newQty - prevQty;
+          if (delta > 0) {
+            const sm = _getShipManifest(shipId);
+            if (!sm.items[matName]) sm.items[matName] = {};
+            sm.items[matName][activeDest] = (sm.items[matName][activeDest] ?? 0) + delta;
+            if (!sm.destinations.includes(activeDest)) sm.destinations.push(activeDest);
+            _saveShipManifest(shipId, sm);
+            _rebuildFilterSelect(col);
+          } else if (delta < 0) {
+            const sm = _getShipManifest(shipId);
+            if (sm.items[matName]?.[activeDest] !== undefined) {
+              sm.items[matName][activeDest] = Math.max(0, sm.items[matName][activeDest] + delta);
+              if (sm.items[matName][activeDest] === 0) {
+                delete sm.items[matName][activeDest];
+                if (!Object.keys(sm.items[matName]).length) delete sm.items[matName];
+                sm.destinations = sm.destinations.filter(d =>
+                  Object.values(sm.items).some(dests => dests[d] !== undefined)
+                );
+              }
+              _saveShipManifest(shipId, sm);
+              _rebuildFilterSelect(col);
+            }
+          }
+        });
+      }
+
+      _cargoSnapshot.clear();
+      newSnapshot.forEach((qty, mat) => _cargoSnapshot.set(mat, qty));
+
+      _reconcileManifest();
+      _applyCargoFilter(col);
+
+      _cargoObs.observe(col, { childList: true, subtree: true, characterData: true });
+    }, 80);
+  });
+
+  _cargoObs.observe(col, { childList: true, subtree: true, characterData: true });
+}
+
+// ── Popover observer (pre-fill) ───────────────────────────────────────────────
+
+function _observePopover() {
+  _cargoPopoverObs?.disconnect();
+  _cargoPopoverObs = new MutationObserver(() => {
+    const popover = document.querySelector('.popover');
+    if (!popover || popover._gtHooked) return;
+    popover._gtHooked = true;
+
+    // Pre-fill only for fromShip transfers with an active destination filter
+    if (_cargoState.activeDest && _lastTransferMat && _lastTransferDir === 'fromShip') {
+      const sm  = _getShipManifest(_cargoState.shipId);
+      const qty = sm.items[_lastTransferMat]?.[_cargoState.activeDest] ?? 0;
+      if (qty) {
+        const inp    = popover.querySelector('#inputTransfer');
+        const slider = popover.querySelector('.form-range');
+        if (inp) {
+          inp.value = qty;
+          inp.dispatchEvent(new Event('input', { bubbles: true }));
+          if (slider) { slider.value = qty; slider.dispatchEvent(new Event('input', { bubbles: true })); }
+        }
+      }
+    }
+  });
+  _cargoPopoverObs.observe(document.body, { childList: true, subtree: true });
+}
+
+// ── Watch / teardown ──────────────────────────────────────────────────────────
+
+function _watchCargoDestinations() {
+  if (!_settings.showCargoDestinations) return;
+  const col = _getShipCol();
+  if (col) { _setupCargoDestinations(col); return; }
+  _cargoSetupObs = new MutationObserver(() => {
+    const c = _getShipCol();
+    if (!c) return;
+    _cargoSetupObs.disconnect(); _cargoSetupObs = null;
+    _setupCargoDestinations(c);
+  });
+  _cargoSetupObs.observe(document.body, { childList: true, subtree: true });
+}
+
+function _teardownCargoDestinations() {
+  _cargoSetupObs?.disconnect(); _cargoSetupObs = null;
+  _cargoObs?.disconnect(); _cargoObs = null;
+  _cargoPopoverObs?.disconnect(); _cargoPopoverObs = null;
+  // Restore any hidden/overridden rows
+  if (_cargoCol) {
+    _cargoState.activeDest = null;
+    _applyCargoFilter(_cargoCol);
+    _cargoCol._gtCargoCleanup?.();
+    _cargoCol = null;
+  }
+  document.getElementById(GT_CARGO_ROW_ID)?.remove();
+  _cargoState = { shipId: null, activeDest: null };
+  _lastTransferRow = null;
 }
 
 // ── Comms chat autocomplete ───────────────────────────────────────────────────
