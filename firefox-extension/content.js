@@ -3090,7 +3090,7 @@ function buildSettingsPanel() {
 
   const ver = document.createElement('div');
   ver.style.cssText = 'text-align:center;font-size:10px;color:#2a2a4a;margin-top:6px;';
-  ver.textContent = 'v0.5.5';
+  ver.textContent = 'v0.5.6.1';
   panel.appendChild(ver);
 
   return panel;
@@ -7142,7 +7142,8 @@ function _getRowQty(tr) {
   if (!matTd) return 0;
   let next = matTd.nextElementSibling;
   while (next && next.classList.contains('gt-dest-td')) next = next.nextElementSibling;
-  return parseInt((next?.textContent ?? '0').replace(/,/g, ''), 10) || 0;
+  // Strip both ',' and '.' as thousand separators (varies by locale)
+  return parseInt((next?.textContent ?? '0').replace(/[,\.]/g, ''), 10) || 0;
 }
 
 function _seedCargoSnapshot(tbody) {
