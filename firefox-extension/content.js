@@ -537,7 +537,6 @@ const DEFAULT_SETTINGS = {
   headerCollapsed:      false,
   useTargets:       false,
   chatShortcutsEnabled:       true,
-  materialAutocompleteEnabled: true,
   chatLinksEnabled:           true,
   showCargoDestinations:      true,
   chatShortcuts: [
@@ -3062,7 +3061,7 @@ function buildSettingsPanel() {
 
   const ver = document.createElement('div');
   ver.style.cssText = 'text-align:center;font-size:10px;color:#2a2a4a;margin-top:6px;';
-  ver.textContent = 'v0.5.7';
+  ver.textContent = 'v0.5.8';
   panel.appendChild(ver);
 
   return panel;
@@ -3354,7 +3353,6 @@ function openChatShortcutsModal() {
   };
 
   togglesWrap.appendChild(mkToggleRow('/ Shortcuts', 'chatShortcutsEnabled'));
-  togglesWrap.appendChild(mkToggleRow(': Material autocomplete', 'materialAutocompleteEnabled'));
   togglesWrap.appendChild(mkToggleRow('Hyperlinks', 'chatLinksEnabled'));
   modal.appendChild(togglesWrap);
 
@@ -6791,10 +6789,8 @@ function _disconnectCommsLinksObs() {
   _commsLinksObs = null;
 }
 
-async function _attachChatAutocomplete(input) {
+function _attachChatAutocomplete(input) {
   input._gtAutocomplete = true;
-  const gamedata = await loadGamedata();
-  const materials = (gamedata.materials ?? []).filter(m => m.name);
 
   const drop = document.createElement('ul');
   drop.id = 'gt-chat-autocomplete';
@@ -6807,14 +6803,6 @@ async function _attachChatAutocomplete(input) {
 
   let _activeIdx = -1;
   let _applyFns  = [];
-
-  function getQuery() {
-    const val = input.value;
-    const cursor = input.selectionStart ?? val.length;
-    const before = val.slice(0, cursor);
-    const m = before.match(/:([^:\s]*)$/);
-    return m ? m[1] : null;
-  }
 
   function getShortcutQuery() {
     const val = input.value;
@@ -6841,21 +6829,6 @@ async function _attachChatAutocomplete(input) {
 
   let _suppressInput = false;
 
-  function applyMatch(name) {
-    const val = input.value;
-    const cursor = input.selectionStart ?? val.length;
-    const before = val.slice(0, cursor);
-    const after = val.slice(cursor);
-    const newBefore = before.replace(/:([^:\s]*)$/, ':' + name);
-    input.value = newBefore + after;
-    input.selectionStart = input.selectionEnd = newBefore.length;
-    drop.style.display = 'none';
-    _activeIdx = -1;
-    _suppressInput = true;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.focus();
-  }
-
   function applyShortcut(message) {
     input.value = message;
     input.selectionStart = input.selectionEnd = message.length;
@@ -6864,35 +6837,6 @@ async function _attachChatAutocomplete(input) {
     _suppressInput = true;
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.focus();
-  }
-
-  function showDrop(matches) {
-    drop.innerHTML = '';
-    _activeIdx = -1;
-    _applyFns = [];
-    if (!matches.length) { drop.style.display = 'none'; return; }
-    matches.slice(0, 8).forEach((mat, i) => {
-      const li = document.createElement('li');
-      li.className = 'dropdown-item d-flex align-items-center gap-2';
-      li.style.cursor = 'pointer';
-
-      const icon = makeIcon(mat.name, 16);
-      if (icon) li.appendChild(icon);
-
-      const label = document.createElement('span');
-      label.textContent = ':' + mat.name;
-      li.appendChild(label);
-
-      const fn = () => applyMatch(mat.name);
-      _applyFns[i] = fn;
-      li.addEventListener('mouseenter', () => setActive(i));
-      li.addEventListener('mousedown', e => e.preventDefault());
-      li.addEventListener('click', fn);
-      drop.appendChild(li);
-    });
-    positionDrop();
-    drop.style.display = 'block';
-    setActive(0);
   }
 
   function showShortcutDrop(matches) {
@@ -6940,14 +6884,6 @@ async function _attachChatAutocomplete(input) {
         showShortcutDrop(matches);
         return;
       }
-    }
-
-    if (_settings.materialAutocompleteEnabled !== false) {
-      const q = getQuery();
-      if (q === null || q.length === 0) { drop.style.display = 'none'; return; }
-      const matches = materials.filter(m => m.name.toLowerCase().includes(q.toLowerCase()));
-      showDrop(matches);
-      return;
     }
 
     drop.style.display = 'none';
