@@ -630,9 +630,25 @@ function saveWishlistTargets() {
 let _gamedata = null;
 async function loadGamedata() {
   if (_gamedata) return _gamedata;
-  const url  = chrome.runtime.getURL('data/gamedata.json');
-  const resp = await fetch(url);
-  _gamedata  = await resp.json();
+  const CACHE_KEY = 'gt-gamedata-cache';
+  const MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
+  try {
+    const cached = sessionStorage.getItem(CACHE_KEY);
+    if (cached) {
+      const { ts, data } = JSON.parse(cached);
+      if (Date.now() - ts < MAX_AGE_MS) { _gamedata = data; return _gamedata; }
+    }
+  } catch (_) {}
+  try {
+    const resp = await fetch('https://api.g2.galactictycoons.com/gamedata.json');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    _gamedata = await resp.json();
+    try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data: _gamedata })); } catch (_) {}
+  } catch (_) {
+    // Fallback to bundled file
+    const resp = await fetch(chrome.runtime.getURL('data/gamedata.json'));
+    _gamedata = await resp.json();
+  }
   return _gamedata;
 }
 
@@ -881,7 +897,9 @@ function getPlanetFactor(recipe, planet, gamedata) {
     const mat = planet.mats?.find(m => m.id === outId);
     return mat ? mat.ab / 100 : 1;
   }
-  if (building.specialization === 3) {
+  if (building.specialization === 3 && (building.id === 10 || building.id === 19)) {
+    // Only Farm (10) and Orchard (19) are affected by planet fertility
+    // Ranch (17) and Aquaponics Farm (34) are not
     return (planet.fert ?? 100) / 100;
   }
   return 1;
@@ -3061,7 +3079,7 @@ function buildSettingsPanel() {
 
   const ver = document.createElement('div');
   ver.style.cssText = 'text-align:center;font-size:10px;color:#2a2a4a;margin-top:6px;';
-  ver.textContent = 'v0.5.8';
+  ver.textContent = 'v0.5.8.1';
   panel.appendChild(ver);
 
   return panel;
@@ -4878,11 +4896,12 @@ async function loadAndInjectHeader() {
 
     removeProductionUI();
 
-    // Spacer div as first body child — pushes the game's content down
+    // Spacer inside #app as first child — shrinks the flex-grow main scroll container correctly
+    const appRoot = document.getElementById('app') ?? document.body;
     const spacer = document.createElement('div');
     spacer.id = GT_SPACER_ID;
     spacer.style.cssText = `height:${HEADER_H}px;width:100%;pointer-events:none;flex-shrink:0;`;
-    document.body.insertBefore(spacer, document.body.firstChild);
+    appRoot.insertBefore(spacer, appRoot.firstChild);
 
 
     // Header bar — two-column layout: chip area (left, grows) + controls (right, fixed)

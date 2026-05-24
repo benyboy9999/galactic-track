@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Galactic Track Extension",
-  "version": "0.5.8",
+  "version": "0.5.8.1",
   "description": "Additional features from Galactic-Track.com for Galactic Tycoons",
 
   "permissions": ["storage"],
   "host_permissions": [
     "https://g2.galactictycoons.com/*",
     "https://api.g2.galactictycoons.com/public/*",
+    "https://api.g2.galactictycoons.com/gamedata.json",
     "https://galactic-track.com/api/*"
   ],
 
