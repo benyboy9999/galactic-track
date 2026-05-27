@@ -7360,6 +7360,11 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
     if (cardBody) cardBody.insertBefore(settingsPanel, cardBody.firstChild);
 
     cogBtn.addEventListener('click', () => {
+      // Re-attach panel if card-body was re-rendered and removed it
+      if (!settingsPanel.isConnected) {
+        const cb = modal.querySelector('.card.bg-body .card-body');
+        if (cb) cb.insertBefore(settingsPanel, cb.firstChild);
+      }
       const open = settingsPanel.style.display === 'none';
       settingsPanel.style.display = open ? '' : 'none';
       cogBtn.classList.toggle('active', open);
