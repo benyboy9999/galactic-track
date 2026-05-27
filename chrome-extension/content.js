@@ -6298,12 +6298,12 @@ function _seedCargoSnapshot(tbody) {
 // ── Ship column detection ─────────────────────────────────────────────────────
 
 function _getShipCol() {
-  const radio = document.querySelector('input[name="btnradio"]');
+  const radio = document.querySelector('input[name="btnradio-whwt"], input[name="btnradio"]');
   return radio?.closest('.col-12') ?? null;
 }
 
 function _getActiveShipId(col) {
-  const checked = (col ?? document).querySelector('input[name="btnradio"]:checked');
+  const checked = (col ?? document).querySelector('input[name="btnradio-whwt"]:checked, input[name="btnradio"]:checked');
   if (!checked) return null;
   const lbl = (col ?? document).querySelector(`label[for="${checked.id}"]`);
   return lbl?.dataset?.shipId ?? null;
@@ -6581,7 +6581,7 @@ function _setupCargoDestinations(col) {
   });
 
   // Ship radio change
-  col.querySelectorAll('input[name="btnradio"]').forEach(radio => {
+  col.querySelectorAll('input[name="btnradio-whwt"], input[name="btnradio"]').forEach(radio => {
     radio.addEventListener('change', () => {
       const newShipId = _getActiveShipId(col);
       if (newShipId === _cargoState.shipId) return;
