@@ -667,6 +667,12 @@ async function _getShipAssignments() {
 function _saveShipAssignments(map) {
   chrome.storage.local.set({ gtShipAssignments: map });
 }
+async function _getShipReactorModes() {
+  return new Promise(r => chrome.storage.local.get('gtShipReactorModes', d => r(d.gtShipReactorModes ?? {})));
+}
+function _saveShipReactorModes(map) {
+  chrome.storage.local.set({ gtShipReactorModes: map });
+}
 
 // ── Bases fetch (5-min cache) ─────────────────────────────────────────────────
 
@@ -3076,6 +3082,14 @@ function buildSettingsPanel() {
   shortcutsBtn.addEventListener('click', () => openChatShortcutsModal());
   panel.appendChild(shortcutsBtn);
 
+  const shipsBtn = document.createElement('button');
+  shipsBtn.textContent = '\u{1F680} Ships';
+  shipsBtn.style.cssText = 'width:100%;background:#1a1a30;border:1px solid #2a2a4a;border-radius:4px;color:#9090b0;font-size:11px;padding:5px 8px;cursor:pointer;text-align:left;margin-top:4px;transition:color 0.15s,border-color 0.15s;';
+  shipsBtn.addEventListener('mouseenter', () => { shipsBtn.style.color = '#d8d8f0'; shipsBtn.style.borderColor = '#4a4a6a'; });
+  shipsBtn.addEventListener('mouseleave', () => { shipsBtn.style.color = '#9090b0'; shipsBtn.style.borderColor = '#2a2a4a'; });
+  shipsBtn.addEventListener('click', () => openShipsModal());
+  panel.appendChild(shipsBtn);
+
   // Visit link
   const sepLink = document.createElement('div');
   sepLink.style.cssText = 'border-top:1px solid #1a1a30;margin:10px 0 8px;';
@@ -3093,7 +3107,7 @@ function buildSettingsPanel() {
 
   const ver = document.createElement('div');
   ver.style.cssText = 'text-align:center;font-size:10px;color:#2a2a4a;margin-top:6px;';
-  ver.textContent = 'v0.5.8.1';
+  ver.textContent = 'v0.5.9';
   panel.appendChild(ver);
 
   return panel;
@@ -3630,6 +3644,213 @@ function mkIconLine(name, qtyStr, valStr) {
     line.appendChild(val);
   }
   return line;
+}
+
+// ── Ships modal ───────────────────────────────────────────────────────────────
+
+async function openShipsModal() {
+  const MODAL_ID = 'gt-ships-modal';
+  document.getElementById(MODAL_ID)?.remove();
+
+  // Load required data
+  if (!_companyData) {
+    const fresh = await requestGTLocalAPI('getMyCompany');
+    if (fresh?.id) _companyData = { ...fresh, perks: _companyData?.perks };
+  }
+  const ships = (_companyData?.ships ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const bases = sortBases(_loadedHeaderBases ?? []);
+  const [assignments, reactorModes] = await Promise.all([_getShipAssignments(), _getShipReactorModes()]);
+
+  // Overlay
+  const overlay = document.createElement('div');
+  overlay.id = MODAL_ID;
+  Object.assign(overlay.style, {
+    position: 'fixed', inset: '0',
+    background: 'rgba(0,0,0,0.72)',
+    zIndex: '2147483646',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontFamily: 'system-ui, sans-serif',
+  });
+
+  // Modal box
+  const modal = document.createElement('div');
+  Object.assign(modal.style, {
+    background: '#0d0d20',
+    border: '1px solid #2a2a4a',
+    borderRadius: '10px',
+    width: '520px',
+    maxWidth: '96vw',
+    maxHeight: '88vh',
+    display: 'flex',
+    flexDirection: 'column',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.7)',
+    overflow: 'hidden',
+    fontSize: '12px',
+    color: '#b0b0cc',
+  });
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 14px 10px;border-bottom:1px solid #1a1a30;flex-shrink:0;';
+  const titleSpan = document.createElement('span');
+  titleSpan.style.cssText = 'font-size:13px;font-weight:700;color:#d8d8f0;';
+  titleSpan.textContent = 'Ships';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '\u00d7';
+  closeBtn.style.cssText = 'background:none;border:none;color:#6b6b8a;font-size:18px;cursor:pointer;line-height:1;padding:0 2px;';
+  closeBtn.addEventListener('click', () => overlay.remove());
+  hdr.appendChild(titleSpan);
+  hdr.appendChild(closeBtn);
+  modal.appendChild(hdr);
+
+  // ── Column headers ────────────────────────────────────────────────────────
+  const colHdr = document.createElement('div');
+  colHdr.style.cssText = 'display:grid;grid-template-columns:1fr 170px 110px;gap:8px;padding:5px 14px;border-bottom:1px solid #1a1a30;flex-shrink:0;';
+  [['Ship', ''], ['Assigned Base', 'center'], ['S Key', 'center']].forEach(([lbl, align]) => {
+    const s = document.createElement('span');
+    s.style.cssText = `color:#6b6b8a;font-size:10px;text-transform:uppercase;letter-spacing:.06em;${align ? `text-align:${align};` : ''}`;
+    s.textContent = lbl;
+    colHdr.appendChild(s);
+  });
+  modal.appendChild(colHdr);
+
+  // ── Toolbar ───────────────────────────────────────────────────────────────
+  const toolbar = document.createElement('div');
+  toolbar.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 14px;border-bottom:1px solid #1a1a30;flex-shrink:0;gap:6px;';
+
+  const mkToolBtn = (text, col) => {
+    const btn = document.createElement('button');
+    btn.textContent = text;
+    btn.style.cssText = `background:none;border:1px solid ${col};border-radius:4px;color:${col};font-size:10px;padding:3px 9px;cursor:pointer;transition:opacity 0.15s;white-space:nowrap;`;
+    btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.7'; });
+    btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+    return btn;
+  };
+
+  const clearAllBtn   = mkToolBtn('Clear All Bases', '#ef4444');
+  const allCheapBtn   = mkToolBtn('All Cheapest', '#22c55e');
+  const allEffBtn     = mkToolBtn('All Efficient', '#60a5fa');
+
+  const rightBtns = document.createElement('div');
+  rightBtns.style.cssText = 'display:flex;gap:6px;';
+  rightBtns.appendChild(allCheapBtn);
+  rightBtns.appendChild(allEffBtn);
+
+  toolbar.appendChild(clearAllBtn);
+  toolbar.appendChild(rightBtns);
+  modal.appendChild(toolbar);
+
+  // ── Scrollable list ───────────────────────────────────────────────────────
+  const list = document.createElement('div');
+  list.style.cssText = 'overflow-y:auto;flex:1;padding:2px 14px 10px;';
+
+  if (!ships.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'color:#4a4a6a;font-size:12px;padding:20px 0;text-align:center;';
+    empty.textContent = 'No ships found. Open the game first.';
+    list.appendChild(empty);
+  }
+
+  // Keep refs to per-ship UI for bulk actions
+  const rowRefs = [];
+
+  const pillBaseStyle = 'border-radius:4px;font-size:10px;padding:2px 9px;cursor:pointer;transition:all 0.15s;';
+  const pillActive = { cheapest: 'border:1px solid #22c55e;color:#22c55e;background:rgba(34,197,94,0.12);', efficient: 'border:1px solid #60a5fa;color:#60a5fa;background:rgba(96,165,250,0.12);' };
+  const pillInactive = 'border:1px solid #2a2a4a;color:#4a4a6a;background:none;';
+
+  const applyPills = (pillsWrap, mode) => {
+    const [c, e] = pillsWrap.querySelectorAll('button');
+    if (c) c.style.cssText = pillBaseStyle + (mode === 'cheapest' ? pillActive.cheapest : pillInactive);
+    if (e) e.style.cssText = pillBaseStyle + (mode === 'efficient' ? pillActive.efficient : pillInactive);
+  };
+
+  for (const ship of ships) {
+    const sid = String(ship.id);
+    const row = document.createElement('div');
+    row.style.cssText = 'display:grid;grid-template-columns:1fr 170px 110px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #111128;';
+
+    // Ship name
+    const nameEl = document.createElement('span');
+    nameEl.style.cssText = 'color:#c0c0da;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    nameEl.title = ship.name;
+    nameEl.textContent = ship.name;
+
+    // Assigned base select
+    const sel = document.createElement('select');
+    sel.style.cssText = 'width:100%;background:#1a1a30;border:1px solid #2a2a4a;border-radius:4px;color:#d8d8f0;font-size:11px;padding:3px 5px;outline:none;cursor:pointer;';
+    const blankOpt = document.createElement('option');
+    blankOpt.value = '';
+    blankOpt.textContent = '— none —';
+    sel.appendChild(blankOpt);
+    for (const base of bases) {
+      const opt = document.createElement('option');
+      opt.value = base.name;
+      opt.textContent = base.name;
+      if (base.name === assignments[sid]) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', async () => {
+      const map = await _getShipAssignments();
+      if (sel.value) map[sid] = sel.value; else delete map[sid];
+      _saveShipAssignments(map);
+    });
+
+    // Reactor mode pills (C = Cheapest, E = Efficient)
+    const pillsWrap = document.createElement('div');
+    pillsWrap.style.cssText = 'display:flex;gap:4px;justify-content:center;';
+    const curMode = reactorModes[sid] ?? 'cheapest';
+
+    const mkPill = (label, mode) => {
+      const btn = document.createElement('button');
+      btn.textContent = label;
+      btn.title = mode === 'cheapest' ? 'Cheapest — S key snaps to lowest-cost power' : 'Efficient — S key snaps to best time/cost power';
+      btn.style.cssText = pillBaseStyle + (curMode === mode ? pillActive[mode] : pillInactive);
+      btn.addEventListener('click', async () => {
+        applyPills(pillsWrap, mode);
+        const modes = await _getShipReactorModes();
+        modes[sid] = mode;
+        _saveShipReactorModes(modes);
+      });
+      return btn;
+    };
+
+    pillsWrap.appendChild(mkPill('C', 'cheapest'));
+    pillsWrap.appendChild(mkPill('E', 'efficient'));
+
+    row.appendChild(nameEl);
+    row.appendChild(sel);
+    row.appendChild(pillsWrap);
+    list.appendChild(row);
+    rowRefs.push({ sid, sel, pillsWrap });
+  }
+
+  // ── Toolbar actions ───────────────────────────────────────────────────────
+  clearAllBtn.addEventListener('click', async () => {
+    _saveShipAssignments({});
+    rowRefs.forEach(({ sel }) => { sel.value = ''; });
+  });
+
+  allCheapBtn.addEventListener('click', async () => {
+    const modes = await _getShipReactorModes();
+    rowRefs.forEach(({ sid, pillsWrap }) => { modes[sid] = 'cheapest'; applyPills(pillsWrap, 'cheapest'); });
+    _saveShipReactorModes(modes);
+  });
+
+  allEffBtn.addEventListener('click', async () => {
+    const modes = await _getShipReactorModes();
+    rowRefs.forEach(({ sid, pillsWrap }) => { modes[sid] = 'efficient'; applyPills(pillsWrap, 'efficient'); });
+    _saveShipReactorModes(modes);
+  });
+
+  modal.appendChild(list);
+
+  // Close on backdrop click or Esc
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  const escHandler = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); } };
+  document.addEventListener('keydown', escHandler);
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
 }
 
 // ── Flight panel ──────────────────────────────────────────────────────────────
@@ -7240,7 +7461,7 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
 
     const buildAssignOptions = async () => {
       assignSelect.innerHTML = '';
-      const map = await _getShipAssignments();
+      const [map, modes] = await Promise.all([_getShipAssignments(), _getShipReactorModes()]);
       const { ship } = readState();
       const current = ship ? map[String(ship.id)] : null;
       const blankOpt = document.createElement('option');
@@ -7256,6 +7477,12 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
       }
       if (!current) assignSelect.value = '';
       _assignedName = current;
+      // Sync reactor mode for this ship
+      if (ship) {
+        _reactorMode = modes[String(ship.id)] ?? 'cheapest';
+        settingsPanel.dataset.reactorMode = _reactorMode;
+        updateTogglePill();
+      }
     };
     buildAssignOptions();
 
@@ -7301,14 +7528,24 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
     const cheapBtn = document.createElement('button');
     cheapBtn.type = 'button';
     cheapBtn.className = 'btn btn-sm';
+    cheapBtn.dataset.reactor = 'cheapest';
     cheapBtn.textContent = 'Cheapest';
-    cheapBtn.addEventListener('click', () => { _reactorMode = 'cheapest'; settingsPanel.dataset.reactorMode = 'cheapest'; updateTogglePill(); });
+    cheapBtn.addEventListener('click', async () => {
+      _reactorMode = 'cheapest'; settingsPanel.dataset.reactorMode = 'cheapest'; updateTogglePill();
+      const { ship } = readState();
+      if (ship) { const m = await _getShipReactorModes(); m[String(ship.id)] = 'cheapest'; _saveShipReactorModes(m); }
+    });
 
     const effBtn = document.createElement('button');
     effBtn.type = 'button';
     effBtn.className = 'btn btn-sm';
+    effBtn.dataset.reactor = 'efficient';
     effBtn.textContent = 'Efficient';
-    effBtn.addEventListener('click', () => { _reactorMode = 'efficient'; settingsPanel.dataset.reactorMode = 'efficient'; updateTogglePill(); });
+    effBtn.addEventListener('click', async () => {
+      _reactorMode = 'efficient'; settingsPanel.dataset.reactorMode = 'efficient'; updateTogglePill();
+      const { ship } = readState();
+      if (ship) { const m = await _getShipReactorModes(); m[String(ship.id)] = 'efficient'; _saveShipReactorModes(m); }
+    });
 
     updateTogglePill();
     pillGroup.appendChild(cheapBtn);
@@ -7379,14 +7616,28 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
     }, true);
   }
 
-  // Refresh assign select + _assignedName when ship selection changes
+  // Refresh assign select + _assignedName + reactor mode when ship selection changes
   const _refreshAssignBtn = async () => {
     const { ship } = readState();
     if (!ship) return;
-    const map = await _getShipAssignments();
-    _assignedName = map[String(ship.id)] ?? null;
+    const [assignments, modes] = await Promise.all([_getShipAssignments(), _getShipReactorModes()]);
+    _assignedName = assignments[String(ship.id)] ?? null;
     const sel = modal.querySelector('#gt-ship-settings select.form-select');
     if (sel) sel.value = _assignedName ?? '';
+    // Sync reactor mode for this ship
+    _reactorMode = modes[String(ship.id)] ?? 'cheapest';
+    const panel = modal.querySelector('#gt-ship-settings');
+    if (panel) {
+      panel.dataset.reactorMode = _reactorMode;
+      const cheapPill = panel.querySelector('[data-reactor="cheapest"]');
+      const effPill   = panel.querySelector('[data-reactor="efficient"]');
+      if (cheapPill) cheapPill.style.cssText = _reactorMode === 'cheapest'
+        ? 'border-color:#22c55e;color:#22c55e;background:rgba(34,197,94,0.12);font-size:11px;padding:2px 8px;'
+        : 'border-color:var(--bs-border-color);color:var(--bs-secondary-color);background:none;font-size:11px;padding:2px 8px;';
+      if (effPill) effPill.style.cssText = _reactorMode === 'efficient'
+        ? 'border-color:#60a5fa;color:#60a5fa;background:rgba(96,165,250,0.12);font-size:11px;padding:2px 8px;'
+        : 'border-color:var(--bs-border-color);color:var(--bs-secondary-color);background:none;font-size:11px;padding:2px 8px;';
+    }
   };
   _refreshAssignBtn();
 
@@ -7416,12 +7667,12 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
   modal.querySelectorAll('.dropdown-menu .dropdown-item')
     .forEach(item => item.addEventListener('click', () => setTimeout(recalc, 150)));
 
-  // Watch the Distance row for game-side updates (destination typed/selected)
-  const distRow = allRows.find(r => r.querySelector('.col-4')?.textContent?.trim() === 'Distance');
-  if (distRow) {
-    new MutationObserver(_debounce(recalc, 80))
-      .observe(distRow, { subtree: true, characterData: true, childList: true });
-  }
+  // Watch the whole modal body for destination/distance updates.
+  // Observing a specific distRow element breaks after ship switches, because the game
+  // re-renders the rows and the captured element becomes detached/stale.
+  const _modalBody = modal.querySelector('.modal-body, .offcanvas-body') ?? modal;
+  new MutationObserver(_debounce(recalc, 80))
+    .observe(_modalBody, { subtree: true, characterData: true, childList: true });
 
   _attachFlightKeys(modal, readState);
 }
