@@ -660,6 +660,14 @@ async function getExtApiKey() {
   });
 }
 
+// ── Ship assignment storage ───────────────────────────────────────────────────
+async function _getShipAssignments() {
+  return new Promise(r => chrome.storage.local.get('gtShipAssignments', d => r(d.gtShipAssignments ?? {})));
+}
+function _saveShipAssignments(map) {
+  chrome.storage.local.set({ gtShipAssignments: map });
+}
+
 // ── Bases fetch (5-min cache) ─────────────────────────────────────────────────
 
 let _basesCache = { data: null, ts: 0 };
@@ -1501,8 +1509,13 @@ function buildDetailPanel(base, gamedata) {
   panel.appendChild(nameRow);
 
   // ── Warehouse fill bar (async) ────────────────────────────────────────────
+  const whLabel = document.createElement('div');
+  whLabel.style.cssText = 'font-size:10px;color:#4a4a6a;text-transform:uppercase;letter-spacing:0.05em;padding:4px 0 2px;';
+  whLabel.textContent = 'Warehouse Capacity';
+  panel.appendChild(whLabel);
+
   const whBarArea = document.createElement('div');
-  whBarArea.style.cssText = 'padding:4px 0 6px;border-bottom:1px solid #1a1a2e;margin-bottom:4px;';
+  whBarArea.style.cssText = 'padding:2px 0 6px;border-bottom:1px solid #1a1a2e;margin-bottom:4px;';
   panel.appendChild(whBarArea);
 
   const _matWeightMap = new Map((gamedata.materials ?? []).map(m => [m.id, m.weight ?? 0]));
@@ -1528,19 +1541,20 @@ function buildDetailPanel(base, gamedata) {
     wtLabel.textContent = `${Math.round(_whCurrentWeight).toLocaleString()}t / ${Math.round(cap).toLocaleString()}t`;
     barRow.appendChild(barWrap);
     barRow.appendChild(wtLabel);
-    whBarArea.appendChild(barRow);
 
     const netWeightGain = outputs.reduce((s, o) => s + (o.netDailyOutput ?? o.dailyOutput) * (_matWeightMap.get(Number(o.matId)) ?? 0), 0)
       - [...inputs, ...consumables].reduce((s, i) => s + i.dailyNeed * (_matWeightMap.get(Number(i.matId)) ?? 0), 0);
-    if (netWeightGain > 0) {
-      const rem = cap - _whCurrentWeight;
-      if (rem > 0) {
-        const fullLbl = document.createElement('span');
-        fullLbl.style.cssText = 'display:block;color:#6b6b8a;font-size:10px;margin-top:2px;';
-        fullLbl.textContent = `Full in ${fmtDays(rem / netWeightGain)}`;
-        whBarArea.appendChild(fullLbl);
-      }
-    }
+    const rem = cap - _whCurrentWeight;
+    const fullDays = (netWeightGain > 0 && rem > 0) ? rem / netWeightGain : Infinity;
+    const timerCol = isFinite(fullDays)
+      ? (fullDays < 1 ? '#ef4444' : fullDays < 3 ? '#f59e0b' : '#22c55e')
+      : '#4a4a6a';
+    const timerSpan = document.createElement('span');
+    timerSpan.style.cssText = `color:${timerCol};font-size:10px;font-weight:600;white-space:nowrap;flex-shrink:0;`;
+    timerSpan.textContent = fmtDays(fullDays);
+    barRow.appendChild(timerSpan);
+
+    whBarArea.appendChild(barRow);
   }
 
   const _whId = base.warehouse?.id ?? base.warehouseId;
@@ -6953,7 +6967,10 @@ let _galaxyOffcanvasObs = null;
 function watchFlightModal() {
   if (_flightModalObs) return;
   _flightModalObs = new MutationObserver(() => {
-    if (!document.body.classList.contains('modal-open')) return;
+    if (!document.body.classList.contains('modal-open')) {
+      _detachFlightKeys();
+      return;
+    }
     setTimeout(() => {
       const modal = document.querySelector('.modal.show');
       if (!modal || !modal.querySelector('button[data-btn-start-flight]')) return;
@@ -7037,7 +7054,6 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
   if (!slider) return;
 
   // ── Indicator bars — vertical rectangles overlaid on the slider track ──────────
-  // Wrap the slider in a relative container so indicators can be absolutely positioned
   const sliderWrap = document.createElement('div');
   sliderWrap.id = 'gt-fi';
   sliderWrap.style.cssText = 'position:relative;';
@@ -7073,7 +7089,7 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
     d.addEventListener('mouseleave', () => { clearTimeout(_tipTimer); _tipEl?.remove(); _tipEl = null; });
     return d;
   };
-  const greenDot = mkBar('#22c55e'); greenDot.dataset.gtTip = 'Cheapest';
+  const greenDot = mkBar('#22c55e'); greenDot.dataset.gtTip = 'Cheapest'; greenDot.dataset.pf = '0';
   const blueDot  = mkBar('#60a5fa'); blueDot.dataset.gtTip  = 'Best';
 
   // ── Cost rows — injected after the native "Fuel used" row ─────────────────────
@@ -7167,10 +7183,12 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
     };
 
     // green = cheapest, blue = best (optimal)
+    greenDot.dataset.pf          = String(cheapPF);
     greenDot.style.left          = posLeft(cheapPF);
     greenDot.style.opacity       = '1';
     greenDot.style.pointerEvents = 'auto';
 
+    blueDot.dataset.pf           = String(optPF);
     const sameSpot = Math.abs(optPF - cheapPF) < 0.015;
     blueDot.style.display        = sameSpot ? 'none' : '';
     blueDot.style.left           = posLeft(optPF);
@@ -7185,6 +7203,187 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
     totalValEl.textContent  = totalCost > 0 ? '$' + Math.round(totalCost).toLocaleString() : '-';
     totalValEl.className    = hasFuel ? '' : 'text-danger fw-semibold';
   };
+
+  // ── GT ship settings (cog) ────────────────────────────────────────────────────
+  const cardHeader = modal.querySelector('.card.bg-body .card-header');
+  let _assignedName = null;
+  let _reactorMode = 'cheapest';
+
+  if (cardHeader && !modal.querySelector('#gt-cog-btn')) {
+    const cogBtn = document.createElement('button');
+    cogBtn.id = 'gt-cog-btn';
+    cogBtn.type = 'button';
+    cogBtn.className = 'btn btn-secondary btn-sm card-actions ms-2';
+    cogBtn.title = 'GT ship settings';
+    cogBtn.innerHTML = '<svg style="width:1em;height:1em;vertical-align:-.125em" viewBox="0 0 16 16" fill="currentColor"><path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z"/><path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319zm-2.633.283c.246-.835 1.428-.835 1.674 0l.094.319a1.873 1.873 0 0 0 2.693 1.115l.291-.16c.764-.415 1.6.42 1.184 1.185l-.159.292a1.873 1.873 0 0 0 1.116 2.692l.318.094c.835.246.835 1.428 0 1.674l-.319.094a1.873 1.873 0 0 0-1.115 2.693l.16.291c.415.764-.42 1.6-1.185 1.184l-.291-.159a1.873 1.873 0 0 0-2.693 1.116l-.094.318c-.246.835-1.428.835-1.674 0l-.094-.319a1.873 1.873 0 0 0-2.692-1.115l-.292.16c-.764.415-1.6-.42-1.184-1.185l.159-.291A1.873 1.873 0 0 0 1.945 8.93l-.319-.094c-.835-.246-.835-1.428 0-1.674l.319-.094A1.873 1.873 0 0 0 3.06 4.465l-.16-.292c-.415-.764.42-1.6 1.185-1.184l.292.159a1.873 1.873 0 0 0 2.692-1.115l.094-.319z"/></svg>';
+    cardHeader.appendChild(cogBtn);
+
+    const settingsPanel = document.createElement('div');
+    settingsPanel.id = 'gt-ship-settings';
+    settingsPanel.className = 'card border-secondary mb-3';
+    settingsPanel.style.cssText = 'display:none;font-size:13px;';
+    settingsPanel.dataset.reactorMode = _reactorMode;
+
+    const panelBody = document.createElement('div');
+    panelBody.className = 'card-body p-2';
+
+    const assignRow = document.createElement('div');
+    assignRow.className = 'd-flex align-items-center gap-2 mb-2';
+
+    const assignLabel = document.createElement('span');
+    assignLabel.className = 'text-body-secondary';
+    assignLabel.style.cssText = 'min-width:60px;font-size:12px;';
+    assignLabel.textContent = 'Assign';
+
+    const assignSelect = document.createElement('select');
+    assignSelect.className = 'form-select form-select-sm flex-fill';
+
+    const buildAssignOptions = async () => {
+      assignSelect.innerHTML = '';
+      const map = await _getShipAssignments();
+      const { ship } = readState();
+      const current = ship ? map[String(ship.id)] : null;
+      const blankOpt = document.createElement('option');
+      blankOpt.value = '';
+      blankOpt.textContent = '— None —';
+      assignSelect.appendChild(blankOpt);
+      for (const base of sortBases(_loadedHeaderBases ?? [])) {
+        const opt = document.createElement('option');
+        opt.value = base.name;
+        opt.textContent = base.name;
+        if (base.name === current) opt.selected = true;
+        assignSelect.appendChild(opt);
+      }
+      if (!current) assignSelect.value = '';
+      _assignedName = current;
+    };
+    buildAssignOptions();
+
+    assignSelect.addEventListener('change', async () => {
+      const { ship } = readState();
+      if (!ship) return;
+      const map = await _getShipAssignments();
+      if (assignSelect.value) {
+        map[String(ship.id)] = assignSelect.value;
+        _assignedName = assignSelect.value;
+      } else {
+        delete map[String(ship.id)];
+        _assignedName = null;
+      }
+      _saveShipAssignments(map);
+    });
+
+    assignRow.appendChild(assignLabel);
+    assignRow.appendChild(assignSelect);
+    panelBody.appendChild(assignRow);
+
+    const reactorRow = document.createElement('div');
+    reactorRow.className = 'd-flex align-items-center gap-2';
+
+    const reactorLabel = document.createElement('span');
+    reactorLabel.className = 'text-body-secondary';
+    reactorLabel.style.cssText = 'min-width:60px;font-size:12px;';
+    reactorLabel.textContent = 'Reactor';
+
+    const pillGroup = document.createElement('div');
+    pillGroup.className = 'btn-group btn-group-sm';
+    pillGroup.setAttribute('role', 'group');
+
+    const updateTogglePill = () => {
+      cheapBtn.style.cssText = _reactorMode === 'cheapest'
+        ? 'border-color:#22c55e;color:#22c55e;background:rgba(34,197,94,0.12);font-size:11px;padding:2px 8px;'
+        : 'border-color:var(--bs-border-color);color:var(--bs-secondary-color);background:none;font-size:11px;padding:2px 8px;';
+      effBtn.style.cssText = _reactorMode === 'efficient'
+        ? 'border-color:#60a5fa;color:#60a5fa;background:rgba(96,165,250,0.12);font-size:11px;padding:2px 8px;'
+        : 'border-color:var(--bs-border-color);color:var(--bs-secondary-color);background:none;font-size:11px;padding:2px 8px;';
+    };
+
+    const cheapBtn = document.createElement('button');
+    cheapBtn.type = 'button';
+    cheapBtn.className = 'btn btn-sm';
+    cheapBtn.textContent = 'Cheapest';
+    cheapBtn.addEventListener('click', () => { _reactorMode = 'cheapest'; settingsPanel.dataset.reactorMode = 'cheapest'; updateTogglePill(); });
+
+    const effBtn = document.createElement('button');
+    effBtn.type = 'button';
+    effBtn.className = 'btn btn-sm';
+    effBtn.textContent = 'Efficient';
+    effBtn.addEventListener('click', () => { _reactorMode = 'efficient'; settingsPanel.dataset.reactorMode = 'efficient'; updateTogglePill(); });
+
+    updateTogglePill();
+    pillGroup.appendChild(cheapBtn);
+    pillGroup.appendChild(effBtn);
+    reactorRow.appendChild(reactorLabel);
+    reactorRow.appendChild(pillGroup);
+    panelBody.appendChild(reactorRow);
+
+    // ── Hotkeys help ──
+    const hotkeysRow = document.createElement('div');
+    hotkeysRow.className = 'd-flex justify-content-end mt-2';
+
+    const hotkeysHint = document.createElement('span');
+    hotkeysHint.style.cssText = 'font-size:11px;color:var(--bs-secondary-color);cursor:default;user-select:none;';
+    hotkeysHint.textContent = 'Hotkeys (?)';
+
+    let _hkTip = null;
+    hotkeysHint.addEventListener('mouseenter', () => {
+      _hkTip = document.createElement('div');
+      _hkTip.style.cssText = [
+        'position:fixed;z-index:2147483647;',
+        'background:var(--bs-body-bg,#1a1a2e);border:1px solid var(--bs-border-color,#3a3a5a);',
+        'border-radius:6px;padding:8px 12px;font-size:12px;color:var(--bs-body-color,#c0c0da);',
+        'pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.4);',
+        'line-height:1.8;',
+      ].join('');
+      _hkTip.innerHTML = [
+        '<table style="border-collapse:collapse;">',
+        '<tr><td style="padding-right:12px;opacity:.6;font-size:11px;">A / ←</td><td>Previous ship</td></tr>',
+        '<tr><td style="padding-right:12px;opacity:.6;font-size:11px;">D / →</td><td>Next ship</td></tr>',
+        '<tr><td style="padding-right:12px;opacity:.6;font-size:11px;">W</td><td>Go to assigned base</td></tr>',
+        '<tr><td style="padding-right:12px;opacity:.6;font-size:11px;">E</td><td>Go to Exchange Station</td></tr>',
+        '<tr><td style="padding-right:12px;opacity:.6;font-size:11px;">S</td><td>Snap reactor to preference</td></tr>',
+        '</table>',
+      ].join('');
+      document.body.appendChild(_hkTip);
+      const r = hotkeysHint.getBoundingClientRect();
+      _hkTip.style.left = Math.min(r.right, window.innerWidth - _hkTip.offsetWidth - 8) + 'px';
+      _hkTip.style.top  = (r.top - _hkTip.offsetHeight - 6) + 'px';
+    });
+    hotkeysHint.addEventListener('mouseleave', () => { _hkTip?.remove(); _hkTip = null; });
+
+    hotkeysRow.appendChild(hotkeysHint);
+    panelBody.appendChild(hotkeysRow);
+
+    settingsPanel.appendChild(panelBody);
+
+    const cardBody = modal.querySelector('.card.bg-body .card-body');
+    if (cardBody) cardBody.insertBefore(settingsPanel, cardBody.firstChild);
+
+    cogBtn.addEventListener('click', () => {
+      const open = settingsPanel.style.display === 'none';
+      settingsPanel.style.display = open ? '' : 'none';
+      cogBtn.classList.toggle('active', open);
+      if (open) buildAssignOptions();
+    });
+
+    modal.addEventListener('click', (e) => {
+      if (!cogBtn.contains(e.target) && !settingsPanel.contains(e.target)) {
+        settingsPanel.style.display = 'none';
+        cogBtn.classList.remove('active');
+      }
+    }, true);
+  }
+
+  // Refresh assign select + _assignedName when ship selection changes
+  const _refreshAssignBtn = async () => {
+    const { ship } = readState();
+    if (!ship) return;
+    const map = await _getShipAssignments();
+    _assignedName = map[String(ship.id)] ?? null;
+    const sel = modal.querySelector('#gt-ship-settings select.form-select');
+    if (sel) sel.value = _assignedName ?? '';
+  };
+  _refreshAssignBtn();
 
   // ── Dot click handlers ─────────────────────────────────────────────────────────
   const applyDot = (findFn) => {
@@ -7207,7 +7406,7 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
   recalc();
 
   modal.querySelectorAll('input.btn-check[name="btnradioinfo"]')
-    .forEach(inp => inp.addEventListener('change', recalc));
+    .forEach(inp => inp.addEventListener('change', () => { recalc(); _refreshAssignBtn(); }));
   slider.addEventListener('input', recalc);
   modal.querySelectorAll('.dropdown-menu .dropdown-item')
     .forEach(item => item.addEventListener('click', () => setTimeout(recalc, 150)));
@@ -7217,6 +7416,97 @@ function _injectGTFlightHints(modal, ships, emitterMap, reactorMap,
   if (distRow) {
     new MutationObserver(_debounce(recalc, 80))
       .observe(distRow, { subtree: true, characterData: true, childList: true });
+  }
+
+  _attachFlightKeys(modal, readState);
+}
+
+// ── Flight modal hotkeys ──────────────────────────────────────────────────────
+
+let _flightKeyHandler = null;
+
+function _cycleShip(modal, dir) {
+  const inputs = [...modal.querySelectorAll('input.btn-check[name="btnradioinfo"]')];
+  const cur = inputs.findIndex(i => i.checked);
+  const next = inputs[(cur + dir + inputs.length) % inputs.length];
+  if (next) {
+    const label = modal.querySelector(`label[for="${next.id}"]`);
+    label?.click();
+    setTimeout(() => document.activeElement?.blur(), 0);
+  }
+}
+
+async function _setFlightDestination(modal, target) {
+  const destInput = modal.querySelector('#daInputField');
+  if (!destInput) return;
+  destInput.value = target;
+  destInput.dispatchEvent(new Event('input', { bubbles: true }));
+  setTimeout(() => {
+    const item = [...modal.querySelectorAll('ul.dropdown-menu li[role="button"]')]
+      .find(li => li.textContent.trim().startsWith(target.split(' ')[0]));
+    item?.click();
+    // Collapse the dropdown without letting Escape bubble to the modal
+    setTimeout(() => {
+      destInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: false }));
+      destInput.blur();
+    }, 50);
+  }, 100);
+}
+
+async function _goToAssignedBase(modal, readState) {
+  const { ship } = readState();
+  if (!ship) return;
+  const assignments = await _getShipAssignments();
+  const assigned = assignments[String(ship.id)];
+  if (!assigned) return;
+  _setFlightDestination(modal, assigned);
+}
+
+function _snapToCheapest(modal) {
+  const slider = modal.querySelector('input#customRange1');
+  if (!slider) return;
+  const mode = modal.querySelector('#gt-ship-settings')?.dataset.reactorMode ?? 'cheapest';
+  const tip  = mode === 'efficient' ? 'Best' : 'Cheapest';
+  const dot  = modal.querySelector(`[data-gt-tip="${tip}"]`);
+  if (!dot) return;
+  const pf = parseFloat(dot.dataset.pf);
+  if (!pf) return;
+  slider.value = String(Math.round(pf * 100));
+  slider.dispatchEvent(new Event('input',  { bubbles: true }));
+  slider.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function _attachFlightKeys(modal, readState) {
+  _detachFlightKeys();
+  _flightKeyHandler = (e) => {
+    if (!document.body.classList.contains('modal-open')) return;
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+      e.preventDefault();
+      _cycleShip(modal, -1);
+    } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+      e.preventDefault();
+      _cycleShip(modal, 1);
+    } else if (e.key === 'w' || e.key === 'W') {
+      e.preventDefault();
+      _goToAssignedBase(modal, readState);
+    } else if (e.key === 'e' || e.key === 'E') {
+      e.preventDefault();
+      _setFlightDestination(modal, 'Exchange Station');
+    } else if (e.key === 's' || e.key === 'S') {
+      e.preventDefault();
+      _snapToCheapest(modal);
+    }
+  };
+  document.addEventListener('keydown', _flightKeyHandler);
+}
+
+function _detachFlightKeys() {
+  if (_flightKeyHandler) {
+    document.removeEventListener('keydown', _flightKeyHandler);
+    _flightKeyHandler = null;
   }
 }
 
