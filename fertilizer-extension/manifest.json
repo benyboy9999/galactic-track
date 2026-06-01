@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "GT Fertilizer Advisor",
+  "version": "1.0.0",
+  "description": "Shows fertilizer recipe profitability for Galactic Tycoons agriculture builds.",
+  "icons": { "48": "icon48.png" },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://g2.galactictycoons.com/*",
+    "https://api.g2.galactictycoons.com/public/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": { "48": "icon48.png" }
+  },
+  "content_scripts": [{
+    "matches": ["https://g2.galactictycoons.com/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }]
+}
