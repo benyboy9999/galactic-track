@@ -523,7 +523,6 @@ const DEFAULT_SETTINGS = {
   priceMode:          'current', // 'current' | 'average'
   customPrices:       {},        // { [matId]: priceInDollars }
   // Feature visibility
-  showGTE:          true,
   showSummary:      true,
   showAssets:       true,
   showWishlist:     true,
@@ -539,6 +538,7 @@ const DEFAULT_SETTINGS = {
   chatShortcutsEnabled:       true,
   chatLinksEnabled:           true,
   showCargoDestinations:      true,
+  showTransferHalf:           true,
   chatShortcuts: [
     { trigger: 'extension', message: 'https://galactic-track.com/extension' },
     { trigger: 'gtc',       message: 'https://gt-companion.com' },
@@ -735,6 +735,9 @@ let _perksLoaded    = false;
 let _guildLoaded    = false;
 const COMPANY_TTL   = 5 * 60 * 1000;
 
+let _contractData   = null;
+let _contractDataTs = 0;
+
 let _syncOverflowBadge = null; // set by loadAndInjectHeader; called after chip refresh
 
 // Refresh local API data only — no GT API / API key calls.
@@ -803,6 +806,33 @@ async function fetchCompanyData() {
     _companyDataTs = Date.now();
     return _companyData;
   } catch { return null; }
+}
+
+// ── Contract cache ────────────────────────────────────────────────────────────
+
+async function fetchContractData() {
+  if (_contractData && Date.now() - _contractDataTs < COMPANY_TTL) return _contractData;
+  const apiKey = await getExtApiKey();
+  if (!apiKey) return null;
+  try {
+    const resp = await fetch(`${GT_API}/public/company/contracts?apikey=${encodeURIComponent(apiKey)}`);
+    if (!resp.ok) return null;
+    _contractData = await resp.json();
+    _contractDataTs = Date.now();
+    return _contractData;
+  } catch { return _contractData ?? null; }
+}
+
+// Returns Map<matId, totalQtyNeeded> for all active sell contracts.
+// Each contract contributes its full qty regardless of daily fill count.
+function buildContractedQtyMap(contracts) {
+  const map = new Map();
+  for (const c of contracts ?? []) {
+    if (c.status !== 1 || c.type !== 2) continue; // Active + SellMaterial only
+    const matId = Number(c.matId);
+    map.set(matId, (map.get(matId) ?? 0) + (c.qty ?? 0));
+  }
+  return map;
 }
 
 // ── Market price cache ────────────────────────────────────────────────────────
@@ -1444,6 +1474,8 @@ function showToast(msg, ok = true) {
 // ── UI cleanup ────────────────────────────────────────────────────────────────
 
 let _detailBaseId = null;
+let _headerResizeObs = null;
+let _outsideClickBound = false;
 
 function removeProductionUI() {
   _headerResizeObs?.disconnect(); _headerResizeObs = null;
@@ -2681,7 +2713,7 @@ function buildSettingsPanel() {
 
   const keyHelp = document.createElement('span');
   keyHelp.textContent = '?';
-  keyHelp.title = 'Limited API key required for Guild Trade tab. Extended API Key required for Guild Trade & Wishlisting.';
+  keyHelp.title = 'Extended API Key required for Wishlisting.';
   keyHelp.style.cssText = 'color:#6b6b8a;font-size:9px;border:1px solid #2a2a4a;border-radius:50%;width:13px;height:13px;display:inline-flex;align-items:center;justify-content:center;cursor:default;flex-shrink:0;';
 
   keyHeaderRow.appendChild(keyLabel);
@@ -3049,7 +3081,6 @@ function buildSettingsPanel() {
 
   const mainToggles = [
     { key: 'showGuildPrices',   label: 'Guild prices' },
-    { key: 'showGTE',           label: 'Guild trade' },
     { key: 'showSummary',       label: 'Summary panel' },
     { key: 'showAssets',        label: 'Cash & assets panel' },
     { key: 'showWishlistAll',   label: 'Wishlist all panel' },
@@ -3057,6 +3088,7 @@ function buildSettingsPanel() {
     { key: 'showWishlistPanel', label: 'Wishlist panel tab' },
     { key: 'showFlightCosts',        label: 'Flight cost rows' },
     { key: 'showCargoDestinations',  label: 'Cargo destinations' },
+    { key: 'showTransferHalf',       label: 'Transfer half marker' },
   ];
   for (const { key, label } of mainToggles) buildFeatToggle(featBody, key, label);
 
@@ -3107,7 +3139,7 @@ function buildSettingsPanel() {
 
   const ver = document.createElement('div');
   ver.style.cssText = 'text-align:center;font-size:10px;color:#2a2a4a;margin-top:6px;';
-  ver.textContent = 'v0.5.9';
+  ver.textContent = 'v0.5.10';
   panel.appendChild(ver);
 
   return panel;
@@ -4627,7 +4659,8 @@ async function openCashPanel() {
   document.body.appendChild(panel);
   _cashOpen = true;
 
-  const [company] = await Promise.all([fetchCompanyData(), fetchMatPrices()]);
+  const [company, , contractsRaw] = await Promise.all([fetchCompanyData(), fetchMatPrices(), fetchContractData()]);
+  const contractedQty = buildContractedQtyMap(contractsRaw);
   const warehouseId = company?.exWhId;
   const exchWarehouse = warehouseId ? await requestGTLocalAPI('getWarehouse', { warehouseId }) : null;
   loading.remove();
@@ -4835,6 +4868,66 @@ async function openCashPanel() {
           }
         }, true);
         shipList.appendChild(shipRow);
+      }
+
+      // Fleet summary: per-material totals across all ships
+      if (shipData.length > 1) {
+        const fleetMats = new Map();
+        for (const { mats } of shipData) {
+          for (const m of mats) {
+            if (!fleetMats.has(m.matId)) fleetMats.set(m.matId, { ...m, qty: 0, lineVal: 0 });
+            const e = fleetMats.get(m.matId);
+            e.qty += m.qty;
+            e.lineVal += m.lineVal;
+          }
+        }
+        const fleetMatArr = [...fleetMats.values()].sort((a, b) => b.lineVal - a.lineVal);
+
+        const summaryHdr = document.createElement('div');
+        summaryHdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:3px 0 2px 12px;border-top:1px solid #1a1a30;margin-top:2px;';
+        const sHdrLbl = document.createElement('span');
+        sHdrLbl.style.cssText = 'color:#c0c0da;font-size:10px;text-transform:uppercase;letter-spacing:.05em;';
+        sHdrLbl.textContent = 'Fleet Total';
+        const sHdrVal = document.createElement('span');
+        sHdrVal.style.cssText = 'color:#9090b0;font-size:11px;';
+        sHdrVal.textContent = fmtCr(shipCargoVal);
+        summaryHdr.append(sHdrLbl, sHdrVal);
+        shipList.appendChild(summaryHdr);
+
+        for (const m of fleetMatArr) {
+          const matRow = document.createElement('div');
+          matRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:1px 0 1px 20px;';
+          const mLeft = document.createElement('div');
+          mLeft.style.cssText = 'display:flex;align-items:center;gap:5px;overflow:hidden;';
+          const ic = makeIcon(m.name, 14);
+          if (ic) mLeft.appendChild(ic);
+          const contracted = contractedQty.get(m.matId) ?? 0;
+          const covered    = contracted === 0 || m.qty >= contracted;
+          const lblColor   = contracted > 0 ? (covered ? '#22c55e' : '#ef4444') : '#9090b0';
+          const mLbl = document.createElement('span');
+          mLbl.style.cssText = `color:${lblColor};font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+          mLbl.textContent = `${m.name}  ×${m.qty.toLocaleString()}`;
+          mLeft.appendChild(mLbl);
+          const mVal = document.createElement('span');
+          mVal.style.cssText = 'color:#9090b0;font-size:11px;white-space:nowrap;';
+          mVal.textContent = m.price > 0 ? fmtCr(m.lineVal) : '';
+          matRow.append(mLeft, mVal);
+          if (contracted > 0) {
+            const shortfall = Math.max(0, contracted - m.qty);
+            attachTooltip(matRow, tip => {
+              const line = document.createElement('div');
+              line.style.cssText = 'display:flex;align-items:center;gap:5px;';
+              const cIc = makeIcon(m.name, 14);
+              if (cIc) line.appendChild(cIc);
+              const cTxt = document.createElement('span');
+              cTxt.style.cssText = `color:${covered ? '#22c55e' : '#ef4444'};`;
+              cTxt.textContent = `${shortfall.toLocaleString()}/${contracted.toLocaleString()}`;
+              line.appendChild(cTxt);
+              tip.appendChild(line);
+            }, true);
+          }
+          shipList.appendChild(matRow);
+        }
       }
 
       hdrRow.addEventListener('click', () => {
@@ -5456,8 +5549,8 @@ async function loadAndInjectHeader() {
       loadSprite();
       loadAndInjectHeader();
       fetchCompanyData(); // warm cache + pull perks from GT API on first load only
-      watchGteNav();
       watchFlightModal();
+      watchTransferPopover();
       watchContractsPage();
       watchBuildingGrid();
       // Refresh local API data + rebuild header chips every 5 minutes — no GT API / API key calls
@@ -5484,899 +5577,11 @@ chrome.storage.onChanged.addListener((changes) => {
     document.getElementById(GT_SETTINGS_ID)?.remove();
     document.getElementById(GT_TOAST_ID)?.remove();
     document.getElementById(GT_CUSTOM_PRICES_ID)?.remove();
-    document.getElementById(GTE_MODAL_ID)?.remove();
-    document.getElementById(GTE_NAV_ID)?.remove();
     _settingsOpen = false;
   } else {
     loadAndInjectHeader();
-    watchGteNav();
   }
 });
-
-// ── GTE — Guild Trade Board in-game ───────────────────────────────────────────
-
-const GTE_MODAL_ID = 'gt-gte-modal';
-const GTE_NAV_ID   = 'gt-gte-nav';
-const GTE_LEFT_ID  = 'gt-gte-left';
-const GTE_RIGHT_ID = 'gt-gte-right';
-
-// ── GTE State ─────────────────────────────────────────────────────────────────
-
-let _gteListings    = [];
-let _gteMyListings  = [];
-let _gteItems       = [];
-let _gtePlanets     = ['Exchange Station'];
-let _gteLoading     = false;
-let _gteNoGuild     = false;
-let _gteErr         = null;
-let _gteExpandedMat = null;
-let _gteCanWrite    = false;
-let _gteSessionToken = null;
-let _gteDataLoaded  = false;
-let _gteSearchQ     = '';
-let _gteFormMode    = null;   // 'new' | 'add-loc' | 'edit-loc'
-let _gteFormCtx     = null;   // { listingId?, locId?, matId?, matName? }
-let _gteNavObs       = null;
-let _headerResizeObs = null;
-let _outsideClickBound = false;
-let _escHandler      = null;
-
-// ── GTE Auth helpers ──────────────────────────────────────────────────────────
-
-async function gteAutoLogin() {
-  // 1. Try local API (game may expose key directly — zero user setup)
-  let apiKey = null;
-  const localKey = await requestGTLocalAPI('getApiKey');
-  if (localKey && typeof localKey === 'string') apiKey = localKey;
-
-  // 2. Fall back to stored extended API key
-  if (!apiKey) {
-    const { gtExtApiKey } = await chrome.storage.local.get(['gtExtApiKey']);
-    apiKey = gtExtApiKey ?? null;
-  }
-
-  if (!apiKey) throw new Error('No API key — set one in Settings (\u2699).');
-
-  const res = await fetch(`${GT_TRACK}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiKey }),
-  });
-  if (!res.ok) {
-    const j = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(j.error || res.statusText);
-  }
-  const data = await res.json();
-  _gteSessionToken = data.sessionToken;
-  return _gteSessionToken;
-}
-
-async function gteFetch(path, method = 'GET', body = null) {
-  if (!_gteSessionToken) await gteAutoLogin();
-  const doReq = async (token) => {
-    const opts = { method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` } };
-    if (body) opts.body = JSON.stringify(body);
-    return fetch(`${GT_TRACK}/api${path}`, opts);
-  };
-  let res = await doReq(_gteSessionToken);
-  if (res.status === 401) {
-    _gteSessionToken = null;
-    await gteAutoLogin();
-    res = await doReq(_gteSessionToken);
-  }
-  if (!res.ok) {
-    const j = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(j.error || res.statusText);
-  }
-  return res.json();
-}
-
-function gteRelTime(iso) {
-  if (!iso) return '—';
-  const diff = Date.now() - new Date(iso).getTime();
-  if (!isFinite(diff) || diff < 0) return '—';
-  const m = Math.floor(diff / 60000), h = Math.floor(diff / 3600000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
-// ── Location form (self-contained — no focus loss on toggle clicks) ───────────
-
-function buildGteLocForm(init, planets, label, onSubmit, onCancel) {
-  let priceType  = init.priceType  ?? 'fixed';
-  let stockLevel = init.stockLevel ?? 'high';
-  let planet     = init.planet     ?? '';
-
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'padding:8px 12px;background:#0a0a1a;border-top:1px solid #1a1a35;';
-
-  // ── Row 1: price type + value + stock toggles ──────────────────────────────
-  const row1 = document.createElement('div');
-  row1.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-bottom:7px;';
-
-  const priceInput = document.createElement('input');
-  priceInput.type = 'text';
-  priceInput.value = init.priceRaw ?? '';
-  priceInput.placeholder = priceType === 'fixed' ? 'e.g. 1650' : 'offset e.g. 1';
-  priceInput.style.cssText = 'width:88px;padding:4px 8px;background:#0d0d1f;border:1px solid #2a2a4a;border-radius:4px;color:#d8d8f0;font-size:12px;outline:none;font-family:inherit;';
-  if (priceType === 'average') priceInput.style.display = 'none';
-
-  [['Fixed','fixed'],['Market −N','market_offset'],['Average','average']].forEach(([lbl, val]) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = lbl;
-    btn.dataset.pt = val;
-    const active = priceType === val;
-    btn.style.cssText = `padding:4px 9px;background:${active?'#3730a3':'transparent'};border:1px solid ${active?'#4f46e5':'#2a2a4a'};border-radius:4px;color:${active?'#d8d8f0':'#6b6b8a'};font-size:11px;cursor:pointer;font-family:inherit;`;
-    btn.addEventListener('click', () => {
-      priceType = val;
-      priceInput.style.display = val === 'average' ? 'none' : 'inline-block';
-      priceInput.placeholder = val === 'fixed' ? 'e.g. 1650' : 'offset e.g. 1';
-      row1.querySelectorAll('[data-pt]').forEach(b => {
-        const a = b.dataset.pt === priceType;
-        b.style.background = a ? '#3730a3' : 'transparent';
-        b.style.borderColor = a ? '#4f46e5' : '#2a2a4a';
-        b.style.color = a ? '#d8d8f0' : '#6b6b8a';
-      });
-    });
-    row1.appendChild(btn);
-  });
-  row1.appendChild(priceInput);
-
-  [['High','high'],['Low','low'],['To Order','to_order']].forEach(([lbl, val]) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = lbl;
-    btn.dataset.sl = val;
-    const active = stockLevel === val;
-    btn.style.cssText = `padding:4px 9px;background:${active?'#3730a3':'transparent'};border:1px solid ${active?'#4f46e5':'#2a2a4a'};border-radius:4px;color:${active?'#d8d8f0':'#6b6b8a'};font-size:11px;cursor:pointer;font-family:inherit;`;
-    btn.addEventListener('click', () => {
-      stockLevel = val;
-      row1.querySelectorAll('[data-sl]').forEach(b => {
-        const a = b.dataset.sl === stockLevel;
-        b.style.background = a ? '#3730a3' : 'transparent';
-        b.style.borderColor = a ? '#4f46e5' : '#2a2a4a';
-        b.style.color = a ? '#d8d8f0' : '#6b6b8a';
-      });
-    });
-    row1.appendChild(btn);
-  });
-
-  // ── Row 2: planet picker + buttons ────────────────────────────────────────
-  const row2 = document.createElement('div');
-  row2.style.cssText = 'display:flex;gap:6px;align-items:flex-start;';
-
-  const planetWrap = document.createElement('div');
-  planetWrap.style.cssText = 'position:relative;flex:1;min-width:0;';
-
-  const planetInp = document.createElement('input');
-  planetInp.type = 'text';
-  planetInp.value = init.planet ?? 'Exchange Station';
-  if (init.planet) planet = init.planet;
-  planetInp.placeholder = 'Search location…';
-  planetInp.style.cssText = `width:100%;box-sizing:border-box;background:#0d0d1f;border:1px solid ${planet?'#4c1d95':'#2a2a4a'};border-radius:4px;padding:5px 9px;color:#e0e0ff;font-size:12px;outline:none;font-family:inherit;`;
-
-  const planetDrop = document.createElement('div');
-  planetDrop.style.cssText = 'position:absolute;top:100%;left:0;right:0;z-index:300;background:#0d0d1f;border:1px solid #2a2a4a;border-radius:5px;margin-top:2px;max-height:160px;overflow-y:auto;display:none;';
-
-  function updatePlanetDrop() {
-    const q = planetInp.value.toLowerCase();
-    const matches = planets.filter(p => p.toLowerCase().includes(q)).slice(0, 10);
-    planetDrop.innerHTML = '';
-    if (!matches.length) { planetDrop.style.display = 'none'; return; }
-    matches.forEach(p => {
-      const opt = document.createElement('div');
-      opt.textContent = p;
-      opt.style.cssText = 'padding:6px 10px;font-size:12px;color:#c4c4e0;cursor:pointer;';
-      opt.addEventListener('mousedown', e => {
-        e.preventDefault();
-        planet = p; planetInp.value = p;
-        planetInp.style.borderColor = '#4c1d95';
-        planetDrop.style.display = 'none';
-      });
-      opt.addEventListener('mouseenter', () => { opt.style.background = '#1e1e3a'; });
-      opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
-      planetDrop.appendChild(opt);
-    });
-    planetDrop.style.display = 'block';
-  }
-
-  planetInp.addEventListener('focus', updatePlanetDrop);
-  planetInp.addEventListener('input', () => { planet = ''; planetInp.style.borderColor = '#2a2a4a'; updatePlanetDrop(); });
-  planetInp.addEventListener('blur', () => setTimeout(() => { planetDrop.style.display = 'none'; }, 160));
-
-  planetWrap.appendChild(planetInp);
-  planetWrap.appendChild(planetDrop);
-  row2.appendChild(planetWrap);
-
-  if (onCancel) {
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.style.cssText = 'background:none;border:none;color:#6b6b8a;cursor:pointer;font-size:12px;padding:5px 6px;white-space:nowrap;flex-shrink:0;font-family:inherit;';
-    cancelBtn.addEventListener('click', onCancel);
-    row2.appendChild(cancelBtn);
-  }
-
-  const errSpan = document.createElement('span');
-  errSpan.style.cssText = 'display:block;font-size:11px;color:#ef4444;margin-top:4px;min-height:14px;';
-
-  const submitBtn = document.createElement('button');
-  submitBtn.type = 'button';
-  submitBtn.textContent = label;
-  submitBtn.style.cssText = 'padding:5px 12px;background:#3730a3;border:1px solid #4f46e5;border-radius:5px;color:#d8d8f0;font-size:12px;white-space:nowrap;flex-shrink:0;cursor:pointer;font-family:inherit;';
-  submitBtn.addEventListener('click', async () => {
-    const priceRaw = priceInput.value.trim();
-    errSpan.textContent = '';
-    let price_value = 0;
-    if (priceType === 'fixed') {
-      if (!/^\d+$/.test(priceRaw)) { errSpan.textContent = 'Enter a whole number'; return; }
-      price_value = parseInt(priceRaw, 10);
-    } else if (priceType === 'market_offset') {
-      if (!/^\d+$/.test(priceRaw)) { errSpan.textContent = 'Enter the offset e.g. 1'; return; }
-      price_value = -parseInt(priceRaw, 10);
-    }
-    if (!planet) { errSpan.textContent = 'Select a location'; return; }
-    submitBtn.disabled = true; submitBtn.textContent = 'Saving…';
-    try {
-      await onSubmit({ price_type: priceType, price_value, stock_level: stockLevel, location: planet });
-    } catch (e) {
-      errSpan.textContent = e.message;
-      submitBtn.disabled = false; submitBtn.textContent = label;
-    }
-  });
-  row2.appendChild(submitBtn);
-
-  wrap.appendChild(row1);
-  wrap.appendChild(row2);
-  wrap.appendChild(errSpan);
-  return wrap;
-}
-
-// ── GTE Data loading ──────────────────────────────────────────────────────────
-
-function makeSpinner() {
-  if (!document.getElementById('gt-spin-style')) {
-    const s = document.createElement('style');
-    s.id = 'gt-spin-style';
-    s.textContent = '@keyframes gt-spin{to{transform:rotate(360deg)}}';
-    document.head.appendChild(s);
-  }
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'display:flex;justify-content:center;align-items:center;padding:48px;';
-  const ring = document.createElement('div');
-  ring.style.cssText = 'width:32px;height:32px;border-radius:50%;border:3px solid #1a1a35;border-top-color:#6366f1;animation:gt-spin 0.7s linear infinite;';
-  wrap.appendChild(ring);
-  return wrap;
-}
-
-async function gteLoadData(forceRefresh = false) {
-  if (!forceRefresh && _gteDataLoaded) { gteRenderBoth(); return; }
-
-  _gteLoading = true; _gteErr = null; _gteNoGuild = false;
-  gteRenderBoth();
-
-  try {
-    const identity = await resolveIdentity();
-    const gTag = identity?.gTag ?? '';
-
-    if (!gTag) {
-      _gteNoGuild = true;
-      _gteDataLoaded = true;
-      return;
-    }
-
-    const [publicListings, items, gamedata] = await Promise.all([
-      gTag
-        ? fetch(`${GT_TRACK}/api/trade/public?tag=${encodeURIComponent(gTag)}`).then(r => r.ok ? r.json() : []).catch(() => [])
-        : Promise.resolve([]),
-      fetch(`${GT_TRACK}/api/items`).then(r => r.ok ? r.json() : []).catch(() => []),
-      loadGamedata(),
-    ]);
-
-    _gteListings = Array.isArray(publicListings) ? publicListings : [];
-    _gteItems    = Array.isArray(items) ? items : [];
-
-    const names = (gamedata?.systems ?? []).flatMap(s => s.planets ?? []).map(p => p.name).filter(Boolean).sort();
-    if (!names.includes('Exchange Station')) names.unshift('Exchange Station');
-    _gtePlanets = names.length ? names : ['Exchange Station'];
-
-    try {
-      await gteAutoLogin();
-      const myLs = await gteFetch('/trade');
-      _gteMyListings = Array.isArray(myLs) ? myLs : [];
-      _gteCanWrite = true;
-    } catch {
-      _gteMyListings = [];
-      _gteCanWrite = false;
-    }
-
-    _gteDataLoaded = true;
-  } catch (e) {
-    _gteErr = e.message;
-  } finally {
-    _gteLoading = false;
-  }
-
-  gteRenderBoth();
-}
-
-async function gteRefreshPublic() {
-  try {
-    const identity = await resolveIdentity();
-    if (!identity?.gTag) return;
-    const pls = await fetch(`${GT_TRACK}/api/trade/public?tag=${encodeURIComponent(identity.gTag)}`).then(r => r.ok ? r.json() : []).catch(() => []);
-    _gteListings = Array.isArray(pls) ? pls : [];
-  } catch { /* silent */ }
-}
-
-async function gteRefreshMine() {
-  try {
-    const myLs = await gteFetch('/trade');
-    _gteMyListings = Array.isArray(myLs) ? myLs : [];
-  } catch { _gteMyListings = []; }
-}
-
-// ── GTE Render ────────────────────────────────────────────────────────────────
-
-function gteRenderBoth() { gteRenderLeft(); gteRenderRight(); }
-
-function gteRenderLeft() {
-  const col = document.getElementById(GTE_LEFT_ID);
-  if (!col) return;
-  col.innerHTML = '';
-
-  // Column header + search
-  const colHdr = document.createElement('div');
-  colHdr.style.cssText = 'padding:8px 12px;border-bottom:1px solid #1a1a35;display:flex;align-items:center;gap:8px;';
-  const colTitle = document.createElement('span');
-  colTitle.style.cssText = 'font-size:12px;font-weight:600;color:#6b6b8a;text-transform:uppercase;letter-spacing:.06em;flex-shrink:0;';
-  colTitle.textContent = 'Guild Listings';
-  const searchInp = document.createElement('input');
-  searchInp.placeholder = 'Search items…';
-  searchInp.value = _gteSearchQ;
-  searchInp.style.cssText = 'flex:1;padding:4px 9px;background:#13132a;border:1px solid #1e1e3a;border-radius:5px;color:#d8d8f0;font-size:12px;outline:none;font-family:inherit;';
-  searchInp.addEventListener('input', () => { _gteSearchQ = searchInp.value.trim().toLowerCase(); renderGroups(); });
-  colHdr.appendChild(colTitle);
-  colHdr.appendChild(searchInp);
-  col.appendChild(colHdr);
-
-  const listArea = document.createElement('div');
-  col.appendChild(listArea);
-
-  function renderGroups() {
-    const scrollTop = listArea.scrollTop;
-    listArea.innerHTML = '';
-    if (_gteLoading) { listArea.appendChild(makeSpinner()); return; }
-    if (_gteNoGuild) {
-      const d = document.createElement('div');
-      d.style.cssText = 'padding:32px 20px;color:#4a4a6a;font-size:13px;text-align:center;line-height:1.6;';
-      d.textContent = 'Join a guild to use Guild Trade.';
-      listArea.appendChild(d);
-      return;
-    }
-    if (_gteErr) {
-      const d = document.createElement('div');
-      d.style.cssText = 'padding:20px;color:#ef4444;font-size:13px;';
-      d.textContent = _gteErr;
-      listArea.appendChild(d);
-      return;
-    }
-
-    const map = new Map();
-    for (const l of _gteListings) {
-      if (!map.has(l.mat_id)) map.set(l.mat_id, { mat_id: l.mat_id, mat_name: l.mat_name ?? '', rows: [] });
-      map.get(l.mat_id).rows.push(l);
-    }
-    let groups = Array.from(map.values());
-    if (_gteSearchQ) groups = groups.filter(g => g.mat_name.toLowerCase().includes(_gteSearchQ));
-    groups.sort((a, b) => (a.mat_name ?? '').localeCompare(b.mat_name ?? ''));
-
-    if (groups.length === 0) {
-      listArea.innerHTML = `<div style="padding:32px;text-align:center;color:#4a4a6a;font-size:14px;">${
-        _gteListings.length === 0 ? 'No guild listings yet.' : `No items match "${_gteSearchQ}"`
-      }</div>`;
-      return;
-    }
-
-    groups.forEach((group, gi) => {
-      const isExpanded = _gteExpandedMat === group.mat_id;
-      const allLocs = group.rows.flatMap(r => r.locations ?? []);
-      const fixed = allLocs.filter(l => l.price_type !== 'average');
-      const bestLoc = (fixed.length ? fixed : allLocs).reduce((a, b) => (a && a.price_value <= b.price_value) ? a : b, null);
-
-      const groupEl = document.createElement('div');
-      if (gi > 0) groupEl.style.borderTop = '1px solid #1a1a35';
-
-      // Item row header
-      const itemRow = document.createElement('div');
-      itemRow.style.cssText = `display:flex;align-items:center;gap:10px;padding:9px 14px;cursor:pointer;background:${isExpanded?'#0f0f2a':'#0d0d22'};`;
-      itemRow.addEventListener('mouseenter', () => { if (!isExpanded) itemRow.style.background = '#0f0f2a'; });
-      itemRow.addEventListener('mouseleave', () => { if (!isExpanded) itemRow.style.background = '#0d0d22'; });
-      itemRow.addEventListener('click', () => { _gteExpandedMat = isExpanded ? null : group.mat_id; gteRenderLeft(); });
-
-      const nameSpan = document.createElement('span');
-      nameSpan.style.cssText = 'font-size:13px;font-weight:600;color:#d8d8f0;flex:1;';
-      nameSpan.textContent = group.mat_name;
-
-      const priceSpan = document.createElement('span');
-      priceSpan.style.cssText = 'font-size:13px;color:#c0c0e0;font-weight:500;margin-right:8px;';
-      if (bestLoc) priceSpan.textContent = fmtPrice(bestLoc.price_type, bestLoc.price_value);
-
-      const sellerSpan = document.createElement('span');
-      sellerSpan.style.cssText = 'font-size:11px;color:#4a4a6a;margin-right:8px;';
-      sellerSpan.textContent = `${group.rows.length} ${group.rows.length === 1 ? 'seller' : 'sellers'}`;
-
-      const chevron = document.createElement('span');
-      chevron.style.cssText = `font-size:12px;color:#4a4a6a;transition:transform 0.15s;display:inline-block;transform:${isExpanded?'rotate(90deg)':'none'};`;
-      chevron.textContent = '›';
-
-      const iconEl = makeIcon(group.mat_name, 18);
-      if (iconEl) itemRow.appendChild(iconEl);
-      itemRow.append(nameSpan, priceSpan, sellerSpan, chevron);
-      groupEl.appendChild(itemRow);
-
-      if (isExpanded) {
-        group.rows.forEach(l => {
-          const selRow = document.createElement('div');
-          selRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 14px 6px 20px;background:#0a0a1e;border-top:1px solid #12122a;';
-          const selName = document.createElement('span');
-          selName.style.cssText = 'font-size:12px;color:#a0a0c8;font-weight:600;flex:1;';
-          if (l.guild_tag) { const t = document.createElement('span'); t.style.color = '#5a5a90'; t.textContent = `[${l.guild_tag}] `; selName.appendChild(t); }
-          selName.appendChild(document.createTextNode(l.company_name ?? ''));
-          const timeSpan = document.createElement('span');
-          timeSpan.style.cssText = 'font-size:11px;color:#3a3a5a;';
-          timeSpan.textContent = gteRelTime(l.created_at);
-          selRow.append(selName, timeSpan);
-          groupEl.appendChild(selRow);
-
-          (l.locations ?? []).forEach(loc => {
-            const locRow = document.createElement('div');
-            locRow.style.cssText = 'display:flex;align-items:center;gap:10px;padding:4px 14px 4px 36px;background:#080818;border-top:1px solid #0e0e22;';
-            const lp = document.createElement('span');
-            lp.style.cssText = 'font-size:12px;font-weight:600;color:#e2e8f0;min-width:55px;';
-            lp.textContent = fmtPrice(loc.price_type, loc.price_value);
-            locRow.appendChild(lp);
-            if (loc.stock_level) {
-              const ss = document.createElement('span');
-              ss.style.cssText = `font-size:11px;color:${STOCK_COLORS[loc.stock_level]??'#b0b0cc'};white-space:nowrap;`;
-              ss.textContent = STOCK_LABELS[loc.stock_level] ?? loc.stock_level;
-              locRow.appendChild(ss);
-            }
-            if (loc.location) {
-              const ln = document.createElement('span');
-              ln.style.cssText = 'font-size:11px;color:#4a4a6a;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-              ln.textContent = loc.location;
-              locRow.appendChild(ln);
-            }
-            groupEl.appendChild(locRow);
-          });
-        });
-      }
-
-      listArea.appendChild(groupEl);
-    });
-    listArea.scrollTop = scrollTop;
-  }
-
-  renderGroups();
-}
-
-function gteRenderRight() {
-  const col = document.getElementById(GTE_RIGHT_ID);
-  if (!col) return;
-  const scrollTop = col.scrollTop;
-  col.innerHTML = '';
-
-  // Column header
-  const colHdr = document.createElement('div');
-  colHdr.style.cssText = 'padding:8px 12px;border-bottom:1px solid #1a1a35;display:flex;align-items:center;justify-content:space-between;';
-  const colTitle = document.createElement('span');
-  colTitle.style.cssText = 'font-size:12px;font-weight:600;color:#6b6b8a;text-transform:uppercase;letter-spacing:.06em;';
-  colTitle.textContent = 'Your Listings';
-  colHdr.appendChild(colTitle);
-  if (_gteCanWrite && _gteMyListings.length > 0) {
-    const cnt = document.createElement('span');
-    cnt.style.cssText = 'font-size:11px;color:#3a3a5a;';
-    cnt.textContent = _gteMyListings.length;
-    colHdr.appendChild(cnt);
-  }
-  col.appendChild(colHdr);
-
-  if (_gteLoading) { col.appendChild(makeSpinner()); return; }
-
-  if (_gteNoGuild) { return; } // left column already shows the no-guild message
-
-  // No API key — prompt to set one
-  if (!_gteCanWrite) {
-    const noTok = document.createElement('div');
-    noTok.style.cssText = 'padding:20px 14px;color:#4a4a6a;font-size:12px;line-height:1.6;';
-    noTok.textContent = 'Set your API key in Settings (\u2699) to manage your guild listings.';
-    col.appendChild(noTok);
-    return;
-  }
-
-  // Post Listing button (or active new-listing form header)
-  if (_gteFormMode === 'new') {
-    const newHdr = document.createElement('div');
-    newHdr.style.cssText = 'padding:8px 12px;background:#0a0a1a;border-bottom:1px solid #1a1a35;display:flex;align-items:center;justify-content:space-between;';
-    const newTitle = document.createElement('span');
-    newTitle.style.cssText = 'font-size:12px;font-weight:600;color:#d8d8f0;';
-    newTitle.textContent = _gteFormCtx?.matName ? _gteFormCtx.matName : 'New Listing';
-    const cancelNew = document.createElement('button');
-    cancelNew.type = 'button';
-    cancelNew.textContent = '✕ Cancel';
-    cancelNew.style.cssText = 'background:none;border:none;color:#6b6b8a;cursor:pointer;font-size:11px;font-family:inherit;';
-    cancelNew.addEventListener('click', () => { _gteFormMode = null; _gteFormCtx = null; gteRenderRight(); });
-    newHdr.append(newTitle, cancelNew);
-    col.appendChild(newHdr);
-
-    if (!_gteFormCtx?.matId) {
-      // Step 1: item search
-      const srchWrap = document.createElement('div');
-      srchWrap.style.cssText = 'padding:10px 12px;border-bottom:1px solid #1a1a35;position:relative;';
-      const srchInp = document.createElement('input');
-      srchInp.placeholder = 'Search items…';
-      srchInp.style.cssText = 'width:100%;box-sizing:border-box;padding:7px 10px;background:#0d0d1f;border:1px solid #2a2a4a;border-radius:5px;color:#d8d8f0;font-size:13px;outline:none;font-family:inherit;';
-      const srchDrop = document.createElement('div');
-      srchDrop.style.cssText = 'position:absolute;top:100%;left:12px;right:12px;z-index:300;background:#0d0d1f;border:1px solid #2a2a4a;border-radius:5px;margin-top:2px;max-height:200px;overflow-y:auto;display:none;';
-      function updateSrchDrop() {
-        const q = srchInp.value.trim().toLowerCase();
-        srchDrop.innerHTML = '';
-        if (!q) { srchDrop.style.display = 'none'; return; }
-        const matches = _gteItems.filter(i => (i.matName ?? i.mat_name ?? '').toLowerCase().includes(q)).slice(0, 12);
-        if (!matches.length) { srchDrop.style.display = 'none'; return; }
-        matches.forEach(item => {
-          const opt = document.createElement('div');
-          const nm = item.matName ?? item.mat_name ?? '';
-          opt.style.cssText = 'padding:7px 10px;font-size:13px;color:#b0b0cc;cursor:pointer;display:flex;align-items:center;gap:6px;';
-          const srchIcon = makeIcon(nm, 16);
-          if (srchIcon) opt.appendChild(srchIcon);
-          opt.appendChild(document.createTextNode(nm));
-          opt.addEventListener('mouseenter', () => { opt.style.background = '#1a1a35'; });
-          opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
-          opt.addEventListener('mousedown', e => {
-            e.preventDefault();
-            _gteFormCtx = { matId: item.matId ?? item.mat_id, matName: nm };
-            gteRenderRight();
-          });
-          srchDrop.appendChild(opt);
-        });
-        srchDrop.style.display = 'block';
-      }
-      srchInp.addEventListener('input', updateSrchDrop);
-      srchInp.addEventListener('focus', updateSrchDrop);
-      srchInp.addEventListener('blur', () => setTimeout(() => { srchDrop.style.display = 'none'; }, 160));
-      srchWrap.append(srchInp, srchDrop);
-      col.appendChild(srchWrap);
-    } else {
-      // Step 2: location form
-      const locForm = buildGteLocForm(
-        { priceType: 'fixed', priceRaw: '', stockLevel: 'high', planet: 'Exchange Station' },
-        _gtePlanets, 'Post Listing',
-        async (locData) => {
-          const row = await gteFetch('/trade', 'POST', { mat_id: _gteFormCtx.matId, mat_name: _gteFormCtx.matName });
-          await gteFetch(`/trade/${row.id}/locations`, 'POST', locData);
-          await Promise.all([gteRefreshMine(), gteRefreshPublic()]);
-          _gteFormMode = null; _gteFormCtx = null;
-          gteRenderBoth();
-        },
-        null
-      );
-      col.appendChild(locForm);
-    }
-  } else {
-    const addBtn = document.createElement('button');
-    addBtn.textContent = '+ Post Listing';
-    addBtn.style.cssText = 'display:block;width:100%;padding:8px 14px;background:#1e1440;border:none;border-bottom:1px solid #1a1a35;color:#a78bfa;font-size:12px;font-weight:600;cursor:pointer;text-align:left;font-family:inherit;';
-    addBtn.addEventListener('mouseenter', () => { addBtn.style.background = '#2d1f5e'; });
-    addBtn.addEventListener('mouseleave', () => { addBtn.style.background = '#1e1440'; });
-    addBtn.addEventListener('click', () => { _gteFormMode = 'new'; _gteFormCtx = null; gteRenderRight(); });
-    col.appendChild(addBtn);
-  }
-
-  // Own listings
-  if (_gteMyListings.length === 0) {
-    const empty = document.createElement('div');
-    empty.style.cssText = 'padding:20px 12px;text-align:center;color:#3a3a5a;font-size:12px;';
-    empty.textContent = 'No listings yet';
-    col.appendChild(empty);
-    return;
-  }
-
-  _gteMyListings.forEach(l => {
-    const isAddingLoc = _gteFormMode === 'add-loc' && _gteFormCtx?.listingId === l.id;
-    const editLocId   = _gteFormMode === 'edit-loc' && _gteFormCtx?.listingId === l.id ? _gteFormCtx.locId : null;
-
-    const listingEl = document.createElement('div');
-    listingEl.style.borderTop = '1px solid #1a1a35';
-
-    // Item header
-    const itemHdr = document.createElement('div');
-    itemHdr.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 12px;background:#0d0d22;';
-    const matName = document.createElement('span');
-    matName.style.cssText = 'font-size:13px;font-weight:600;color:#d8d8f0;flex:1;display:flex;align-items:center;gap:6px;';
-    const matIcon = makeIcon(l.mat_name, 18);
-    if (matIcon) matName.appendChild(matIcon);
-    matName.appendChild(document.createTextNode(l.mat_name));
-
-    const addLocBtn = document.createElement('button');
-    addLocBtn.type = 'button';
-    addLocBtn.textContent = '+ Location';
-    addLocBtn.style.cssText = 'background:none;border:none;color:#4a4a6a;cursor:pointer;font-size:11px;padding:0 4px;font-family:inherit;';
-    addLocBtn.addEventListener('mouseenter', () => { addLocBtn.style.color = '#a78bfa'; });
-    addLocBtn.addEventListener('mouseleave', () => { addLocBtn.style.color = '#4a4a6a'; });
-    addLocBtn.addEventListener('click', () => {
-      if (_gteFormMode === 'add-loc' && _gteFormCtx?.listingId === l.id) { _gteFormMode = null; _gteFormCtx = null; }
-      else { _gteFormMode = 'add-loc'; _gteFormCtx = { listingId: l.id }; }
-      gteRenderRight();
-    });
-
-    const delListBtn = document.createElement('button');
-    delListBtn.type = 'button';
-    delListBtn.textContent = '✕';
-    delListBtn.style.cssText = 'background:none;border:none;color:#4a4a6a;cursor:pointer;font-size:13px;padding:0 2px;font-family:inherit;';
-    delListBtn.addEventListener('mouseenter', () => { delListBtn.style.color = '#ef4444'; });
-    delListBtn.addEventListener('mouseleave', () => { delListBtn.style.color = '#4a4a6a'; });
-    delListBtn.addEventListener('click', async () => {
-      delListBtn.disabled = true;
-      try {
-        await gteFetch(`/trade/${l.id}`, 'DELETE');
-        _gteMyListings = _gteMyListings.filter(x => x.id !== l.id);
-        if (_gteFormCtx?.listingId === l.id) { _gteFormMode = null; _gteFormCtx = null; }
-        await gteRefreshPublic();
-        gteRenderBoth();
-      } catch (e) {
-        delListBtn.disabled = false;
-      }
-    });
-
-    itemHdr.append(matName, addLocBtn, delListBtn);
-    listingEl.appendChild(itemHdr);
-
-    // Location rows
-    (l.locations ?? []).forEach(loc => {
-      if (editLocId === loc.id) {
-        let priceRaw = '';
-        if (loc.price_type === 'fixed') priceRaw = String(loc.price_value);
-        else if (loc.price_type === 'market_offset') priceRaw = String(Math.abs(loc.price_value));
-        const editForm = buildGteLocForm(
-          { priceType: loc.price_type, priceRaw, stockLevel: loc.stock_level ?? 'high', planet: loc.location ?? '' },
-          _gtePlanets, 'Save',
-          async (locData) => {
-            await gteFetch(`/trade/${l.id}/locations/${loc.id}`, 'PATCH', locData);
-            await Promise.all([gteRefreshMine(), gteRefreshPublic()]);
-            _gteFormMode = null; _gteFormCtx = null;
-            gteRenderBoth();
-          },
-          () => { _gteFormMode = null; _gteFormCtx = null; gteRenderRight(); }
-        );
-        listingEl.appendChild(editForm);
-      } else {
-        const locRow = document.createElement('div');
-        locRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 12px 4px 28px;background:#0a0a1e;border-top:1px solid #0e0e22;';
-        const lp = document.createElement('span');
-        lp.style.cssText = 'font-size:12px;font-weight:600;color:#e2e8f0;min-width:50px;';
-        lp.textContent = fmtPrice(loc.price_type, loc.price_value);
-        locRow.appendChild(lp);
-        if (loc.stock_level) {
-          const ss = document.createElement('span');
-          ss.style.cssText = `font-size:11px;color:${STOCK_COLORS[loc.stock_level]??'#b0b0cc'};white-space:nowrap;`;
-          ss.textContent = STOCK_LABELS[loc.stock_level] ?? loc.stock_level;
-          locRow.appendChild(ss);
-        }
-        if (loc.location) {
-          const ln = document.createElement('span');
-          ln.style.cssText = 'font-size:11px;color:#4a4a6a;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-          ln.textContent = loc.location;
-          locRow.appendChild(ln);
-        }
-        const editBtn = document.createElement('button');
-        editBtn.textContent = 'Edit';
-        editBtn.style.cssText = 'background:none;border:none;color:#4a4a6a;cursor:pointer;font-size:11px;padding:0 2px;font-family:inherit;';
-        editBtn.addEventListener('mouseenter', () => { editBtn.style.color = '#a78bfa'; });
-        editBtn.addEventListener('mouseleave', () => { editBtn.style.color = '#4a4a6a'; });
-        editBtn.addEventListener('click', () => { _gteFormMode = 'edit-loc'; _gteFormCtx = { listingId: l.id, locId: loc.id }; gteRenderRight(); });
-        const locDelBtn = document.createElement('button');
-        locDelBtn.textContent = '✕';
-        locDelBtn.style.cssText = 'background:none;border:none;color:#4a4a6a;cursor:pointer;font-size:12px;padding:0 2px;font-family:inherit;';
-        locDelBtn.addEventListener('mouseenter', () => { locDelBtn.style.color = '#ef4444'; });
-        locDelBtn.addEventListener('mouseleave', () => { locDelBtn.style.color = '#4a4a6a'; });
-        locDelBtn.addEventListener('click', async () => {
-          locDelBtn.disabled = true;
-          try {
-            const isLast = (l.locations?.length ?? 0) === 1;
-            await gteFetch(`/trade/${l.id}/locations/${loc.id}`, 'DELETE');
-            if (isLast) {
-              _gteMyListings = _gteMyListings.filter(x => x.id !== l.id);
-              if (_gteFormCtx?.listingId === l.id) { _gteFormMode = null; _gteFormCtx = null; }
-            } else {
-              await gteRefreshMine();
-            }
-            await gteRefreshPublic();
-            gteRenderBoth();
-          } catch { locDelBtn.disabled = false; }
-        });
-        locRow.append(editBtn, locDelBtn);
-        listingEl.appendChild(locRow);
-      }
-    });
-
-    // Add-location form
-    if (isAddingLoc) {
-      const addLocForm = buildGteLocForm(
-        { priceType: 'fixed', priceRaw: '', stockLevel: 'high', planet: 'Exchange Station' },
-        _gtePlanets, 'Add Location',
-        async (locData) => {
-          await gteFetch(`/trade/${l.id}/locations`, 'POST', locData);
-          await Promise.all([gteRefreshMine(), gteRefreshPublic()]);
-          _gteFormMode = null; _gteFormCtx = null;
-          gteRenderBoth();
-        },
-        () => { _gteFormMode = null; _gteFormCtx = null; gteRenderRight(); }
-      );
-      listingEl.appendChild(addLocForm);
-    }
-
-    col.appendChild(listingEl);
-  });
-  col.scrollTop = scrollTop;
-}
-
-// ── GTE Modal open/close ──────────────────────────────────────────────────────
-
-const GTE_BACKDROP_ID = 'gt-gte-backdrop';
-
-function openGteModal() {
-  if (document.getElementById(GTE_MODAL_ID)) return;
-
-  // Backdrop — click outside closes
-  const backdrop = document.createElement('div');
-  backdrop.id = GTE_BACKDROP_ID;
-  backdrop.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:2147483638;';
-  backdrop.addEventListener('click', closeGteModal);
-
-  // Modal panel — centered
-  const modal = document.createElement('div');
-  modal.id = GTE_MODAL_ID;
-  modal.style.cssText = [
-    'position:fixed', 'top:50%', 'left:50%', 'transform:translate(-50%,-50%)',
-    'width:min(880px,92vw)', 'max-height:82vh',
-    'background:#0d0d1f', 'border:1px solid #2a2a4a', 'border-radius:10px',
-    'display:flex', 'flex-direction:column', 'overflow:hidden',
-    'z-index:2147483639',
-    'font-family:system-ui,sans-serif', 'color:#d8d8f0',
-    'box-shadow:0 8px 48px rgba(0,0,0,0.8)',
-  ].join(';');
-
-  // Sticky header
-  const modalHdr = document.createElement('div');
-  modalHdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #1a1a35;flex-shrink:0;';
-  const titleEl = document.createElement('div');
-  titleEl.style.cssText = 'font-size:16px;font-weight:700;color:#e0e0f0;';
-  titleEl.textContent = 'Guild Trade';
-  const btnGroup = document.createElement('div');
-  btnGroup.style.cssText = 'display:flex;align-items:center;gap:4px;';
-  const refreshBtn = document.createElement('button');
-  refreshBtn.textContent = '↻ Refresh';
-  refreshBtn.style.cssText = 'background:none;border:1px solid #2a2a4a;border-radius:4px;color:#6b6b8a;cursor:pointer;font-size:12px;padding:4px 10px;font-family:inherit;';
-  refreshBtn.addEventListener('click', async () => {
-    refreshBtn.disabled = true; refreshBtn.textContent = '↻ Refreshing…';
-    _gteDataLoaded = false;
-    await gteLoadData(true);
-    refreshBtn.disabled = false; refreshBtn.textContent = '↻ Refresh';
-  });
-  const closeBtn = document.createElement('button');
-  closeBtn.textContent = '✕';
-  closeBtn.style.cssText = 'background:none;border:none;color:#6b6b8a;cursor:pointer;font-size:18px;padding:4px 8px;font-family:inherit;line-height:1;';
-  closeBtn.addEventListener('click', closeGteModal);
-  btnGroup.append(refreshBtn, closeBtn);
-  modalHdr.append(titleEl, btnGroup);
-  modal.appendChild(modalHdr);
-
-  // Scrollable two-column body
-  const body = document.createElement('div');
-  body.style.cssText = 'display:grid;grid-template-columns:1fr 360px;flex:1;overflow:hidden;';
-
-  const leftCol = document.createElement('div');
-  leftCol.id = GTE_LEFT_ID;
-  leftCol.style.cssText = 'border-right:1px solid #1a1a35;overflow-y:auto;';
-
-  const rightCol = document.createElement('div');
-  rightCol.id = GTE_RIGHT_ID;
-  rightCol.style.cssText = 'overflow-y:auto;';
-
-  body.append(leftCol, rightCol);
-  modal.appendChild(body);
-
-  document.body.append(backdrop, modal);
-
-  // Esc to close
-  if (!_escHandler) {
-    _escHandler = (e) => { if (e.key === 'Escape') closeGteModal(); };
-    document.addEventListener('keydown', _escHandler);
-  }
-
-  // Mark nav link active
-  const navA = document.querySelector(`#${GTE_NAV_ID} a`);
-  if (navA) navA.classList.add('active');
-
-  gteLoadData();
-}
-
-function closeGteModal() {
-  document.getElementById(GTE_BACKDROP_ID)?.remove();
-  document.getElementById(GTE_MODAL_ID)?.remove();
-  _gteFormMode    = null;
-  _gteFormCtx     = null;
-  _gteExpandedMat = null;
-  _gteSearchQ     = '';
-  // Remove active state from nav link
-  const navA = document.querySelector(`#${GTE_NAV_ID} a`);
-  if (navA) navA.classList.remove('active');
-}
-
-// ── GTE Navbar injection ──────────────────────────────────────────────────────
-
-let _gteNavInjecting = false;
-async function injectGteNavBtn() {
-  if (document.getElementById(GTE_NAV_ID)) return;
-  if (_gteNavInjecting) return;
-  _gteNavInjecting = true;
-
-  try {
-    // Only inject if user has an API key set and GTE is enabled
-    const { gtExtApiKey } = await chrome.storage.local.get(['gtExtApiKey']);
-    if (!gtExtApiKey) return;
-    if (!_settings.showGTE) return;
-
-    const navEl = document.querySelector('.navbar-nav')
-      ?? document.querySelector('nav ul')
-      ?? document.querySelector('[class*="nav-pills"]');
-    if (!navEl) return;
-
-    if (document.getElementById(GTE_NAV_ID)) return;
-
-    const li = document.createElement('li');
-    li.id = GTE_NAV_ID;
-    li.className = 'nav-item';
-
-    const a = document.createElement('a');
-    a.className = 'nav-link cursor-pointer py-3';
-    a.href = '#';
-
-    const iconSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    iconSvg.setAttribute('width', '20');
-    iconSvg.setAttribute('height', '16');
-    iconSvg.setAttribute('viewBox', '0 0 32 32');
-    iconSvg.style.cssText = 'vertical-align:middle;opacity:0.55;margin-right:5px;transition:opacity 0.15s;';
-    iconSvg.innerHTML = `
-      <rect x="5" y="18" width="4" height="8" rx="1" fill="#b0b0c8"/>
-      <line x1="7" y1="14" x2="7" y2="18" stroke="#b0b0c8" stroke-width="1.5" stroke-linecap="round"/>
-      <line x1="7" y1="26" x2="7" y2="28" stroke="#b0b0c8" stroke-width="1.5" stroke-linecap="round"/>
-      <rect x="12" y="10" width="4" height="10" rx="1" fill="#d0d0e0"/>
-      <line x1="14" y1="6" x2="14" y2="10" stroke="#d0d0e0" stroke-width="1.5" stroke-linecap="round"/>
-      <line x1="14" y1="20" x2="14" y2="23" stroke="#d0d0e0" stroke-width="1.5" stroke-linecap="round"/>
-      <rect x="19" y="14" width="4" height="9" rx="1" fill="#c0c0d4"/>
-      <line x1="21" y1="10" x2="21" y2="14" stroke="#c0c0d4" stroke-width="1.5" stroke-linecap="round"/>
-      <line x1="21" y1="23" x2="21" y2="26" stroke="#c0c0d4" stroke-width="1.5" stroke-linecap="round"/>
-      <path d="M25 5 Q30 10 27 16" stroke="#808098" stroke-width="1" fill="none" stroke-linecap="round"/>
-      <circle cx="27" cy="16" r="1.5" fill="#c0c0d4"/>
-    `;
-    a.appendChild(iconSvg);
-    a.appendChild(document.createTextNode('Guild Trade'));
-
-    a.addEventListener('mouseenter', () => { iconSvg.style.opacity = '1'; });
-    a.addEventListener('mouseleave', () => { iconSvg.style.opacity = '0.55'; });
-    a.addEventListener('click', e => { e.preventDefault(); openGteModal(); });
-    li.appendChild(a);
-    navEl.appendChild(li);
-  } finally {
-    _gteNavInjecting = false;
-  }
-}
 
 let _buildingGridObs     = null;
 
@@ -7185,6 +6390,58 @@ function watchBuildingGrid() {
 let _flightModalObs    = null;
 let _galaxyOffcanvasObs = null;
 
+// ── Transfer popover half-marker ──────────────────────────────────────────────
+
+let _transferPopObs = null;
+
+function watchTransferPopover() {
+  if (_transferPopObs) return;
+  _transferPopObs = new MutationObserver(_debounce(() => {
+    if (!_settings.showTransferHalf) return;
+    const popover = [...document.querySelectorAll('.popover')]
+      .find(p => p.querySelector('#inputTransfer'));
+    if (!popover || popover.querySelector('#gt-transfer-half')) return;
+    _injectTransferHalfMark(popover);
+  }, 100));
+  _transferPopObs.observe(document.body, { childList: true, subtree: true });
+}
+
+function _injectTransferHalfMark(popover) {
+  const slider   = popover.querySelector('input[type="range"].form-range');
+  const numInput = popover.querySelector('#inputTransfer');
+  const btnRow   = popover.querySelector('.text-end.mt-2');
+  const cancelBtn = btnRow?.querySelector('button[type="button"]');
+  if (!slider || !numInput || !cancelBtn) return;
+
+  const min = parseInt(slider.min, 10) || 0;
+  const max = parseInt(slider.max, 10) || 0;
+  if (max <= min) return;
+
+  const halfVal = Math.round((min + max) / 2);
+
+  const halfBtn = document.createElement('button');
+  halfBtn.id = 'gt-transfer-half';
+  halfBtn.type = 'button';
+  halfBtn.className = 'btn btn-secondary me-1';
+  halfBtn.textContent = 'Half';
+  halfBtn.addEventListener('click', () => {
+    numInput.value = String(halfVal);
+    numInput.dispatchEvent(new Event('input',  { bubbles: true }));
+    numInput.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+
+  cancelBtn.insertAdjacentElement('beforebegin', halfBtn);
+
+  // Update half value if max changes (different item selected in same popover)
+  new MutationObserver(() => {
+    const newMax = parseInt(slider.max, 10);
+    if (newMax !== max) {
+      halfBtn.remove();
+      _injectTransferHalfMark(popover);
+    }
+  }).observe(slider, { attributes: true, attributeFilter: ['max', 'min'] });
+}
+
 function watchFlightModal() {
   if (_flightModalObs) return;
   _flightModalObs = new MutationObserver(() => {
@@ -7879,13 +7136,4 @@ function watchContractsPage() {
   window.addEventListener('popstate', () => setTimeout(tryInject, 400));
 
   tryInject();
-}
-
-function watchGteNav() {
-  injectGteNavBtn();
-  if (_gteNavObs) return;
-  _gteNavObs = new MutationObserver(() => {
-    if (!document.getElementById(GTE_NAV_ID)) injectGteNavBtn();
-  });
-  _gteNavObs.observe(document.body, { childList: true, subtree: true });
 }
