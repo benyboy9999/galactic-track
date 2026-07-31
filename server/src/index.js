@@ -29,6 +29,10 @@ app.get('/extension', (_req, res) => res.redirect(301, 'https://chromewebstore.g
 app.get('/api/health',    (req, res) => res.json({ ok: true }));
 app.get('/api/ratelimit', (req, res) => res.json(getRateLimitStatus()));
 
+// Retired endpoints (auth/items/company/contracts/profits/exchange/gamedata/tracker/alerts/trade)
+// fall through here — 404 as JSON rather than serving the SPA's index.html for an /api/* path.
+app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
+
 // Error handler
 app.use((err, req, res, _next) => {
   console.error(err.message);
